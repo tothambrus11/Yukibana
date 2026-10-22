@@ -10,13 +10,13 @@ it without Docker, and the tests that caught the bugs.
 
 ## The bugs, and what was fixed
 
-`patches/0001-*.patch` applies to ktock/qemu-wasm at `patches/BASE`, and
-`patches/emscripten/0001-*.patch` to emscripten 3.1.50.
-The QEMU patch fixes the Wasm backend in `tcg/wasm32/tcg-target.c.inc`, in
+`patches/0001-*.patch` applies to ktock/qemu-wasm at `patches/BASE`. We build
+with emscripten 6.0.13 instead of the 3.1.50 that qemu-wasm pins, which fixes
+the freeze in the last row.
+The patch fixes the Wasm backend in `tcg/wasm32/tcg-target.c.inc`, in
 code that runs only after a block has executed 1500 times and is compiled to
 Wasm. Until then, the TCI interpreter runs the block correctly, which is why
-each bug shows up only some of the time. The emscripten patch fixes a race in
-its threading runtime.
+each bug shows up only some of the time.
 
 | Bug | Effect in a guest | Caught by |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ its threading runtime.
 | `extract_i32` / `sextract_i32` used 32-bit shift amounts with 64-bit shifts | Bits above `pos + len` leaked in; AArch64 `fcvt` read `FPCR.AHP` together with `FPSR.NZCV` | `alutest.c` category 4 |
 | `clz_i32` / `ctz_i32` tested all 64 bits for zero | Wrong result for a zero input with a dirty upper half | Code audit |
 | `sub2_i64` and `ctpop_i32` pushed an i32 where an i64 belongs | The module fails validation inside a vCPU thread | Code audit |
-| `emscripten_proxy_finish` signalled the waiter after unlocking (emscripten 3.1.50 `proxying.c`, fixed upstream in 5.0.5 by emscripten-core/emscripten#26582; qemu-wasm pins 3.1.50) | The whole VM froze about once in 20 boots on either architecture | Worker stacks over the DevTools protocol, then a bounded wait that logged the lost wakeup |
+| emscripten 3.1.50's `emscripten_proxy_finish` signalled the waiter after unlocking (fixed in 5.0.5 by emscripten-core/emscripten#26582) | The whole VM froze about once in 20 boots on either architecture | Worker stacks over the DevTools protocol, then a bounded wait that logged the lost wakeup |
 
 The freeze is not in QEMU. QEMU's main loop calls `poll` about 5000 times a
 second, and each call is proxied synchronously to the page's main thread
@@ -34,18 +34,24 @@ waits on a condition variable inside a context on its own stack. The page
 thread set the state to done, unlocked the mutex, and only then signalled. In
 that gap the caller could see "done" without waiting, return, and start the
 next call in the same stack slot, so the late signal hit the new call's
-condition variable and its wakeup was lost. `patches/emscripten/` backports
-the upstream fix (emscripten-core/emscripten#26582, in 5.0.5), which moves the
-signal inside the lock. `scripts/build-qemu.sh` applies it to the activated
-emsdk and rebuilds its libc.
+condition variable and its wakeup was lost. Emscripten 5.0.5 moved the signal
+inside the lock.
+
+Building with a current emscripten needs a few changes, all in
+`scripts/build-*.sh`: link-only `-s` flags go to the linker, `-DEMSCRIPTEN` is
+defined by hand (qemu-wasm tests that macro, which emscripten no longer
+defines, and without it the Wasm JIT compiles out), and glib's `gsize`
+(`unsigned int`) no longer matches `size_t` (`unsigned long`) by name. There is
+no separate `.worker.js` any more: the pthread workers load `qemu-system-<arch>`
+itself, so `web/` serves it under that name.
 
 ## Layout
 
 - `scripts/build-deps.sh` builds zlib, libffi, glib and pixman with emscripten
-  3.1.50. It is a native port of the Dockerfile stages.
+  6.0.13. It is a native port of the Dockerfile stages.
 - `scripts/build-qemu.sh` clones the base, applies the patches, and builds
   `qemu-system-aarch64` and `qemu-system-x86_64` into `web/<arch>/`. Both builds
-  have virtfs and no debug info: about 18 MB and 11.5 MB raw, against 66 MB
+  have virtfs and no debug info: about 18 MB and 12 MB raw, against 66 MB
   and 41 MB for the published demo builds.
 - `scripts/build-kernels.sh` builds Linux 6.12 LTS for both architectures with
   `LLVM=1`, from `tinyconfig` plus `guest/kernel-*.config`.
@@ -62,7 +68,7 @@ emsdk and rebuilds its libc.
   the Playwright driver.
 
 ```sh
-source /path/to/emsdk/emsdk_env.sh      # emsdk 3.1.50
+source /path/to/emsdk/emsdk_env.sh      # emsdk 6.0.13 (5.0.5 or later)
 ./scripts/build-deps.sh && ./scripts/build-qemu.sh
 ./scripts/build-kernels.sh && ./scripts/build-guest.sh
 ./scripts/test.sh
@@ -70,6 +76,8 @@ source /path/to/emsdk/emsdk_env.sh      # emsdk 3.1.50
 
 ## Still open
 
-- QEMU's main loop never sleeps: emscripten's `poll` ignores its timeout for
-  pipes, so the loop spins and keeps one core busy with proxied calls.
+- An idle VM still costs most of a core (8 s of browser CPU per 10 s idle,
+  both architectures). With 3.1.50 this was the main loop spinning because
+  `poll` ignored its timeout; 6.0.13 honours it, and the remaining cost has not
+  been traced yet.
 - No gdb connection to QEMU's gdbstub from the browser yet.

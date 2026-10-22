@@ -11,7 +11,9 @@ http.createServer((req, res) => {
   const p = path.join(root, decodeURIComponent(new URL(req.url, "http://x").pathname));
   if (!p.startsWith(root) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); }
   res.writeHead(200, {
-    "Content-Type": types[path.extname(p)] || "application/octet-stream",
+    // QEMU's emscripten build names its JS loader qemu-system-<arch>, no extension,
+    // and its pthread workers load it by that name as a module script.
+    "Content-Type": types[path.extname(p)] || (path.basename(p).startsWith("qemu-system-") ? "text/javascript" : "application/octet-stream"),
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Embedder-Policy": "require-corp",
     "Cross-Origin-Resource-Policy": "same-origin",

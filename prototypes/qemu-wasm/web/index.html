@@ -11,7 +11,7 @@
 <script src="vendor/xterm-pty.js"></script>
 <script type="module">
 // index.html?arch=aarch64|x86_64&smp=4[&verbose=1][&share=1]
-// Boots <arch>/kernel + <arch>/initrd with <arch>/out.js (QEMU-Wasm). Everything the
+// Boots <arch>/kernel + <arch>/initrd with <arch>/qemu-system-* (QEMU-Wasm). Everything the
 // serial console prints is also collected in window.__out for the test driver.
 const q = new URLSearchParams(location.search);
 const arch = q.get("arch") || "x86_64", smp = q.get("smp") || "4";
@@ -36,11 +36,8 @@ const args = arch.startsWith("x86_64")
   ? [...common, "-L", "/pack/", "-append", `console=ttyS0 rdinit=/init acpi=off no_timer_check${quiet}`]
   : ["-M", "virt", "-cpu", "cortex-a53", ...common, "-append", `console=ttyAMA0 rdinit=/init${quiet}`];
 
-const Module = {
-  arguments: args, pty: slave, preRun: [],
-  mainScriptUrlOrBlob: `${location.origin}/${arch}/out.js`,
-  locateFile: (p) => `${location.origin}/${arch}/${p}`,
-};
+const qemu = arch.startsWith("x86_64") ? "qemu-system-x86_64" : "qemu-system-aarch64";
+const Module = { arguments: args, pty: slave, preRun: [], locateFile: (p) => `${location.origin}/${arch}/${p}` };
 Module.preRun.push((mod) => {
   mod.FS_createPath("/", "pack", true, true);
   mod.FS_createPath("/", "share", true, true);
@@ -61,7 +58,7 @@ Module.preRun.push((mod) => {
     return 0;
   };
 });
-const init = (await import(`./${arch}/out.js`)).default;
+const init = (await import(`./${arch}/${qemu}`)).default;
 init(Module).catch((e) => { window.__out += "\n[page] init failed: " + e; });
 </script>
 </body>

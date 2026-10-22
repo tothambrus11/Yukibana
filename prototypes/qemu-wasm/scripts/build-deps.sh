@@ -1,7 +1,7 @@
 #!/bin/bash
-# Builds QEMU-Wasm's dependencies (zlib, libffi, glib, pixman) with emscripten 3.1.50,
+# Builds QEMU-Wasm's dependencies (zlib, libffi, glib, pixman) with emscripten 6.0.13,
 # natively, mirroring the stages of ktock/qemu-wasm's Dockerfile.
-# Needs: emsdk 3.1.50 activated (source emsdk_env.sh), meson 1.5, ninja, autoconf,
+# Needs: emsdk 6.0.13 (any 5.0.5 or later) activated (source emsdk_env.sh), meson 1.5, ninja, autoconf,
 # automake, libtool, libltdl-dev, pkg-config, python3, curl, git, npm.
 set -euxo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -51,7 +51,7 @@ ranlib = 'emranlib'
 pkgconfig = ['pkg-config', '--static']
 EOT
 (cd glib && rm -rf _build \
-  && CFLAGS="-Wno-error=incompatible-function-pointer-types -O2 -matomics -mbulk-memory -DNDEBUG -pthread -sWASM_BIGINT -sMALLOC=mimalloc -sASYNCIFY=1" \
+  && CFLAGS="-Wno-error=incompatible-function-pointer-types -Wno-error=incompatible-pointer-types -O2 -matomics -mbulk-memory -DNDEBUG -pthread -sWASM_BIGINT -sMALLOC=mimalloc -sASYNCIFY=1" \
      meson setup _build --prefix="$TARGET" --cross-file="$WORK/src/cross.meson" --default-library=static --buildtype=release \
      --force-fallback-for=pcre2,gvdb -Dselinux=disabled -Dxattr=false -Dlibmount=disabled -Dnls=disabled -Dtests=false \
      -Dglib_assert=false -Dglib_checks=false -Dlibelf=disabled \
@@ -59,8 +59,8 @@ EOT
   && meson install -C _build)
 
 [ -d pixman ] || git clone -q https://gitlab.freedesktop.org/pixman/pixman pixman
-(cd pixman && git checkout -q pixman-0.42.2 && NOCONFIGURE=y ./autogen.sh && emconfigure ./configure --prefix="$TARGET" \
-  && emmake make && emmake make install && rm -f "$TARGET"/lib/libpixman-1.so*)
+(cd pixman && git checkout -q pixman-0.42.2 && NOCONFIGURE=y ./autogen.sh && emconfigure ./configure --host=$CHOST --prefix="$TARGET" \
+  && emmake make -C pixman install && rm -f "$TARGET"/lib/libpixman-1.so*)
 
 (cd "$WORK" && npm i --no-save xterm-pty@0.10.1 >/dev/null)
 echo "deps ready in $TARGET"
