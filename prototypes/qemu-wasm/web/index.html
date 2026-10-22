@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>QEMU-Wasm test VM</title>
+<link rel="stylesheet" href="vendor/xterm.css">
+</head>
+<body>
+<div id="terminal"></div>
+<script src="vendor/xterm.js"></script>
+<script src="vendor/xterm-pty.js"></script>
+<script type="module">
+// index.html?arch=aarch64|x86_64&smp=4[&verbose=1][&share=1]
+// Boots <arch>/kernel + <arch>/initrd with <arch>/out.js (QEMU-Wasm). Everything the
+// serial console prints is also collected in window.__out for the test driver.
+const q = new URLSearchParams(location.search);
+const arch = q.get("arch") || "x86_64", smp = q.get("smp") || "4";
+const quiet = q.get("verbose") ? "" : " quiet";
+window.__out = "";
+const xterm = new Terminal({ cols: 120 });
+xterm.open(document.getElementById("terminal"));
+const { master, slave } = openpty();
+xterm.loadAddon(master);
+const write = slave.write.bind(slave);
+slave.write = (arg) => { window.__out += typeof arg === "string" ? arg : String.fromCharCode(...arg); return write(arg); };
+
+const get = async (p) => new Uint8Array(await (await fetch(p)).arrayBuffer());
+const files = { kernel: await get(`${arch}/kernel`), initrd: await get(`${arch}/initrd`) };
+const BIOS = ["bios-256k.bin", "kvmvapic.bin", "linuxboot_dma.bin", "vgabios-stdvga.bin"];
+if (arch.startsWith("x86_64")) for (const b of BIOS) files[b] = await get(`${arch}/bios/${b}`);
+
+const common = ["-nographic", "-m", "1024M", "-accel", "tcg,tb-size=500,thread=multi",
+  "-smp", `${smp},sockets=${smp}`, "-kernel", "/pack/kernel", "-initrd", "/pack/initrd", "-nic", "none"];
+if (q.get("share")) common.push("-virtfs", "local,path=/share,mount_tag=share,security_model=passthrough,id=share");
+const args = arch.startsWith("x86_64")
+  ? [...common, "-L", "/pack/", "-append", `console=ttyS0 rdinit=/init acpi=off no_timer_check${quiet}`]
+  : ["-M", "virt", "-cpu", "cortex-a53", ...common, "-append", `console=ttyAMA0 rdinit=/init${quiet}`];
+
+const Module = {
+  arguments: args, pty: slave, preRun: [],
+  mainScriptUrlOrBlob: `${location.origin}/${arch}/out.js`,
+  locateFile: (p) => `${location.origin}/${arch}/${p}`,
+};
+Module.preRun.push((mod) => {
+  mod.FS_createPath("/", "pack", true, true);
+  mod.FS_createPath("/", "share", true, true);
+  for (const [name, data] of Object.entries(files)) mod.FS_createDataFile("/pack", name, data, true, true, true);
+  // The page (or a test driver) puts files into the guest's 9p share with this.
+  window.__push = (name, bytes) => mod.FS_createDataFile("/share", name, new Uint8Array(bytes), true, true, true);
+});
+// Let QEMU's stdin poll wait on the pty instead of spinning.
+const waiting = [];
+slave.onReadable(() => waiting.splice(0).forEach((cb) => cb()));
+Module.preRun.push((mod) => {
+  mod.TTY.stream_ops.poll = (stream, timeout, cb) => {
+    if (slave.readable) return 1;
+    if (cb) {
+      cb.registerCleanupFunc(() => { const i = waiting.indexOf(cb); if (i >= 0) waiting.splice(i, 1); });
+      waiting.push(cb);
+    }
+    return 0;
+  };
+});
+const init = (await import(`./${arch}/out.js`)).default;
+init(Module).catch((e) => { window.__out += "\n[page] init failed: " + e; });
+</script>
+</body>
+</html>

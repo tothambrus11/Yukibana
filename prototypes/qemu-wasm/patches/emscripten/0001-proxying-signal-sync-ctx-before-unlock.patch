@@ -1,0 +1,27 @@
+--- a/system/lib/pthread/proxying.c	2026-10-22 12:41:33.552831283 +0000
++++ b/system/lib/pthread/proxying.c	2026-10-22 12:41:33.566256294 +0000
+@@ -323,8 +323,13 @@
+     pthread_mutex_lock(&ctx->sync.mutex);
+     ctx->sync.state = DONE;
+     remove_active_ctx(ctx);
+-    pthread_mutex_unlock(&ctx->sync.mutex);
++    // Signal before unlocking. The waiter's ctx lives on its stack: once the
++    // mutex is free the waiter may see DONE without ever waiting, return, and
++    // reuse that stack for the next sync call, so a signal sent after the
++    // unlock can land on (and corrupt) a different call's condition variable,
++    // which then never wakes its waiter.
+     pthread_cond_signal(&ctx->sync.cond);
++    pthread_mutex_unlock(&ctx->sync.mutex);
+   } else {
+     // Schedule the callback on the caller thread. If the caller thread has
+     // already died or dies before the callback is executed, then at least make
+@@ -349,8 +354,8 @@
+   if (ctx->kind == SYNC) {
+     pthread_mutex_lock(&ctx->sync.mutex);
+     ctx->sync.state = CANCELED;
+-    pthread_mutex_unlock(&ctx->sync.mutex);
+     pthread_cond_signal(&ctx->sync.cond);
++    pthread_mutex_unlock(&ctx->sync.mutex);
+   } else {
+     if (ctx->cb.cancel == NULL ||
+         !do_proxy(ctx->cb.queue,
