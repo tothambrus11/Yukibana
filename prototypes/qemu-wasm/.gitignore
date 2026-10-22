@@ -1,0 +1,10 @@
+work/
+web/aarch64/
+web/x86_64/
+web/vendor/
+web/node_modules/
+web/*.log
+web/alu-*.txt
+# --profiling-funcs builds used while hunting the freeze
+web/aarch64p/
+web/x86_64p/
