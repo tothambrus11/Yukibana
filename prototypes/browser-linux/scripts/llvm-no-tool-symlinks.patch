@@ -1,0 +1,14 @@
+diff --git a/llvm/cmake/modules/AddLLVM.cmake b/llvm/cmake/modules/AddLLVM.cmake
+index 83772ed8d..9652d8962 100644
+--- a/llvm/cmake/modules/AddLLVM.cmake
++++ b/llvm/cmake/modules/AddLLVM.cmake
+@@ -2327,6 +2327,9 @@ function(llvm_install_symlink project name dest)
+ endfunction()
+ 
+ function(llvm_add_tool_symlink project link_name target)
++  if(LLVM_TOOL_LLVM_DRIVER_BUILD AND CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
++    return()
++  endif()
+   cmake_parse_arguments(ARG "ALWAYS_GENERATE" "OUTPUT_DIR" "" ${ARGN})
+ 
+   get_property(LLVM_DRIVER_TOOLS GLOBAL PROPERTY LLVM_DRIVER_TOOLS)

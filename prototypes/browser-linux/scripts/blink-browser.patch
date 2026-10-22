@@ -1,0 +1,133 @@
+diff --git a/blink/argv.c b/blink/argv.c
+index 11c77c9..f114eba 100644
+--- a/blink/argv.c
++++ b/blink/argv.c
+@@ -113,7 +113,16 @@ void LoadArgv(struct Machine *m, char *execfn, char *prog, char **args,
+   while ((sp - nall * sizeof(i64)) & (STACKALIGN - 1)) --sp;
+   sp -= nall * sizeof(i64);
+   Write64(m->sp, sp);
++#ifdef __EMSCRIPTEN__
++  // Linux enters a static program with rdx = 0: rdx is the dynamic linker's
++  // exit hook, and glibc's _start registers it with atexit when non-zero.
++  // The program name (for Cosmopolitan's APE loader) would make glibc jump
++  // to a string as it exits. Only Linux programs run here.
++  (void)dx;
++  Write64(m->dx, 0);
++#else
+   Write64(m->dx, dx);
++#endif
+   Write64(m->di, 0); /* or ape detects freebsd */
+   bytes = (u8 *)malloc(nall * 8);
+   for (i = 0; i < nall; ++i) {
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 34cc01c..fcb7eec 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -181,6 +181,15 @@ static int my_tcsetwinsize(int fd, const struct winsize *ws) {
+   return VfsIoctl(fd, TIOCSWINSZ, (void *)ws);
+ }
+ 
++#ifdef __EMSCRIPTEN__
++// Yukibana's build has no Asyncify, so emscripten_sleep() aborts and a wait
++// could only spin. Nothing else runs in a one-process, one-thread guest to
++// make a pipe readable meanwhile, so reads and polls do not wait: an empty
++// pipe whose write end is still open reads as EAGAIN, not a hang.
++#define em_readv VfsReadv
++#define em_poll VfsPoll
++#endif
++
+ const struct FdCb kFdCbHost = {
+     .close = VfsClose,
+ #ifdef __EMSCRIPTEN__
+@@ -674,7 +683,19 @@ static int SysFutexWait(struct Machine *m,  //
+     if (!(0 <= timeout.tv_nsec && timeout.tv_nsec < 1000000000)) {
+       return einval();
+     }
+-    deadline = AddTime(now, timeout);
++    if ((op & ~FUTEX_CLOCK_REALTIME_LINUX) == FUTEX_WAIT_BITSET_LINUX) {
++      // FUTEX_WAIT_BITSET's timeout is a deadline: on CLOCK_REALTIME (what
++      // GetTime() reads) with FUTEX_CLOCK_REALTIME, else CLOCK_MONOTONIC.
++      if (op & FUTEX_CLOCK_REALTIME_LINUX) {
++        deadline = timeout;
++      } else {
++        struct timespec mono;
++        unassert(!clock_gettime(CLOCK_MONOTONIC, &mono));
++        deadline = AddTime(now, SubtractTime(timeout, mono));
++      }
++    } else {
++      deadline = AddTime(now, timeout);
++    }
+   } else {
+     deadline = GetMaxTime();
+   }
+@@ -762,10 +783,18 @@ static int SysFutex(struct Machine *m,  //
+       return SysFutexWake(m, uaddr, val);
+     case FUTEX_WAIT_BITSET_LINUX:
+     case FUTEX_WAIT_BITSET_LINUX | FUTEX_CLOCK_REALTIME_LINUX:
+-      // will be supported soon
+-      // avoid logging when cosmo feature checks this
+-      if (!m->system->iscosmo) goto DefaultCase;
+-      return einval();
++      // glibc's pthread_join and condition variables wait this way, always
++      // with FUTEX_BITSET_MATCH_ANY; refused, they spin on EINVAL forever.
++      // Any other bitset would need per-waiter masks, which nothing here
++      // keeps.
++      if (val3 != 0xffffffff) {
++        if (!m->system->iscosmo) goto DefaultCase;
++        return einval();
++      }
++      return SysFutexWait(m, uaddr, op, val, timeout_addr);
++    case 10:  // FUTEX_WAKE_BITSET
++      if (val3 != 0xffffffff) goto DefaultCase;
++      return SysFutexWake(m, uaddr, val);
+     default:
+     DefaultCase:
+       LOGF("unsupported %s op %#x", "futex", op);
+@@ -4865,7 +4894,18 @@ static int SysSigpending(struct Machine *m, i64 setaddr) {
+   return CopyToUserWrite(m, setaddr, word, 8);
+ }
+ 
++static int SysTkill(struct Machine *, int, int);
++
+ static int SysKill(struct Machine *m, int pid, int sig) {
++#ifdef __EMSCRIPTEN__
++  // The browser has one process and no host signals to lend it, so the host
++  // kill() is a stub that does nothing. A signal a process sends itself is
++  // delivered the way tkill() delivers it; no other process exists.
++  if (pid == m->system->pid || pid == 0 || pid == -1) {
++    return SysTkill(m, m->tid, sig);
++  }
++  return esrch();
++#endif
+   return kill(pid, sig ? XlatSignal(sig) : 0);
+ }
+ 
+@@ -4875,7 +4915,7 @@ static bool IsValidThreadId(struct System *s, int tid) {
+ }
+ 
+ static int SysTkill(struct Machine *m, int tid, int sig) {
+-#if defined(HAVE_FORK) || defined(HAVE_THREADS)
++#if defined(HAVE_FORK) || defined(HAVE_THREADS) || defined(__EMSCRIPTEN__)
+   bool found;
+   int rc, err;
+   if (tid < 0) return einval();
+@@ -5631,6 +5671,19 @@ void OpSyscall(P) {
+ #ifdef HAVE_THREADS
+     SYSCALL(6, 0x0CA, "futex", SysFutex, STRACE_FUTEX);
+ #endif
++#if defined(__EMSCRIPTEN__) && !defined(HAVE_FORK)
++    // One process is still enough for a process to signal itself.
++    SYSCALL(2, 0x03E, "kill", SysKill, STRACE_KILL);
++#endif
++#if defined(__EMSCRIPTEN__) && !defined(HAVE_FORK) && !defined(HAVE_THREADS)
++    // And one thread is enough to talk to itself through a pipe.
++    SYSCALL(2, 0x0C8, "tkill", SysTkill, STRACE_TKILL);
++    SYSCALL(3, 0x0EA, "tgkill", SysTgkill, STRACE_3);
++    SYSCALL(1, 0x016, "pipe", SysPipe, STRACE_PIPE);
++#ifndef DISABLE_NONPOSIX
++    SYSCALL(2, 0x125, "pipe2", SysPipe2, STRACE_PIPE2);
++#endif
++#endif
+ #if defined(HAVE_FORK) || defined(HAVE_THREADS)
+     SYSCALL(1, 0x016, "pipe", SysPipe, STRACE_PIPE);
+ #ifndef DISABLE_NONPOSIX
