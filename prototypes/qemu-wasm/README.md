@@ -12,24 +12,20 @@ it without Docker, and the tests that caught the bugs.
 
 `patches/0001-*.patch` applies to ktock/qemu-wasm at `patches/BASE`, and
 `patches/emscripten/0001-*.patch` to emscripten 3.1.50.
-The first four bugs are in `tcg/wasm32/tcg-target.c.inc`, in code that runs
-only after a block has executed 1500 times and is compiled to Wasm. Until
-then, the TCI interpreter runs the block correctly. That is why each bug shows
-up only some of the time. The last one is a race in emscripten's threading
-runtime.
+The QEMU patch fixes the Wasm backend in `tcg/wasm32/tcg-target.c.inc`, in
+code that runs only after a block has executed 1500 times and is compiled to
+Wasm. Until then, the TCI interpreter runs the block correctly, which is why
+each bug shows up only some of the time. The emscripten patch fixes a race in
+its threading runtime.
 
-| Bug | Effect in a guest | Found by |
+| Bug | Effect in a guest | Caught by |
 | --- | --- | --- |
-| `add2_i32` / `sub2_i32` took the carry from a 64-bit add of the low halves instead of bit 32 | AArch64 `adds`/`cmn` on W registers set the wrong C flag. The kernel's `vsnprintf` stopped recognising digits in format strings. Effects: `unsupported %1 in format string` warnings, printk lines without timestamps, `/proc/uptime` reading `9.s`, and a duplicate sysfs `cache/index` entry at boot. | Verbose boot log; `guest/alutest.c` category 0 |
-| `sub2_i64` fed the `i32` result of `i64.gt_u` into `i64.sub` | The module fails validation, and `new WebAssembly.Module` throws inside a vCPU thread | Code audit |
-| `extract_i32` / `sextract_i32` used 32-bit shift amounts with 64-bit shifts | Bits above `pos + len` are not cleared | Code audit |
-| `clz_i32` / `ctz_i32` tested all 64 bits of the register for zero | Wrong result for zero inputs when the register's undefined upper half is not zero | Code audit |
-
-| `emscripten_proxy_finish` signalled the waiter's condition variable after unlocking its mutex (emscripten 3.1.50 `proxying.c`, unchanged upstream) | The whole VM froze, about once in 20 boots on either architecture: every vCPU idle, the QEMU monitor dead, the main-loop thread waiting forever on a synchronous `poll` it had proxied to the browser's main thread, which had already run it | Stacks of every worker over the DevTools protocol, a counter on the main thread's proxied calls, then a bounded wait that logged the lost wakeup |
-
-The x86_64 guest never showed the carry symptom, because its frontend does not
-emit `add2_i32` for normal code. The audit bugs were not seen in a guest
-either; the differential test passes with and without them on x86_64.
+| `add2_i32` / `sub2_i32` took the carry from a 64-bit add of the low halves instead of bit 32 | AArch64 `adds`/`cmn` on W registers set the wrong C flag, so the kernel's `vsnprintf` stopped recognising digits: `unsupported %1 in format string`, printk lines without timestamps, `/proc/uptime` reading `9.s` | Verbose boot log; `alutest.c` category 0 |
+| `mulu2_i32` / `muls2_i32` did not zero/sign-extend their operands | x86 32-bit `imul` of negative numbers gave the wrong EDX and CF/OF | `alutest.c` category 2 |
+| `extract_i32` / `sextract_i32` used 32-bit shift amounts with 64-bit shifts | Bits above `pos + len` leaked in; AArch64 `fcvt` read `FPCR.AHP` together with `FPSR.NZCV` | `alutest.c` category 4 |
+| `clz_i32` / `ctz_i32` tested all 64 bits for zero | Wrong result for a zero input with a dirty upper half | Code audit |
+| `sub2_i64` and `ctpop_i32` pushed an i32 where an i64 belongs | The module fails validation inside a vCPU thread | Code audit |
+| `emscripten_proxy_finish` signalled the waiter after unlocking (emscripten 3.1.50 `proxying.c`, fixed upstream in 5.0.5 by emscripten-core/emscripten#26582; qemu-wasm pins 3.1.50) | The whole VM froze about once in 20 boots on either architecture | Worker stacks over the DevTools protocol, then a bounded wait that logged the lost wakeup |
 
 The freeze is not in QEMU. QEMU's main loop calls `poll` about 5000 times a
 second, and each call is proxied synchronously to the page's main thread
@@ -38,7 +34,8 @@ waits on a condition variable inside a context on its own stack. The page
 thread set the state to done, unlocked the mutex, and only then signalled. In
 that gap the caller could see "done" without waiting, return, and start the
 next call in the same stack slot, so the late signal hit the new call's
-condition variable and its wakeup was lost. `patches/emscripten/` moves the
+condition variable and its wakeup was lost. `patches/emscripten/` backports
+the upstream fix (emscripten-core/emscripten#26582, in 5.0.5), which moves the
 signal inside the lock. `scripts/build-qemu.sh` applies it to the activated
 emsdk and rebuilds its libc.
 

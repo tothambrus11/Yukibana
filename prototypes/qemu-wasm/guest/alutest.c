@@ -31,6 +31,7 @@ __attribute__((noinline)) static void step(uint64_t x, uint64_t y) {
   unsigned __int128 u = ((unsigned __int128)x << 64 | y) + ((unsigned __int128)y << 64 | x); mix(2, (uint64_t)(u >> 64)); mix(2, (uint64_t)u);
   unsigned __int128 v = ((unsigned __int128)x << 64 | y) - ((unsigned __int128)y << 64 | x); mix(2, (uint64_t)(v >> 64)); mix(2, (uint64_t)v);
   mix(2, (uint64_t)a * b); mix(2, (uint64_t)((int64_t)sa * sb));
+  mix(2, __builtin_mul_overflow(a, b, &r32)); mix(2, r32); mix(2, __builtin_mul_overflow(sa, sb, &s32)); mix(2, (uint32_t)s32);
   /* 3: bit counts */
   mix(3, a ? __builtin_clz(a) : 99); mix(3, a ? __builtin_ctz(a) : 99); mix(3, x ? __builtin_clzll(x) : 99); mix(3, x ? __builtin_ctzll(x) : 99);
   mix(3, __builtin_popcount(a)); mix(3, __builtin_popcountll(x)); mix(3, __builtin_clrsb(sa)); mix(3, __builtin_clrsbll((int64_t)x));
@@ -38,6 +39,7 @@ __attribute__((noinline)) static void step(uint64_t x, uint64_t y) {
   struct bf f; memcpy(&f, &a, 4); mix(4, f.a); mix(4, f.b); mix(4, f.c); mix(4, f.d);
   f.b = b; f.d = b >> 3; memcpy(&r32, &f, 4); mix(4, r32);
   struct bfs g; memcpy(&g, &b, 4); mix(4, (uint32_t)g.a); mix(4, (uint32_t)g.b); mix(4, (uint32_t)g.c);
+  _Float16 h = (_Float16)(float)sa; uint16_t hb; memcpy(&hb, &h, 2); mix(4, hb); /* FCVT reads FPCR.AHP with extract_i32 */
   mix(4, (x >> 13) & 0x7ff); mix(4, (uint64_t)((int64_t)(x << 7) >> 40)); mix(4, (a >> 5) & 0x3f); mix(4, (uint32_t)((sa << 3) >> 20));
   /* 5: shifts and rotates */
   unsigned n = b & 31, m = y & 63;
@@ -57,6 +59,10 @@ __attribute__((noinline)) static void step(uint64_t x, uint64_t y) {
 }
 int main(int argc, char **argv) {
   long iters = argc > 1 ? atol(argv[1]) : 20000;
+#ifdef __aarch64__
+  /* FPSR.NZCV shares the FPSCR word with FPCR.AHP: a sloppy extract of AHP sees them */
+  __asm__ volatile("msr fpsr, %0" :: "r"(0xf0000000ull));
+#endif
   /* edge values first, then random */
   static const uint64_t e[] = {0, 1, 2, 9, 10, 0x30, 0x31, 0x39, 0x3a, 0x7f, 0x80, 0xff, 0x7fffffff, 0x80000000, 0xfffffff7, 0xffffffff,
     0x100000000ull, 0x7fffffffffffffffull, 0x8000000000000000ull, 0xffffffffffffffffull, 0xffffffff00000000ull, 0x00000000fffffff6ull};
