@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Linux syscall playground</title>
+<style>
+:root {
+    --bg: #f6f7f9; --panel: #ffffff; --line: #dde1e6; --text: #1d2329; --muted: #66707a;
+    --accent: #2f6fdf; --accent-text: #ffffff; --err: #c4352b; --warn: #a76200; --ok: #23824a;
+    --code-bg: #fbfbfc; --name: #6741c4; --sel: #e8effc;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --bg: #14171b; --panel: #1b1f24; --line: #2c323a; --text: #e3e7eb; --muted: #949ea8;
+        --accent: #5b8ff0; --accent-text: #0d1117; --err: #f07167; --warn: #e5a54b; --ok: #5cc98a;
+        --code-bg: #171a1f; --name: #b69cf5; --sel: #22314a;
+        color-scheme: dark;
+    }
+}
+:root[data-theme="dark"] {
+    --bg: #14171b; --panel: #1b1f24; --line: #2c323a; --text: #e3e7eb; --muted: #949ea8;
+    --accent: #5b8ff0; --accent-text: #0d1117; --err: #f07167; --warn: #e5a54b; --ok: #5cc98a;
+    --code-bg: #171a1f; --name: #b69cf5; --sel: #22314a;
+    color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column;
+}
+header { display: flex; align-items: baseline; gap: 12px; padding: 12px 16px 4px; flex-wrap: wrap; }
+h1 { font-size: 16px; margin: 0; font-weight: 650; }
+.sub { color: var(--muted); font-size: 13px; }
+#status { margin-left: auto; font-size: 13px; color: var(--muted); }
+#status.err { color: var(--err); }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 16px; }
+.bar label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+select, input[type="text"], button {
+    font: inherit; font-size: 13px; color: var(--text); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px;
+}
+input[type="text"] { width: 140px; font-family: var(--mono); }
+button { cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; padding: 5px 14px; }
+button:disabled { opacity: .5; cursor: default; }
+.spacer { flex: 1; }
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 4px 16px 12px; }
+.pane { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.pane-head { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--line); padding: 0 6px; min-height: 36px; }
+.pane-head .title { font-size: 13px; color: var(--muted); padding: 0 6px; }
+.tab { border: 0; background: none; border-radius: 0; padding: 8px 10px; color: var(--muted); border-bottom: 2px solid transparent; }
+.tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+.count { color: var(--muted); font-variant-numeric: tabular-nums; }
+textarea {
+    flex: 1; min-height: 0; width: 100%; resize: none; border: 0; outline: 0; padding: 10px 12px;
+    font: 13px/1.5 var(--mono); color: var(--text); background: var(--code-bg); tab-size: 4;
+}
+#stdin { flex: 0 0 72px; border-top: 1px solid var(--line); }
+.stdin-label { font-size: 12px; color: var(--muted); padding: 4px 12px 0; border-top: 1px solid var(--line); background: var(--code-bg); }
+.view { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 10px 12px; font: 13px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; background: var(--code-bg); }
+.view[hidden] { display: none; }
+.fd2 { color: var(--err); }
+.meta { color: var(--muted); }
+.trace-line { display: inline; }
+.trace-line .n { color: var(--muted); display: inline-block; min-width: 3.5em; user-select: none; }
+.trace-line .call { color: var(--name); font-weight: 600; }
+.trace-line.enosys { color: var(--warn); }
+.trace-line.loader { color: var(--muted); }
+.file { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 10px; }
+.file-name { padding: 4px 8px; border-bottom: 1px solid var(--line); color: var(--muted); }
+.file pre { margin: 0; padding: 6px 8px; white-space: pre-wrap; }
+footer { padding: 0 16px 12px; color: var(--muted); font-size: 12px; display: flex; gap: 16px; flex-wrap: wrap; }
+footer a { color: var(--accent); }
+.hint { color: var(--muted); font-family: system-ui, sans-serif; }
+@media (max-width: 860px) {
+    main { grid-template-columns: minmax(0, 1fr); grid-auto-rows: minmax(320px, 1fr); }
+    body { height: auto; min-height: 100%; }
+}
+</style>
+</head>
+<body>
+<header>
+    <h1>Linux syscall playground</h1>
+    <span class="sub">clang 21 compiles to a static Linux ELF and Blink runs it, all in this tab</span>
+    <span id="status">Loading…</span>
+</header>
+<div class="bar">
+    <label>Sample <select id="sample"></select></label>
+    <label>Target
+        <select id="arch">
+            <option value="x86_64">x86_64 (compile and run)</option>
+            <option value="aarch64">aarch64 (compile only)</option>
+        </select>
+    </label>
+    <label>libc
+        <select id="libc">
+            <option value="musl">musl 1.2.5</option>
+            <option value="gnu">glibc 2.41</option>
+        </select>
+    </label>
+    <label>Optimise <select id="opt"><option>-O0</option><option selected>-O1</option><option>-O2</option></select></label>
+    <label><input type="checkbox" id="strace" checked> Trace syscalls</label>
+    <label><input type="checkbox" id="intel"> Intel syntax</label>
+    <label>argv <input type="text" id="args" placeholder="arg1 arg2"></label>
+    <span class="spacer"></span>
+    <button id="stop" disabled>Stop</button>
+    <button id="run" class="primary" disabled title="Ctrl+Enter">Run</button>
+</div>
+<main>
+    <section class="pane">
+        <div class="pane-head"><span class="title">main.c</span></div>
+        <textarea id="source" spellcheck="false" aria-label="C source"></textarea>
+        <div class="stdin-label">stdin</div>
+        <textarea id="stdin" spellcheck="false" aria-label="Standard input" placeholder="Text the program reads from file descriptor 0"></textarea>
+    </section>
+    <section class="pane">
+        <div class="pane-head" role="tablist">
+            <button class="tab" role="tab" data-view="out" aria-selected="true">Output</button>
+            <button class="tab" role="tab" data-view="trace">System calls <span class="count" id="n-trace"></span></button>
+            <button class="tab" role="tab" data-view="dis">Disassembly</button>
+            <button class="tab" role="tab" data-view="files">Files <span class="count" id="n-files"></span></button>
+        </div>
+        <pre class="view" id="out"><span class="hint">Press Run (or Ctrl+Enter) to compile and run.</span></pre>
+        <pre class="view" id="trace" hidden></pre>
+        <pre class="view" id="dis" hidden></pre>
+        <div class="view" id="files" hidden></div>
+    </section>
+</main>
+<footer>
+    <span id="timings"></span>
+    <a id="download" hidden download="a.out">Download a.out</a>
+</footer>
+<script type="module" src="app.js"></script>
+</body>
+</html>

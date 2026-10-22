@@ -1,0 +1,6 @@
+# Build output and the build's working tree (sources, LLVM build dirs):
+# scripts/build.sh recreates both.
+dist/
+.work/
+node_modules/
+test/screenshots/
