@@ -2,6 +2,7 @@ saveExact: true
 linkWorkspacePackages: true
 nodeLinker: hoisted # Needed for Theia's version check
 packages:
+  - packages/*
   - theia-extensions/*
   - dev-packages/*
   - browser-app
@@ -18,6 +19,7 @@ allowBuilds:
   electron-chromedriver: true
   electron-winstaller: true
   esbuild: true
+  find-git-repositories: true
   keytar: true
   msgpackr-extract: true
   native-keymap: true
