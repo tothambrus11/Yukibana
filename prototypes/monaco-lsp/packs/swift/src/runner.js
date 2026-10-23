@@ -14,11 +14,20 @@
 // entries name, then the program, as a WASI command, in this same worker.
 // Standard input blocks on the contract's SharedArrayBuffer, so readLine()
 // works interactively.
+//
+// `{ type: 'test' }` (same fields as 'run') runs the project's XCTest tests
+// instead of its program, with the browser's XCTest (xctest/, README "Tests
+// with XCTest"): every .swift file except the program's main.swift, plus a
+// main.swift generated from the XCTestCase subclasses found (src/xctest.js),
+// or the project's own main.swift if that one calls XCTMain. A 'run' leaves
+// test files (those importing XCTest) out, as SwiftPM leaves the test target
+// out of the executable.
 
 import {
-    Fd, FRONTEND_WASM, LINKER_WASM, autolinkEntries, compileArgs, linkArgs, loadSysroot,
-    loadTool, mkdirp, readFile, remove, runWasi, textSink, wasiDefs, writeProject,
+    Fd, FRONTEND_WASM, LINKER_WASM, autolinkEntries, compileArgs, linkArgs, loadSysroot, loadXCTest,
+    loadTool, mkdirp, readFile, remove, runWasi, textSink, wasiDefs, writeFile, writeProject,
 } from './toolchain.js';
+import { dropOwnModuleImportWarnings, importsXCTest, isTestFile, planTestRun, projectModuleName } from './xctest.js';
 
 const post = (msg) => self.postMessage(msg);
 const phase = (text) => post({ type: 'phase', text });
@@ -73,29 +82,57 @@ class Stdin extends Fd {
     }
 }
 
-async function run({ files, entry, stdin }) {
+/** Where a generated test main.swift is compiled from (outside the project). */
+const TEST_MAIN = '/build/xctest/main.swift';
+
+async function run({ files, entry, stdin }, testing) {
     const t0 = performance.now();
     const ms = () => `${Math.round(performance.now() - t0)} ms`;
+    // What to compile: for a run, the program (test files left out); for a
+    // test run, the plan of src/xctest.js. Module name: see projectModuleName.
+    const swift = Object.entries(files).filter(([p]) => p.endsWith('.swift'));
+    const plan = testing ? planTestRun(files) : null;
+    // (An entry that imports XCTest itself, a hand-written test main, keeps them.)
+    const keepTests = testing || importsXCTest(files[entry] ?? '');
+    const compiled = testing ? plan.sources : swift.filter(([p, text]) => keepTests || !isTestFile(p, text)).map(([p]) => p);
+    const moduleName = testing ? plan.moduleName : projectModuleName(Object.fromEntries(swift.filter(([p]) => compiled.includes(p))));
+    const needsXCTest = testing || swift.some(([p, text]) => compiled.includes(p) && importsXCTest(text));
+
     phase('Loading the Swift compiler');
-    // All three downloads at once; the linker compiles while the frontend runs.
+    // All downloads at once; the linker compiles while the frontend runs.
     const linkerPromise = loadTool(LINKER_WASM, onLoading);
     linkerPromise.catch(() => {});
-    const [frontend, root] = await Promise.all([loadTool(FRONTEND_WASM, onLoading), loadSysroot(onLoading)]);
+    const [frontend, root] = await Promise.all([
+        loadTool(FRONTEND_WASM, onLoading),
+        loadSysroot(onLoading).then(async (root) => (needsXCTest && (await loadXCTest(root, onLoading)), root)),
+    ]);
 
-    const sources = writeProject(root, WORK, files, entry);
+    writeProject(root, WORK, files, entry);
+    const sources = compiled.map((p) => `${WORK}/${p.replace(/^\/+/, '')}`);
+    sources.sort((a, b) => (a === `${WORK}/${entry}` ? -1 : b === `${WORK}/${entry}` ? 1 : a < b ? -1 : 1));
     mkdirp(root, '/build');
+    if (plan?.main) {
+        writeFile(root, TEST_MAIN, plan.main);
+        sources.push(TEST_MAIN);
+        if (plan.classes.length === 0) post({ type: 'stderr', text: 'note: no XCTestCase subclass with test methods was found\n' });
+    }
     if (sources.length === 0) {
         post({ type: 'stderr', text: 'error: the project has no .swift files\n' });
         return 1;
     }
 
     phase('Compiling');
-    const errors = textSink((text) => post({ type: 'stderr', text: relative(text) }));
+    // The frontend's diagnostics, posted when it ends (they all come at the
+    // end anyway), less the warnings that projectModuleName causes.
+    const diagnostics = textSink();
     let code = await runWasi(frontend, {
-        args: compileArgs(sources, '/build/main.o'), root,
-        stdout: errors, stderr: errors,
+        args: compileArgs(sources, '/build/main.o', moduleName), root,
+        stdout: diagnostics, stderr: diagnostics,
     });
+    const shown = relative(moduleName === 'main' ? diagnostics.text : dropOwnModuleImportWarnings(diagnostics.text));
+    if (shown.trim()) post({ type: 'stderr', text: shown });
     if (code !== 0) return code;
+    const errors = textSink((text) => post({ type: 'stderr', text: relative(text) }));
 
     phase('Linking');
     const object = readFile(root, '/build/main.o');
@@ -113,7 +150,7 @@ async function run({ files, entry, stdin }) {
     remove(root, '/sysroot');
     remove(root, '/build');
 
-    phase('Running');
+    phase(testing ? 'Testing' : 'Running');
     console.debug(`swift runner: compiled and linked in ${ms()}`);
     let exports = null;
     const flush = () => {
@@ -123,7 +160,10 @@ async function run({ files, entry, stdin }) {
             // a program that trapped may not be able to flush; its output is lost
         }
     };
-    const out = textSink((text) => post({ type: 'stdout', text }));
+    // XCTest prints failures as `#file:line:`, which is the absolute path the
+    // frontend was given; a test run shows it relative, as diagnostics are.
+    // (XCTest flushes every line, so a path is never split across writes.)
+    const out = textSink((text) => post({ type: 'stdout', text: testing ? relative(text) : text }));
     const err = textSink((text) => post({ type: 'stderr', text }));
     try {
         return await runWasi(program, {
@@ -141,8 +181,8 @@ async function run({ files, entry, stdin }) {
 }
 
 self.onmessage = ({ data }) => {
-    if (data?.type !== 'run') return;
-    run(data).then(
+    if (data?.type !== 'run' && data?.type !== 'test') return;
+    run(data, data.type === 'test').then(
         (code) => post({ type: 'exit', code }),
         (e) => {
             post({ type: 'stderr', text: `swift runner: ${e?.message ?? e}\n` });

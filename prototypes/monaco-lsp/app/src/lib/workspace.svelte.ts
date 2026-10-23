@@ -131,11 +131,12 @@ export class Workspace {
 
 	/**
 	 * Runs the project: the language's entry file when the project has one,
-	 * else the file shown. Every file goes along, as last edited.
+	 * else the file shown; `mode` 'test' runs its tests instead (languages with
+	 * `tests`). Every file goes along, as last edited.
 	 */
-	run(): void {
+	run(mode: 'run' | 'test' = 'run'): void {
 		const language = languageOf(this.language);
-		if (!language.runs) return;
+		if (mode === 'run' ? !language.runs : !language.tests) return;
 		const entry = this.models.has(language.entry) ? language.entry : this.active;
 		if (!entry) {
 			this.write('warning', `There is no ${language.entry} to run.`);
@@ -144,7 +145,7 @@ export class Workspace {
 		const files: Record<string, string> = {};
 		for (const [path, model] of this.models) files[path] = model.getValue();
 		this.host?.showTerminal();
-		this.runner.start(this.language, files, entry);
+		this.runner.start(this.language, files, entry, mode);
 	}
 
 	/** Saves now instead of after the debounce: the page is being hidden or reloaded. */

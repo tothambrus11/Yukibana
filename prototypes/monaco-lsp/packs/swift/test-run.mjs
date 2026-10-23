@@ -135,7 +135,7 @@ try {
     // line each, then end of file), optionally terminate it after the program
     // printed `stopAfter`. Resolves with what came back and when.
     await page.evaluate(() => {
-        window.runProject = (files, { inputs = [], stopAfter = null, entry = 'main.swift' } = {}) =>
+        window.runProject = (files, { inputs = [], stopAfter = null, entry = 'main.swift', type = 'run' } = {}) =>
             new Promise((done) => {
                 const t0 = performance.now();
                 const result = { stdout: '', stderr: '', code: null, phases: [], loading: {}, stdinRequests: 0, stdoutBeforeInput: [], terminated: false };
@@ -185,7 +185,7 @@ try {
                         }, 1000);
                     }
                 };
-                worker.postMessage({ type: 'run', files, entry, stdin: sab });
+                worker.postMessage({ type, files, entry, stdin: sab });
             });
     });
 
@@ -254,6 +254,187 @@ try {
         forever.terminated && forever.code === null && forever.stdout === 'looping\n' && alive === 2,
         `stopped after ${Date.now() - t} ms; ${timeline(forever)}`
     );
+
+    // 6. XCTest: { type: 'test' } runs the project's tests with the browser's XCTest.
+    // a. The behaviour corpus: the report must be the real XCTest's, line for
+    //    line (xctest/conformance/Behaviour.expected, from swift-corelibs-xctest
+    //    by tools/xctest-subset.mjs), with dates, times and the bundle blanked.
+    const normal = (text) => text.replace(/\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}/g, 'DATE').replace(/\(\d+(\.\d+)? seconds\)/g, '(T seconds)')
+        .replace(/in \d+(\.\d+)? \(\d+(\.\d+)?\) seconds/g, 'in T (T) seconds').replace(/^Test Suite '[^']*\.xctest'/gm, "Test Suite 'BUNDLE.xctest'");
+    const golden = await readFile(resolve(HERE, 'xctest/conformance/Behaviour.expected'), 'utf8');
+    bytesSent = 0;
+    const behaviour = await run({ 'Behaviour.swift': await readFile(resolve(HERE, 'xctest/conformance/Behaviour.swift'), 'utf8') }, { type: 'test' });
+    const got = normal(behaviour.stdout).split('\n');
+    const want = golden.split('\n');
+    const firstDiff = want.findIndex((line, i) => got[i] !== line);
+    check(
+        'XCTest: the behaviour corpus prints exactly what swift-corelibs-xctest prints (assertion texts, skips, setUp/tearDown order, async, summaries) and exits 1',
+        behaviour.code === 1 && firstDiff === -1 && got.length === want.length && behaviour.stderr === '',
+        `${want.length - 1} lines, code=${behaviour.code} in ${behaviour.ms} ms, swift-xctest.tar ${JSON.stringify(behaviour.loading['swift-xctest.tar'])}; ${timeline(behaviour)}` +
+            (firstDiff >= 0 ? `\n  first difference at line ${firstDiff + 1}:\n  want ${want[firstDiff]}\n  got  ${got[firstDiff]}` : '') +
+            (behaviour.stderr ? `\n${behaviour.stderr}` : ''),
+    );
+    console.log(behaviour.stdout.split('\n').filter((l) => / error: |skipped|Executed|^\[|^class/.test(l)).slice(0, 8).map((l) => `      ${l}`).join('\n'));
+
+    // b. A student project as SwiftPM lays it out: code, a main.swift, and
+    //    tests that `@testable import Calc`. Discovery, setUp/tearDown, a
+    //    throwing test, XCTUnwrap, accuracy, XCTAssertThrowsError, async.
+    const CALC = {
+        'main.swift': 'print(Calculator().add(2, 3))\n',
+        'Calculator.swift': `enum CalcError: Error { case divisionByZero }
+struct Calculator {
+    func add(_ a: Int, _ b: Int) -> Int { a + b }
+    func divide(_ a: Double, _ b: Double) throws -> Double {
+        guard b != 0 else { throw CalcError.divisionByZero }
+        return a / b
+    }
+    func slowAdd(_ a: Int, _ b: Int) async -> Int { await Task.yield(); return a + b }
+}
+`,
+        'Tests/CalculatorTests.swift': `import XCTest
+@testable import Calc
+
+final class CalculatorTests: XCTestCase {
+    var calculator: Calculator!
+    var events: [String] = []
+
+    override func setUp() { calculator = Calculator(); events.append("setUp") }
+    override func tearDown() { events.append("tearDown"); print("\\(name): \\(events)") }
+
+    func testAdd() { events.append("test"); XCTAssertEqual(calculator.add(2, 3), 5) }
+    func testDivide() throws { XCTAssertEqual(try calculator.divide(1, 3), 0.333, accuracy: 0.001) }
+    func testDivideByZero() {
+        XCTAssertThrowsError(try calculator.divide(1, 0)) { XCTAssertEqual($0 as? CalcError, .divisionByZero) }
+    }
+    func testUnwrap() throws { XCTAssertEqual(try XCTUnwrap(Int("42")), 42) }
+    func testAsync() async throws { let sum = await calculator.slowAdd(1, 2); XCTAssertEqual(sum, 3) }
+}
+`,
+    };
+    const calc = await run(CALC, { type: 'test' });
+    check(
+        'XCTest: discovered tests pass (`@testable import Calc` names the module), setUp/tearDown around each, exit 0, nothing on stderr',
+        calc.code === 0 && /Executed 5 tests, with 0 failures \(0 unexpected\)/.test(calc.stdout) && calc.stderr === '' &&
+            calc.stdout.includes('CalculatorTests.testAdd: ["setUp", "test", "tearDown"]') &&
+            ['testAdd', 'testDivide', 'testDivideByZero', 'testUnwrap', 'testAsync'].every((t) => calc.stdout.includes(`Test Case 'CalculatorTests.${t}' passed`)),
+        `code=${calc.code} in ${calc.ms} ms; ${timeline(calc)}\n${calc.stderr}${calc.stdout.split('\n').filter((l) => /Executed|testAdd:/.test(l)).slice(0, 2).map((l) => `      ${l}`).join('\n')}`,
+    );
+    const calcRun = await run(CALC);
+    check("XCTest: 'run' of the same project runs the program, without its tests", calcRun.code === 0 && calcRun.stdout === '5\n' && calcRun.stderr === '' && !('swift-xctest.tar' in calcRun.loading),
+        `${JSON.stringify(calcRun.stdout)} code=${calcRun.code}`);
+
+    const failing = await run({
+        ...CALC,
+        'Tests/CalculatorTests.swift': `import XCTest
+@testable import Calc
+
+final class CalculatorTests: XCTestCase {
+    func testAdd() { XCTAssertEqual(Calculator().add(2, 2), 5, "two and two") }
+    func testDivide() throws { XCTAssertEqual(try Calculator().divide(1, 3), 0.3, accuracy: 0.001) }
+    func testThrows() throws { _ = try Calculator().divide(1, 0) }
+    func testUnwrap() throws { _ = try XCTUnwrap(Int("forty-two")); XCTFail("not reached") }
+    func testPasses() {}
+}
+`,
+    }, { type: 'test' });
+    const expectLines = [
+        `Tests/CalculatorTests.swift:5: error: CalculatorTests.testAdd : XCTAssertEqual failed: ("4") is not equal to ("5") - two and two`,
+        `Tests/CalculatorTests.swift:6: error: CalculatorTests.testDivide : XCTAssertEqual failed: ("0.3333333333333333") is not equal to ("0.3") +/- ("0.001") - `,
+        `<EXPR>:0: error: CalculatorTests.testThrows : threw error "divisionByZero"`,
+        `Tests/CalculatorTests.swift:8: error: CalculatorTests.testUnwrap : XCTUnwrap failed: expected non-nil value of type "Int" - `,
+        `Test Case 'CalculatorTests.testPasses' passed`,
+        `\t Executed 5 tests, with 4 failures (1 unexpected) in`,
+    ];
+    check('XCTest: failures as file:line: error: Class.test : message, project-relative; a thrown error is unexpected; exit 1',
+        failing.code === 1 && expectLines.every((l) => failing.stdout.includes(l)),
+        `code=${failing.code}\n${failing.stdout.split('\n').filter((l) => / error: |Executed/.test(l)).slice(0, 6).map((l) => `      ${l}`).join('\n')}`);
+
+    // c. Discovery: comments, strings, inheritance, extensions, nesting, and
+    //    what must not be taken for a test.
+    const discovery = await run({
+        'main.swift': 'print("not run by a test run")\n',
+        'Discovery.swift': `import XCTest
+
+/* class Fake: XCTestCase { func testInComment() {} } /* nested */ func testAlsoComment() {} */
+// final class Commented: XCTestCase { func testInLineComment() {} }
+let decoy = "class Decoy: XCTestCase { func testInString() {} }"
+let raw = #"func testInRaw() { "\\(x)" } \\#(decoy.count) "#
+let multi = """
+    final class InMultiline: XCTestCase { func testInMultiline() {} }
+    \\(decoy.filter { $0 == "}" }.count)
+    """
+
+class BaseTests: XCTestCase {
+    func testFromBase() {}
+    func helper() { XCTFail("helper is not a test") }
+    func testWithArgument(_ x: Int) { XCTFail("has an argument") }
+    static func testStatic() {}
+    private func testPrivate() { XCTFail("private") }
+    func testReturning() -> Int { XCTFail("returns a value"); return 1 }
+}
+
+final class DerivedTests: BaseTests {
+    func testOwn() { XCTAssertTrue(true) }
+    func \`testBackticked\`() {}
+}
+
+extension DerivedTests {
+    func testInExtension() async throws {}
+}
+
+enum Outer {
+    final class NestedTests: XCTestCase {
+        func testNested() { XCTAssertEqual(name, "NestedTests.testNested") }
+    }
+}
+
+final class GenericTests<T>: XCTestCase { func testGeneric() {} }
+`,
+    }, { type: 'test' });
+    const ran = [...discovery.stdout.matchAll(/^Test Case '([^']+)' (passed|failed)/gm)].map((m) => `${m[1]} ${m[2]}`);
+    const wantRan = ['BaseTests.testFromBase passed', 'DerivedTests.testOwn passed', 'DerivedTests.testBackticked passed',
+        'DerivedTests.testInExtension passed', 'DerivedTests.testFromBase passed', 'NestedTests.testNested passed'];
+    check('XCTest discovery: own, inherited, extension, backticked, nested and async tests; nothing from comments, strings, helpers, arguments, static, private, generic',
+        discovery.code === 0 && JSON.stringify(ran) === JSON.stringify(wantRan) && !discovery.stdout.includes('not run'),
+        `code=${discovery.code} ${JSON.stringify(ran)}\n${discovery.stderr}`);
+
+    // d. A student file with its own allTests, as the real XCTest on Linux
+    //    wants it: the list is used as written, not rediscovered.
+    const LISTED = `import XCTest
+
+final class ListedTests: XCTestCase {
+    static var allTests = [
+        ("testListed", testListed),
+    ]
+    func testListed() { XCTAssertEqual(1 + 1, 2) }
+    func testNotListed() { XCTFail("not in allTests") }
+}
+`;
+    const listed = await run({ 'Tests/ListedTests.swift': LISTED, 'main.swift': 'print("program")\n' }, { type: 'test' });
+    check('XCTest: a class with its own allTests runs exactly that list',
+        listed.code === 0 && listed.stdout.includes("Test Case 'ListedTests.testListed' passed") && !listed.stdout.includes('testNotListed') && /Executed 1 test, with 0 failures/.test(listed.stdout),
+        `code=${listed.code}\n${listed.stderr}`);
+    const ownMain = await run({
+        'Tests/ListedTests.swift': LISTED,
+        'main.swift': 'import XCTest\n\nprint("hand-written main")\nXCTMain([testCase(ListedTests.allTests)])\n',
+    }, { type: 'test' });
+    check('XCTest: a main.swift that calls XCTMain itself (LinuxMain style) is used instead of a generated one',
+        ownMain.code === 0 && ownMain.stdout.startsWith('hand-written main\n') && ownMain.stdout.includes("Test Case 'ListedTests.testListed' passed"),
+        `code=${ownMain.code} ${JSON.stringify(ownMain.stdout.slice(0, 60))}\n${ownMain.stderr}`);
+
+    const ownMainRun = await run({
+        'Tests/ListedTests.swift': LISTED,
+        'main.swift': 'import XCTest\n\nprint("hand-written main")\nXCTMain([testCase(ListedTests.allTests)])\n',
+    });
+    check("XCTest: 'run' of that project runs its main.swift with the tests it names",
+        ownMainRun.code === 0 && ownMainRun.stdout.startsWith('hand-written main\n') && ownMainRun.stdout.includes("Test Case 'ListedTests.testListed' passed"),
+        `code=${ownMainRun.code}\n${ownMainRun.stderr}`);
+
+    // e. A test that does not compile: diagnostics, non-zero exit, nothing run.
+    const brokenTest = await run({ 'Tests/BrokenTests.swift': 'import XCTest\nfinal class BrokenTests: XCTestCase {\n    func testX() { XCTAssertEqual(1, "one") }\n}\n' }, { type: 'test' });
+    check('XCTest: a type error in a test is reported like any other, and nothing runs',
+        brokenTest.code !== 0 && /^Tests\/BrokenTests\.swift:3:\d+: error: /m.test(brokenTest.stderr) && brokenTest.stdout === '',
+        `code=${brokenTest.code}\n${brokenTest.stderr.split('\n')[0]}`);
 } finally {
     await browser.close();
     server.close();

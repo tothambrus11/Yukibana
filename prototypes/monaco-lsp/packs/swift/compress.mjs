@@ -1,4 +1,4 @@
-// Writes .gz and .br siblings next to every .js, .wasm and .tar in a
+// Writes .gz and .br siblings next to every .js, .wasm, .tar and .json in a
 // directory, and prints the sizes: the app's host serves them when present.
 // A sibling newer than its source is kept (brotli -q11 of the 113 MB
 // swift-frontend.wasm takes minutes). Brotli uses a 16 MB window (lgwin 24,
@@ -16,7 +16,7 @@ const fresh = (source, sibling) => {
     }
 };
 for (const name of readdirSync(dir).sort()) {
-    if (!/\.(js|wasm|tar)$/.test(name)) continue;
+    if (!/\.(js|wasm|tar|json)$/.test(name)) continue;
     const path = join(dir, name);
     const raw = readFileSync(path);
     if (!fresh(path, path + '.gz')) writeFileSync(path + '.gz', gzipSync(raw, { level: 9 }));

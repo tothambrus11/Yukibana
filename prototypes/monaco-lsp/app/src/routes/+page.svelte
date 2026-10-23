@@ -76,6 +76,9 @@
 		<button class="button run" onclick={() => workspace.run()} disabled={!language.runs} title={language.runs ? 'Run the project (Ctrl+Enter)' : language.cannotRun}>
 			<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7-4.5z" /></svg>Run
 		</button>
+		{#if language.tests}
+			<button class="button" onclick={() => workspace.run('test')} title="Run the project's tests (Ctrl+Shift+Enter)">Test</button>
+		{/if}
 	{/if}
 
 	<button class="button" onclick={reset} title="Replace this language's project with the sample">Reset project</button>

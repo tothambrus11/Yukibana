@@ -105,6 +105,12 @@ App to runner, once:
   stdin: SharedArrayBuffer | null }
 ```
 
+A runner that can also run the project's tests takes the same message with
+`type: 'test'` (the app offers Test for languages with `tests: true` in
+`app/src/lib/languages.ts`). It builds the tests instead of the program and
+runs them, with the same messages back: the report on stdout, exit 0 only
+when every test passed.
+
 Runner to app, any number of times:
 
 ```ts

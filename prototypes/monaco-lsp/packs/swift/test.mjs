@@ -253,6 +253,19 @@ try {
     lsp.notify('textDocument/didChange', { textDocument: { uri: uri('Typed.swift'), version: 21 }, contentChanges: [{ text: 'func f(_ c: Bool) -> Int {\n    if c {\n    } else {\n    }\n}\n' }] });
     const missing = await diagnostics('Typed.swift', (d) => errors(d).some((x) => /missing return/.test(x.message)), since, 60000);
     check('a missing return (a SIL diagnostic) is reported while editing', errors(missing ?? []).some((x) => /missing return in global function expected to return 'Int'/.test(x.message)), show(missing));
+    // A test file: `import XCTest` finds the browser's XCTest (swift-xctest.tar,
+    // fetched on the first check that needs it), and `@testable import Shapes`
+    // names the module as the runner does, without a warning. The one
+    // diagnostic is the deliberate type error on line 6.
+    since = (await lsp.log()).length;
+    t = Date.now();
+    const XCTEST_FILE = 'import XCTest\n@testable import Shapes\n\nfinal class ShapesTests: XCTestCase {\n    func testNorm() { XCTAssertEqual(Point(x: 3, y: 4).norm(), 5, accuracy: 1e-9) }\n    func testWrong() { XCTAssertEqual(1, "one") }\n}\n';
+    lsp.notify('textDocument/didOpen', { textDocument: { uri: uri('Tests/ShapesTests.swift'), languageId: 'swift', version: 1, text: XCTEST_FILE } });
+    const xctDiags = await diagnostics('Tests/ShapesTests.swift', (d) => d.some((x) => x.source === 'swiftc'), since, 60000);
+    check('a test file: XCTest is found, `@testable import Shapes` is quiet, the type error in it is reported',
+        xctDiags?.length === 1 && xctDiags[0].range.start.line === 5 && xctDiags[0].severity === 1,
+        `${show(xctDiags)} after ${Date.now() - t} ms, ${(await lsp.log()).filter((m) => m.method === 'yukibana/loading' && m.params.label === 'swift-xctest.tar').length} swift-xctest.tar progress notifications`);
+    lsp.notify('textDocument/didClose', { textDocument: { uri: uri('Tests/ShapesTests.swift') } });
     lsp.notify('textDocument/didClose', { textDocument: { uri: uri('Typed.swift') } });
 
     since = (await lsp.log()).length;
@@ -322,6 +335,138 @@ try {
 
     const tokens = await lsp.request('textDocument/semanticTokens/full', { textDocument: { uri: uri('Circle.swift') } });
     check('semantic tokens for Circle.swift', (tokens.result?.data?.length ?? 0) > 50 && tokens.result.data.length % 5 === 0, `${(tokens.result?.data?.length ?? 0) / 5} tokens`);
+
+    // ---- Answers from the compiler (swift-frontend -dump-ast) and the stdlib index.
+    // The probe the user ran: completion after a dot on library and project
+    // types, hover types, definition, signature help, inlay hints.
+    const PROBE = `func makePoints() -> [Point] { [Point(x: 1, y: 2), Point(x: 3, y: 4)] }
+
+let xs = [1, 2, 3]
+let ps = makePoints()
+let first = ps[0]
+let name = "hello"
+var dict: [String: Int] = [:]
+let total = xs.reduce(0, +)
+for p in ps { print(p.norm()) }
+`;
+    let probeVersion = 100;
+    const setMain = (text) => lsp.notify('textDocument/didChange', { textDocument: { uri: uri('main.swift'), version: ++probeVersion }, contentChanges: [{ text }] });
+    const endOf = (text) => {
+        const lines = text.split('\n');
+        return { line: lines.length - 1, character: lines.at(-1).length };
+    };
+    const latencies = [];
+    /** Completion at the end of PROBE + `typed`: [labels, items, ms]. */
+    async function completeAfter(typed) {
+        const text = PROBE + typed;
+        setMain(text);
+        const t0 = Date.now();
+        const r = await lsp.request('textDocument/completion', { textDocument: { uri: uri('main.swift') }, position: endOf(text), context: { triggerKind: 2, triggerCharacter: '.' } });
+        const ms = Date.now() - t0;
+        latencies.push(ms);
+        const items = r.result?.items ?? [];
+        return [items.map((i) => i.label), items, ms];
+    }
+    const has = (labels, want, not = []) => want.every((w) => labels.includes(w)) && !not.some((n) => labels.includes(n));
+    const POINT = ['x', 'y', 'norm', 'moved'];
+    let [got, items, ms] = await completeAfter('xs.');
+    check('compiler: completion after `xs.` ([Int]) lists Array\'s members from the stdlib index',
+        has(got, ['count', 'map', 'filter', 'reduce', 'append', 'sorted', 'contains', 'isEmpty', 'first'], POINT),
+        `${got.length} items in ${ms} ms: ${got.slice(0, 12).join(', ')}...`);
+    const reduceItem = items.find((i) => i.label === 'reduce' && /\(_: Result/.test(i.labelDetails?.detail ?? ''));
+    check('compiler: `reduce` is shown for [Int], with Int filled in and a snippet',
+        /\(Result, Int\) throws -> Result/.test(reduceItem?.detail ?? '') && reduceItem?.insertTextFormat === 2 && /^reduce\(\$\{1:Result\}/.test(reduceItem?.insertText ?? ''),
+        JSON.stringify(reduceItem && [reduceItem.detail, reduceItem.insertText]));
+    [got, items, ms] = await completeAfter('ps.');
+    check('compiler: completion after `ps.` ([Point]) offers sorted(by:) but not sorted(), since Point is not Comparable',
+        has(got, ['count', 'map', 'first', 'sorted'], POINT) && !items.some((i) => i.label === 'sorted' && i.labelDetails?.detail === '()'),
+        `${got.length} items in ${ms} ms`);
+    [got, , ms] = await completeAfter('name.');
+    check('compiler: completion after `name.` (String)', has(got, ['count', 'uppercased', 'hasPrefix', 'split', 'contains'], POINT), `${got.length} items in ${ms} ms`);
+    [got, , ms] = await completeAfter('dict.');
+    check('compiler: completion after `dict.` ([String : Int])', has(got, ['keys', 'values', 'count', 'mapValues', 'updateValue', 'removeValue'], [...POINT, 'append']), `${got.length} items in ${ms} ms`);
+    [got, , ms] = await completeAfter('total.');
+    check('compiler: completion after `total.` (Int, from reduce) lists Int\'s members, not Point\'s',
+        has(got, ['isMultiple', 'description', 'signum'], [...POINT, 'count']), `${got.length} items in ${ms} ms`);
+    [got, , ms] = await completeAfter('makePoints().');
+    check('compiler: completion after `makePoints().` ([Point])', has(got, ['count', 'map', 'first'], POINT), `${got.length} items in ${ms} ms`);
+    [got, , ms] = await completeAfter('ps[0].');
+    check('compiler: completion after `ps[0].` (Point)', has(got, POINT, ['count', 'map']), `${JSON.stringify(got)} in ${ms} ms`);
+    [got, , ms] = await completeAfter('let doubled = xs.map { $0.');
+    check('compiler: completion after `$0.` in a map over [Int] (unclosed closure) lists Int\'s members',
+        has(got, ['isMultiple', 'signum'], POINT), `${got.length} items in ${ms} ms`);
+    [got, items, ms] = await completeAfter('xs.first.');
+    const unwrapped = items.find((i) => i.label === 'isMultiple');
+    check('compiler: after `xs.first.` (Int?) Optional\'s members, and Int\'s as `?.member` edits',
+        has(got, ['map', 'flatMap', 'isMultiple']) && /^\?\.isMultiple/.test(unwrapped?.textEdit?.newText ?? ''), `${got.length} items in ${ms} ms, ${JSON.stringify(unwrapped?.textEdit)}`);
+    const resolved = await lsp.request('completionItem/resolve', reduceItem ?? {});
+    check('compiler: completionItem/resolve adds the stdlib doc comment', /Returns the result of combining/.test(resolved.result?.documentation?.value ?? ''),
+        (resolved.result?.documentation?.value ?? '').slice(0, 60));
+
+    // Hover, definition, signature help and inlay hints on the checked text.
+    since = (await lsp.log()).length;
+    setMain(PROBE);
+    for (let i = 0; i < 300 && !(await lsp.log()).slice(since).some((m) => m.method === 'window/logMessage' && /swift-frontend check:.*-dump-ast/.test(m.params.message)); i++)
+        await page.waitForTimeout(50);
+    const hoverAt = async (needle, delta = 0) => {
+        const r = await lsp.request('textDocument/hover', { textDocument: { uri: uri('main.swift') }, position: position(PROBE, needle, delta) });
+        return r.result?.contents?.value ?? '';
+    };
+    const hovers = {
+        total: await hoverAt('total ='), ps: await hoverAt('ps ='), first: await hoverAt('first ='), dict: await hoverAt('dict:'), p: await hoverAt('p.norm'),
+    };
+    check('compiler: hover shows the inferred types', /let total: Int/.test(hovers.total) && /let ps: \[Point\]/.test(hovers.ps) &&
+        /let first: Point/.test(hovers.first) && /var dict: \[String : Int\]/.test(hovers.dict) && /let p: Point/.test(hovers.p), JSON.stringify(Object.values(hovers)));
+    const hoverReduce = await hoverAt('reduce', 1);
+    check('compiler: hover on reduce shows the stdlib declaration, its substitution and its doc',
+        /func reduce<Result>\(_ initialResult: Result, _ nextPartialResult: \(Result, Int\) throws -> Result\)/.test(hoverReduce) && /`Result` = `Int`/.test(hoverReduce) &&
+            /Returns the result of combining/.test(hoverReduce), hoverReduce.slice(0, 160));
+    const hoverPrint = await hoverAt('print(', 1);
+    check('compiler: hover on print shows its declaration and doc', /func print\(_ items: Any\.\.\./.test(hoverPrint) && /Writes the textual representation/.test(hoverPrint), hoverPrint.slice(0, 100));
+    const sqrt = await lsp.request('textDocument/hover', { textDocument: { uri: uri('Shapes.swift') }, position: position(SHAPES, 'squareRoot', 1) });
+    check('compiler: hover on squareRoot (in Shapes.swift) shows FloatingPoint\'s doc', /func squareRoot\(\) -> Double/.test(sqrt.result?.contents?.value ?? '') && /square root/.test(sqrt.result?.contents?.value ?? ''),
+        (sqrt.result?.contents?.value ?? '').slice(0, 100));
+    const hoverNorm = await hoverAt('norm()', 1);
+    check('compiler: hover on p.norm() (declared in another file) shows its declaration and doc', /func norm\(\) -> Double/.test(hoverNorm) && /Distance from the origin/.test(hoverNorm), hoverNorm.slice(0, 100));
+    const defAt = async (needle, delta) => where(await lsp.request('textDocument/definition', { textDocument: { uri: uri('main.swift') }, position: position(PROBE, needle, delta) }));
+    const defs2 = { makePoints: await defAt('makePoints()\nlet first', 1), norm: await defAt('norm()', 1), ps: await defAt('ps[0]', 0), reduce: await defAt('reduce', 1) };
+    check('compiler: definition of makePoints, p.norm and ps lands on their declarations; reduce (stdlib) has no location, not a wrong one',
+        defs2.makePoints.join() === `${uri('main.swift')}:1:6` && defs2.norm.join() === `${uri('Shapes.swift')}:7:10` && defs2.ps.join() === `${uri('main.swift')}:4:5` && defs2.reduce.length === 0,
+        JSON.stringify(defs2));
+    const refsXs = where(await lsp.request('textDocument/references', { textDocument: { uri: uri('main.swift') }, position: position(PROBE, 'xs =', 0), context: { includeDeclaration: true } }));
+    check('compiler: references to xs are its declaration and its use in reduce', refsXs.join() === `${uri('main.swift')}:3:5,${uri('main.swift')}:8:13`, JSON.stringify(refsXs));
+    const PRINTING = PROBE + 'print(';
+    setMain(PRINTING);
+    const sigPrint = await lsp.request('textDocument/signatureHelp', { textDocument: { uri: uri('main.swift') }, position: endOf(PRINTING) });
+    check('compiler: signature help for print( comes from the stdlib index', /print\(_ items: Any\.\.\., separator: String = " ", terminator: String = "\\n"\)/.test(sigPrint.result?.signatures?.[0]?.label ?? ''),
+        JSON.stringify(sigPrint.result?.signatures?.map((s) => s.label)));
+    setMain(PROBE);
+    const hints = await lsp.request('textDocument/inlayHint', { textDocument: { uri: uri('main.swift') }, range: { start: { line: 0, character: 0 }, end: endOf(PROBE) } });
+    const hintText = (hints.result ?? []).map((h) => `${h.position.line + 1}:${h.label}`);
+    check('compiler: inlay hints give the inferred types of unannotated declarations', ['3:: [Int]', '4:: [Point]', '8:: Int'].every((h) => hintText.includes(h)) && !hintText.some((h) => h.startsWith('7:')),
+        JSON.stringify(hintText));
+    // Completion from the current tree (no probe): the text before the dot is unchanged since the last check.
+    since = (await lsp.log()).length;
+    const CACHED = PROBE + 'let n = name.count\n';
+    setMain(CACHED);
+    for (let i = 0; i < 300 && !(await lsp.log()).slice(since).some((m) => m.method === 'window/logMessage' && /swift-frontend check:.*-dump-ast/.test(m.params.message)); i++)
+        await page.waitForTimeout(50);
+    t = Date.now();
+    const cached = await lsp.request('textDocument/completion', { textDocument: { uri: uri('main.swift') }, position: position(CACHED, 'name.count', 5) });
+    const cachedMs = Date.now() - t;
+    check('compiler: completion after a dot in checked text answers from the tree, without running the compiler',
+        has((cached.result?.items ?? []).map((i) => i.label), ['count', 'uppercased']) && (await lsp.log()).slice(since).some((m) => /completion: \d+ members of String \(tree\)/.test(m.params?.message ?? '')),
+        `${cachedMs} ms`);
+    // Diagnostics latency, warm: a type error typed into the probe file.
+    since = (await lsp.log()).length;
+    t = Date.now();
+    setMain(PROBE + 'let bad: Int = name\n');
+    const badDiags = await diagnostics('main.swift', (d) => d.some((x) => /cannot convert value of type 'String' to specified type 'Int'/.test(x.message)), since, 60000);
+    const errorMs = Date.now() - t;
+    check('compiler: a type error is reported quickly when warm', errors(badDiags).length === 1, `${errorMs} ms`);
+    const sorted = [...latencies].sort((a, b) => a - b);
+    console.log(`(latency: completion with a probe ${sorted[0]}-${sorted.at(-1)} ms, median ${sorted[sorted.length >> 1]} ms; from the tree ${cachedMs} ms; type error ${errorMs} ms after the edit)`);
+    setMain('let a=Point(x:1,y:2)\n');
 
     // An unsaved, ranged edit to Shapes.swift is seen from main.swift.
     const at = position(SHAPES, '    var y: Double', 17);

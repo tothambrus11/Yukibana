@@ -29,6 +29,12 @@ export interface Language {
 	 */
 	runs: boolean;
 	cannotRun?: string;
+	/**
+	 * Whether the runner also takes `type: 'test'` (packs/CONTRACT.md,
+	 * "Running a program"): it builds the project's tests instead of its
+	 * program and runs them, with the same messages as a run.
+	 */
+	tests?: boolean;
 }
 
 export const LANGUAGES: readonly Language[] = [
@@ -195,6 +201,7 @@ double distance(const Point &a, const Point &b) {
 		entry: 'main.swift',
 		extension: '.swift',
 		runs: true,
+		tests: true,
 		sample: {
 			'main.swift': `let a = Point(x: 0, y: 0)
 let b = Point(x: 3, y: 4)
@@ -217,6 +224,20 @@ struct Point: CustomStringConvertible {
 /// Euclidean distance between two points.
 func distance(_ a: Point, _ b: Point) -> Double {
     Point(x: a.x - b.x, y: a.y - b.y).norm()
+}
+`,
+			'Tests/GeometryTests.swift': `import XCTest
+
+final class GeometryTests: XCTestCase {
+    func testNorm() {
+        XCTAssertEqual(Point(x: 3, y: 4).norm(), 5)
+    }
+
+    func testDistanceIsSymmetric() {
+        let a = Point(x: 1, y: 2)
+        let b = Point(x: -2, y: 6)
+        XCTAssertEqual(distance(a, b), distance(b, a), accuracy: 1e-12)
+    }
 }
 `,
 		},

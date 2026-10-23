@@ -6,8 +6,12 @@
 #   swift-ls.wasm  server/ (Swift, on swift-syntax 604.0.0) compiled to
 #                  wasm32-unknown-wasip1 with the swift.org 6.4.1 Wasm SDK,
 #                  stripped and wasm-opt -Oz
-#   typecheck.js   nested worker of server.js: semantic diagnostics from
-#                  swift-frontend.wasm -typecheck
+#   typecheck.js   nested worker of server.js: diagnostics and the typed
+#                  syntax tree from swift-frontend.wasm -dump-ast / -emit-sil
+#   swift-stdlib-index.json
+#                  the 6.3.3 standard library's members, declarations and doc
+#                  comments for completion and hover (tools/stdlib-index.mjs
+#                  over swift-symbolgraph-extract's symbol graph)
 #   runner.js      the runner (../CONTRACT.md "Running a program")
 #   swift-frontend.wasm, wasm-ld.wasm
 #                  the Swift 6.3.3 compiler frontend and LLVM's wasm-ld built
@@ -17,7 +21,12 @@
 #   swift-sysroot.tar
 #                  that release's swift-sysroot-core.tar trimmed by
 #                  tools/trim-sysroot.mjs to a Foundation-free core
-#   plus .gz and .br siblings of every .js, .wasm and .tar
+#   swift-xctest.tar
+#                  the browser's XCTest (xctest/XCTest/*.swift): its
+#                  .swiftmodule and libXCTest.a, built by
+#                  tools/build-xctest.mjs with the swift-frontend.wasm above
+#                  (a binary module loads only in the compiler that wrote it)
+#   plus .gz and .br siblings of every .js, .wasm, .tar and .json
 #
 # The language server is swift-syntax based, NOT SourceKit-LSP: see
 # README.md for why SourceKit-LSP cannot run in a browser.
@@ -128,11 +137,40 @@ if [ ! -f "$CACHE/stage/swift-sysroot.tar" ] || [ "$HERE/tools/trim-sysroot.mjs"
 fi
 cp -p "$CACHE/stage/swift-sysroot.tar" "$OUT/swift-sysroot.tar"
 
+step "standard library index (swift-symbolgraph-extract over the 6.3.3 stdlib's interfaces)"
+# The 6.3.3 stdlib, not the 6.4.1 SDK's: completion should offer exactly
+# what the in-browser compiler accepts. The native 6.4.1 tool refuses the
+# 6.3.3 binary modules ("compiled with Swift 6.3.3"), so they are deleted
+# from a scratch copy and it builds each module from its .swiftinterface
+# instead (about a minute), which keeps the doc comments too.
+SG="$CACHE/stdlib-index"
+if [ ! -f "$SG/sg/Swift.symbols.json" ] || [ "$TCDL/swift-sysroot-core.tar" -nt "$SG/sg/Swift.symbols.json" ]; then
+  rm -rf "$SG" && mkdir -p "$SG/sysroot" "$SG/sg" "$SG/mc"
+  tar xf "$TCDL/swift-sysroot-core.tar" -C "$SG/sysroot"
+  find "$SG/sysroot/swift/lib/swift_static/wasi" -name 'wasm32-unknown-wasip1.swiftmodule' -delete
+  $NICE swift-symbolgraph-extract -module-name Swift -target wasm32-unknown-wasip1 -sdk "$SG/sysroot/wasi-sysroot" \
+    -resource-dir "$SG/sysroot/swift/lib/swift_static" -I "$SG/sysroot/swift/lib/swift_static/wasi" \
+    -module-cache-path "$SG/mc" -output-dir "$SG/sg" -minimum-access-level public
+  rm -rf "$SG/sysroot" "$SG/mc"
+fi
+if [ ! -f "$CACHE/stage/swift-stdlib-index.json" ] || [ -n "$(find "$HERE/tools/stdlib-index.mjs" "$SG/sg" -newer "$CACHE/stage/swift-stdlib-index.json" -print -quit)" ]; then
+  node "$HERE/tools/stdlib-index.mjs" "$SG/sg" "$CACHE/stage/swift-stdlib-index.json"
+fi
+cp -p "$CACHE/stage/swift-stdlib-index.json" "$OUT/swift-stdlib-index.json"
+
+step "XCTest for the browser (swift-frontend.wasm under node)"
+XCT="$CACHE/stage/swift-xctest.tar"
+if [ ! -f "$XCT" ] || [ -n "$(find "$HERE/xctest/XCTest" "$HERE/tools/build-xctest.mjs" "$HERE/src/toolchain.js" "$CACHE/stage/swift-frontend.wasm" \
+     "$CACHE/stage/swift-sysroot.tar" -newer "$XCT" -print -quit)" ]; then
+  $NICE node "$HERE/tools/build-xctest.mjs" "$CACHE/stage" "$CACHE/stage/swift-sysroot.tar" "$XCT"
+fi
+cp -p "$XCT" "$OUT/swift-xctest.tar"
+
 step "server.js, typecheck.js, runner.js"
 "$HERE/node_modules/.bin/esbuild" "$HERE/src/server.js" --bundle --minify --format=esm --target=es2022 \
   --legal-comments=none --outfile="$OUT/server.js" --log-level=warning
 size() { stat -c %s "$OUT/$1"; }
-SIZES="{\"swift-frontend.wasm\":$(size swift-frontend.wasm),\"wasm-ld.wasm\":$(size wasm-ld.wasm),\"swift-sysroot.tar\":$(size swift-sysroot.tar)}"
+SIZES="{\"swift-frontend.wasm\":$(size swift-frontend.wasm),\"wasm-ld.wasm\":$(size wasm-ld.wasm),\"swift-sysroot.tar\":$(size swift-sysroot.tar),\"swift-xctest.tar\":$(size swift-xctest.tar)}"
 for entry in typecheck runner; do
   "$HERE/node_modules/.bin/esbuild" "$HERE/src/$entry.js" --bundle --minify --format=esm --target=es2022 \
     --define:__SWIFT_TOOLCHAIN_SIZES__="$SIZES" --legal-comments=none --outfile="$OUT/$entry.js" --log-level=warning

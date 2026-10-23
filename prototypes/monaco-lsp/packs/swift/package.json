@@ -6,7 +6,8 @@
   "scripts": {
     "build": "./build.sh",
     "test": "node test.mjs",
-    "test:run": "node test-run.mjs"
+    "test:run": "node test-run.mjs",
+    "test:xctest": "node tools/xctest-subset.mjs"
   },
   "devDependencies": {
     "@bjorn3/browser_wasi_shim": "0.4.2",

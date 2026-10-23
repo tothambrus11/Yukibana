@@ -28,8 +28,12 @@ const WASI_SYSROOT = `${SYSROOT}/wasi-sysroot`;
 const RESOURCES = `${SYSROOT}/swift/lib/swift_static`;
 export const MODULE_CACHE = '/tmp/module-cache';
 
-/** What the driver would pass to `swift-frontend -frontend` for wasm32-unknown-wasip1. */
-function commonFrontendArgs() {
+/**
+ * What the driver would pass to `swift-frontend -frontend` for
+ * wasm32-unknown-wasip1. `moduleName` is `main` unless a test file imports
+ * the project under another name (see xctest.js, projectModuleName).
+ */
+export function commonFrontendArgs(moduleName = 'main') {
     return [
         '-target', 'wasm32-unknown-wasip1',
         // wasm has no Objective-C runtime; the driver always passes this for wasi.
@@ -42,7 +46,7 @@ function commonFrontendArgs() {
         // Clang builds the SwiftShims module implicitly and caches it here; the
         // cache lives as long as the worker, so only the first compile pays.
         '-module-cache-path', MODULE_CACHE,
-        '-module-name', 'main',
+        '-module-name', moduleName,
     ];
 }
 
@@ -53,8 +57,8 @@ function commonFrontendArgs() {
  * because each per-file invocation re-loads the 16 MB stdlib module.
  * `entry` (main.swift) is the file whose top-level code becomes main.
  */
-export function compileArgs(sources, output) {
-    return ['swift-frontend', '-frontend', '-c', ...sources, ...commonFrontendArgs(), '-empty-abi-descriptor', '-o', output];
+export function compileArgs(sources, output, moduleName = 'main') {
+    return ['swift-frontend', '-frontend', '-c', ...sources, ...commonFrontendArgs(moduleName), '-empty-abi-descriptor', '-o', output];
 }
 
 /** The per-file variant, kept for the measurement in test-run.mjs/bench. */
@@ -67,20 +71,42 @@ export function compileArgsPrimary(sources, primary, output) {
 }
 
 /** `swift-frontend -frontend -typecheck`: diagnostics only, no SIL, no code. */
-export function typecheckArgs(sources) {
-    return ['swift-frontend', '-frontend', '-typecheck', ...sources, ...commonFrontendArgs()];
+export function typecheckArgs(sources, moduleName = 'main') {
+    return ['swift-frontend', '-frontend', '-typecheck', ...sources, ...commonFrontendArgs(moduleName)];
 }
 
 /**
- * The editor's live check: `-emit-sil`, which type-checks and then runs the
- * mandatory SIL passes, because several everyday errors are only found
+ * The editor's second check: `-emit-sil`, which type-checks and then runs
+ * the mandatory SIL passes, because several everyday errors are only found
  * there, not by `-typecheck`: a missing return, a variable used before it is
- * initialised, a `let` assigned twice, unreachable code. Measured on the
- * sample: about 200 ms warm against 110 ms for `-typecheck`. The SIL itself
- * goes to `output` and is not read.
+ * initialised, a `let` assigned twice, unreachable code, overlapping inout
+ * accesses. The SIL itself goes to `output` and is not read.
+ *
+ * Without mandatory inlining. With it, one call to a `@_transparent`
+ * stdlib method such as `x.squareRoot()` makes the pass deserialize
+ * Double's whole FloatingPoint witness table (73 functions, 330 KB of SIL)
+ * and the check took 4-10 s instead of 0.2 s in this wasm build, which is
+ * where a type error that appeared 20 s after an edit came from. What
+ * inlining adds to the diagnostics is constant folding through the inlined
+ * operators: `1 / 0` ("division by zero") is no longer reported while
+ * typing; Run still reports it.
  */
-export function diagnoseArgs(sources, output) {
-    return ['swift-frontend', '-frontend', '-emit-sil', ...sources, ...commonFrontendArgs(), '-o', output];
+export function diagnoseArgs(sources, output, moduleName = 'main') {
+    return ['swift-frontend', '-frontend', '-emit-sil', ...sources, ...commonFrontendArgs(moduleName),
+        '-Xllvm', '-sil-disable-pass=mandatory-inlining', '-o', output];
+}
+
+/**
+ * The editor's first check: `-dump-ast`, type checking plus the typed
+ * syntax tree on stdout, which src/ast.js reads for hover, definition,
+ * references and member completion. It reports the same type-checking
+ * diagnostics as `-typecheck` and costs about the same (the dump is a few
+ * tens of KB per hundred lines). Every file is a `-primary-file`: without
+ * primaries the frontend type-checks the whole module but dumps only the
+ * first file.
+ */
+export function astArgs(sources, moduleName = 'main') {
+    return ['swift-frontend', '-frontend', '-dump-ast', ...sources.flatMap((s) => ['-primary-file', s]), ...commonFrontendArgs(moduleName)];
 }
 
 /**
@@ -352,6 +378,19 @@ export async function loadSysroot(onLoading) {
 export const FRONTEND_WASM = 'swift-frontend.wasm';
 export const LINKER_WASM = 'wasm-ld.wasm';
 export const SYSROOT_TAR = 'swift-sysroot.tar';
+export const XCTEST_TAR = 'swift-xctest.tar';
+
+/**
+ * Adds the browser's XCTest (xctest/, built by tools/build-xctest.mjs) to a
+ * sysroot from loadSysroot: its .swiftmodule and libXCTest.a, where the
+ * frontend and the linker look for the stdlib's. A separate download
+ * (about 230 kB, 60 kB over the wire) so that the 44 MB sysroot stays cached when it
+ * changes, and fetched only by projects that import XCTest.
+ */
+export async function loadXCTest(root, onLoading) {
+    const response = await fetchArtifact(XCTEST_TAR, onLoading);
+    untar(root, new Uint8Array(await response.arrayBuffer()), SYSROOT);
+}
 
 /** Removes `path` (a file or a whole directory) if it exists. */
 export function remove(root, path) {

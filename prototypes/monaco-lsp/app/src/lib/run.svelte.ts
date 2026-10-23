@@ -50,9 +50,10 @@ export class Runner {
 
 	/**
 	 * Starts `entry` of `files` with the runner of `language`, stopping any
-	 * program still running. Output from the previous run is cleared.
+	 * program still running; `mode` 'test' runs the project's tests instead.
+	 * Output from the previous run is cleared.
 	 */
-	start(language: LanguageId, files: Files, entry: string): void {
+	start(language: LanguageId, files: Files, entry: string, mode: 'run' | 'test' = 'run'): void {
 		this.stop(false);
 		this.chunks = [];
 		this.chars = 0;
@@ -76,7 +77,7 @@ export class Runner {
 				() => this.finish(null, `The runner failed: ${e.message || 'unknown error'}`),
 			);
 		};
-		worker.postMessage({ type: 'run', files: { ...files }, entry, stdin: this.stdin });
+		worker.postMessage({ type: mode, files: { ...files }, entry, stdin: this.stdin });
 	}
 
 	/** Stops the running program; `say` notes it in the terminal. */
