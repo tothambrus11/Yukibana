@@ -1,11 +1,15 @@
 /**
  * The one place Monaco is imported. It loads the bare editor API plus only
  * the editor features and syntax grammars this app uses, so none of Monaco's
- * own TypeScript, JSON, CSS or HTML language services reach the bundle:
- * every language feature comes from a language server pack.
+ * own TypeScript, CSS or HTML language services reach the bundle: every
+ * language feature comes from a language server pack. The exception is JSON:
+ * configuration files (`jsconfig.json`, `tsconfig.json`) get Monaco's JSON
+ * service, with their schemas, since no pack's server knows them.
  */
 import * as monaco from 'monaco-editor/editor/editor.api';
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker';
+import JsonWorker from 'monaco-editor/languages/features/json/json.worker?worker';
+import { jsonDefaults } from 'monaco-editor/languages/features/json/register';
 
 /** The editors' font stack; the first entry is the bundled web font. */
 export const EDITOR_FONT = "'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
@@ -63,9 +67,24 @@ import 'monaco-editor/languages/definitions/cpp/register';
 import 'monaco-editor/languages/definitions/swift/register';
 import 'monaco-editor/languages/definitions/scala/register';
 
-// Monaco runs diffing and word-based helpers in a worker of its own; it is
-// the only worker the editor needs, since no Monaco language service is loaded.
-self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
+// Monaco runs diffing and word-based helpers in a worker of its own, and the
+// JSON service in another (loaded only when a JSON file is opened).
+self.MonacoEnvironment = { getWorker: (_id, label) => (label === 'json' ? new JsonWorker() : new EditorWorker()) };
+
+// The schemas ship with the app (static/schemas/, from SchemaStore) and are
+// fetched from it on demand: never from a third-party host. The files are
+// JSON with comments and trailing commas, as TypeScript reads them.
+jsonDefaults.setDiagnosticsOptions({
+	validate: true,
+	allowComments: true,
+	comments: 'ignore',
+	trailingCommas: 'ignore',
+	enableSchemaRequest: true,
+	schemas: ['jsconfig', 'tsconfig'].map((name) => ({
+		uri: new URL(`schemas/${name}.json`, document.baseURI).href,
+		fileMatch: [`${name}.json`, `*/${name}.json`, `${name}.*.json`],
+	})),
+});
 
 // Monaco measures character widths once, with whatever font is available at
 // that moment. The editor font is a web font that arrives later, so without

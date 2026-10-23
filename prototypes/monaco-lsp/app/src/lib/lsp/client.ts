@@ -523,7 +523,14 @@ export class LanguageClient {
 					},
 					...(prepare && {
 						resolveRenameLocation: async (model, position, token) => {
-							const r = await this.ask<lsp.PrepareRenameResult>(model, 'textDocument/prepareRename', at(model, position), token);
+							// A server refuses a rename with an error whose message says why; show it.
+							let r: lsp.PrepareRenameResult | null;
+							try {
+								r = await this.ask<lsp.PrepareRenameResult>(model, 'textDocument/prepareRename', at(model, position), token);
+							} catch (e) {
+								if (e instanceof ResponseError && e.code !== REQUEST_CANCELLED) return { range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column), text: '', rejectReason: e.message };
+								throw e;
+							}
 							if (!r) return { range: new monaco.Range(1, 1, 1, 1), text: '', rejectReason: 'This element cannot be renamed.' };
 							if ('defaultBehavior' in r) {
 								const w = model.getWordAtPosition(position);
