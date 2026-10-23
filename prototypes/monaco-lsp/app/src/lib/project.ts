@@ -3,7 +3,7 @@
  * under its language, so switching language switches project and switching
  * back finds the files as they were left.
  */
-import { languageOf, type Files, type LanguageId } from './languages';
+import { isLanguageId, languageOf, type Files, type LanguageId } from './languages';
 
 /** What is saved for one language. Paths are relative, `/`-separated, without `.` or `..`. */
 export interface Project {
@@ -19,6 +19,13 @@ export interface Project {
 const VERSION = 1;
 const key = (language: LanguageId) => `yukibana.code.v${VERSION}.project.${language}`;
 const LANGUAGE_KEY = `yukibana.code.v${VERSION}.language`;
+
+/** The language whose project a storage key holds, or `null` for any other key. */
+export function projectLanguageOf(storageKey: string): LanguageId | null {
+	const prefix = key('python').replace(/python$/, '');
+	const rest = storageKey.startsWith(prefix) ? storageKey.slice(prefix.length) : null;
+	return rest !== null && isLanguageId(rest) ? rest : null;
+}
 
 /** A fresh copy of the language's sample project. */
 export function sampleProject(language: LanguageId): Project {

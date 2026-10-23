@@ -7,39 +7,51 @@
 import * as monaco from 'monaco-editor/editor/editor.api';
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker';
 
-import 'monaco-editor/features/codicon/register';
-import 'monaco-editor/features/bracketMatching/register';
-import 'monaco-editor/features/caretOperations/register';
-import 'monaco-editor/features/clipboard/register';
-import 'monaco-editor/features/codeAction/register';
-import 'monaco-editor/features/comment/register';
-import 'monaco-editor/features/contextmenu/register';
-import 'monaco-editor/features/cursorUndo/register';
-import 'monaco-editor/features/documentSymbols/register';
-import 'monaco-editor/features/find/register';
-import 'monaco-editor/features/folding/register';
-import 'monaco-editor/features/format/register';
-import 'monaco-editor/features/gotoError/register';
-import 'monaco-editor/features/gotoLine/register';
-import 'monaco-editor/features/gotoSymbol/register';
+// The editor features used, as editor.main.js imports them, minus the ones
+// this app has no use for (diff editor, colour picker, sticky scroll, ...).
+// The `features/*/register` modules are not used: some import only part of a
+// feature (suggest/register leaves out the suggest widget).
+import 'monaco-editor/features/codicon/register'; // codicon.css
+import 'monaco-editor/editor/browser/coreCommands';
+import 'monaco-editor/editor/browser/widget/codeEditor/codeEditorWidget';
+import 'monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching';
+import 'monaco-editor/editor/contrib/caretOperations/browser/caretOperations';
+import 'monaco-editor/editor/contrib/caretOperations/browser/transpose';
+import 'monaco-editor/editor/contrib/clipboard/browser/clipboard';
+import 'monaco-editor/editor/contrib/codeAction/browser/codeActionContributions';
+import 'monaco-editor/editor/contrib/comment/browser/comment';
+import 'monaco-editor/editor/contrib/contextmenu/browser/contextmenu';
+import 'monaco-editor/editor/contrib/cursorUndo/browser/cursorUndo';
+import 'monaco-editor/editor/contrib/documentSymbols/browser/documentSymbols';
+import 'monaco-editor/editor/contrib/dropOrPasteInto/browser/copyPasteContribution';
+import 'monaco-editor/editor/contrib/find/browser/findController';
+import 'monaco-editor/editor/contrib/folding/browser/folding';
+import 'monaco-editor/editor/contrib/format/browser/formatActions';
+import 'monaco-editor/editor/contrib/gotoError/browser/gotoError';
+import 'monaco-editor/editor/contrib/gotoError/browser/markerSelectionStatus';
 import 'monaco-editor/editor/contrib/gotoSymbol/browser/goToCommands';
-import 'monaco-editor/features/hover/register';
-import 'monaco-editor/features/indentation/register';
-import 'monaco-editor/features/inlayHints/register';
-import 'monaco-editor/features/linesOperations/register';
-import 'monaco-editor/features/links/register';
-import 'monaco-editor/features/multicursor/register';
-import 'monaco-editor/features/parameterHints/register';
-import 'monaco-editor/features/quickCommand/register';
-import 'monaco-editor/features/quickOutline/register';
-import 'monaco-editor/features/referenceSearch/register';
-import 'monaco-editor/features/rename/register';
-import 'monaco-editor/features/semanticTokens/register';
-import 'monaco-editor/features/smartSelect/register';
-import 'monaco-editor/features/snippet/register';
-import 'monaco-editor/features/suggest/register';
-import 'monaco-editor/features/wordHighlighter/register';
-import 'monaco-editor/features/wordOperations/register';
+import 'monaco-editor/editor/contrib/gotoSymbol/browser/link/goToDefinitionAtPosition';
+import 'monaco-editor/editor/contrib/hover/browser/hoverContribution';
+import 'monaco-editor/editor/contrib/indentation/browser/indentation';
+import 'monaco-editor/editor/contrib/inlayHints/browser/inlayHintsContribution';
+import 'monaco-editor/editor/contrib/inlineProgress/browser/inlineProgress';
+import 'monaco-editor/editor/contrib/linesOperations/browser/linesOperations';
+import 'monaco-editor/editor/contrib/links/browser/links';
+import 'monaco-editor/editor/contrib/multicursor/browser/multicursor';
+import 'monaco-editor/editor/contrib/parameterHints/browser/parameterHints';
+import 'monaco-editor/editor/contrib/rename/browser/rename';
+import 'monaco-editor/editor/contrib/semanticTokens/browser/documentSemanticTokens';
+import 'monaco-editor/editor/contrib/semanticTokens/browser/viewportSemanticTokens';
+import 'monaco-editor/editor/contrib/smartSelect/browser/smartSelect';
+import 'monaco-editor/editor/contrib/snippet/browser/snippetController2';
+import 'monaco-editor/editor/contrib/suggest/browser/suggestController';
+import 'monaco-editor/editor/contrib/tokenization/browser/tokenization';
+import 'monaco-editor/editor/contrib/wordHighlighter/browser/wordHighlighter';
+import 'monaco-editor/editor/contrib/wordOperations/browser/wordOperations';
+import 'monaco-editor/editor/standalone/browser/quickAccess/standaloneCommandsQuickAccess';
+import 'monaco-editor/editor/standalone/browser/quickAccess/standaloneGotoLineQuickAccess';
+import 'monaco-editor/editor/standalone/browser/quickAccess/standaloneGotoSymbolQuickAccess';
+import 'monaco-editor/editor/standalone/browser/referenceSearch/standaloneReferenceSearch';
 
 import 'monaco-editor/languages/definitions/python/register';
 import 'monaco-editor/languages/definitions/javascript/register';
@@ -53,3 +65,6 @@ import 'monaco-editor/languages/definitions/scala/register';
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 
 export { monaco };
+
+// `?trace` also exposes Monaco to the console and to tests.
+if (new URLSearchParams(location.search).has('trace')) Object.assign(globalThis, { monaco });

@@ -25,10 +25,9 @@ const shellFiles = [...immutable, ...prerendered, ...assets.filter((f) => !isPac
 
 sw.addEventListener('install', (event) => {
 	event.waitUntil(
-		caches
-			.open(SHELL)
-			.then((cache) => cache.addAll(shellFiles))
-			.then(() => sw.skipWaiting()),
+		// No skipWaiting: a new build waits until no tab runs the old one, so an
+		// open tab never loses the cached files of the build it is running.
+		caches.open(SHELL).then((cache) => cache.addAll(shellFiles)),
 	);
 });
 
@@ -51,7 +50,7 @@ function isolated(response: Response): Response {
 	return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
-async function respond(request: Request): Promise<Response> {
+async function respond(request: Request, event: FetchEvent): Promise<Response> {
 	const url = new URL(request.url);
 	const shell = await caches.open(SHELL);
 	// Pages: the network when it answers, so a new build is picked up; the cache offline.
@@ -67,7 +66,9 @@ async function respond(request: Request): Promise<Response> {
 		const cached = await packs.match(request);
 		if (cached) return cached;
 		const response = await fetch(request);
-		if (response.ok) await packs.put(request, response.clone());
+		// Hand the response over at once, so the pack sees its download
+		// progress, and let the copy go into the cache alongside.
+		if (response.ok) event.waitUntil(packs.put(request, response.clone()));
 		return response;
 	}
 	return (await shell.match(request)) ?? fetch(request);
@@ -76,5 +77,5 @@ async function respond(request: Request): Promise<Response> {
 sw.addEventListener('fetch', (event) => {
 	const { request } = event;
 	if (request.method !== 'GET' || new URL(request.url).origin !== sw.location.origin) return;
-	event.respondWith(respond(request).then(isolated));
+	event.respondWith(respond(request, event).then(isolated));
 });

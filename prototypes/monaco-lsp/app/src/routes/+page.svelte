@@ -10,6 +10,7 @@
 	import { theme } from '../lib/theme.svelte';
 	import { Workspace } from '../lib/workspace.svelte';
 	import { monaco } from '../lib/monaco';
+	import { projectLanguageOf } from '../lib/project';
 
 	const workspace = new Workspace();
 	let dockElement: HTMLElement;
@@ -18,8 +19,23 @@
 	onMount(() => {
 		dock = createDock(dockElement, workspace);
 		workspace.attach(dock);
-		registerServiceWorker((m) => workspace.write('warning', m));
-		return () => dock?.dispose();
+		registerServiceWorker((m) => workspace.write('warning', m), () => workspace.flush());
+		// The save is debounced; a page being hidden may never come back.
+		const hidden = () => document.visibilityState === 'hidden' && workspace.flush();
+		const flush = () => workspace.flush();
+		const storage = (e: StorageEvent) => {
+			const language = e.key && projectLanguageOf(e.key);
+			if (language) workspace.savedElsewhere(language);
+		};
+		addEventListener('pagehide', flush);
+		addEventListener('storage', storage);
+		document.addEventListener('visibilitychange', hidden);
+		return () => {
+			removeEventListener('pagehide', flush);
+			removeEventListener('storage', storage);
+			document.removeEventListener('visibilitychange', hidden);
+			dock?.dispose();
+		};
 	});
 
 	$effect(() => dock?.setProblemCount(workspace.problems.length));

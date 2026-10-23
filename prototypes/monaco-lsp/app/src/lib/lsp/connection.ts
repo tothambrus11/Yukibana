@@ -58,11 +58,19 @@ export class Connection {
 	 * @param onClose called once when the worker dies or is disposed, with
 	 *   the reason when it died on its own.
 	 */
+	/**
+	 * @param trace when given, called with every message in both directions,
+	 *   for the `?trace` debugging mode.
+	 */
 	constructor(
 		private readonly worker: Worker,
 		private readonly onClose: (error: Error | null) => void,
+		private readonly trace?: (direction: 'send' | 'receive', message: unknown) => void,
 	) {
-		worker.onmessage = (e: MessageEvent<unknown>) => this.receive(e.data);
+		worker.onmessage = (e: MessageEvent<unknown>) => {
+			this.trace?.('receive', e.data);
+			this.receive(e.data);
+		};
 		worker.onerror = (e: ErrorEvent) => {
 			e.preventDefault();
 			this.close(new Error(e.message || 'the language server failed to start'));
@@ -101,13 +109,14 @@ export class Connection {
 				reject: (e) => (settle(), reject(e)),
 			});
 			signal?.addEventListener('abort', abort, { once: true });
-			this.post({ jsonrpc: '2.0', id, method, params });
+			this.post({ jsonrpc: '2.0', id, method, ...(params !== undefined && { params }) });
 		});
 	}
 
 	/** Sends a notification; dropped silently once the connection has closed. */
 	notify(method: string, params: unknown): void {
-		if (!this.closed) this.post({ jsonrpc: '2.0', method, params });
+		// JSON-RPC allows params to be absent but not null.
+		if (!this.closed) this.post({ jsonrpc: '2.0', method, ...(params !== undefined && { params }) });
 	}
 
 	/** Terminates the worker and fails every pending request. Idempotent. */
@@ -116,6 +125,7 @@ export class Connection {
 	}
 
 	private post(message: RequestMessage | ResponseMessage): void {
+		this.trace?.('send', message);
 		this.worker.postMessage(message);
 	}
 

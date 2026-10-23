@@ -139,6 +139,7 @@ export function toSuggestion(
 		text = edit.newText;
 		range = 'range' in edit ? toRange(edit.range) : { insert: toRange(edit.insert), replace: toRange(edit.replace) };
 	} else if (editRange) {
+		text = item.textEditText ?? item.label;
 		range = 'start' in editRange ? toRange(editRange) : { insert: toRange(editRange.insert), replace: toRange(editRange.replace) };
 	}
 	const format = item.insertTextFormat ?? defaults?.insertTextFormat;
@@ -213,7 +214,8 @@ export function toWorkspaceEdit(edit: lsp.WorkspaceEdit): { edit: { edits: monac
 	const unsupported: string[] = [];
 	const add = (uri: string, e: lsp.TextEdit | lsp.AnnotatedTextEdit) =>
 		edits.push({ resource: monaco.Uri.parse(uri), textEdit: toTextEdit(e), versionId: undefined });
-	for (const [uri, list] of Object.entries(edit.changes ?? {})) for (const e of list) add(uri, e);
+	// When both forms are present the spec says documentChanges wins.
+	if (!edit.documentChanges) for (const [uri, list] of Object.entries(edit.changes ?? {})) for (const e of list) add(uri, e);
 	for (const change of edit.documentChanges ?? []) {
 		if ('textDocument' in change) for (const e of change.edits) add(change.textDocument.uri, e);
 		else unsupported.push(`${change.kind} ${'uri' in change ? change.uri : change.oldUri}`);

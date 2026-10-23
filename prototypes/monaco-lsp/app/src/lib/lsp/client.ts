@@ -73,15 +73,21 @@ export class LanguageClient {
 	constructor(private readonly options: ClientOptions) {
 		this.serverUrl = options.serverUrl;
 		const worker = new Worker(options.serverUrl, { type: 'module', name: options.serverUrl.pathname });
-		this.connection = new Connection(worker, (error) => this.closed(error));
+		this.connection = new Connection(
+			worker,
+			(error) => this.closed(error),
+			// `?trace` in the page's URL logs every message to the console.
+			new URLSearchParams(location.search).has('trace') ? (direction, message) => console.debug(`lsp ${direction}`, JSON.stringify(message).slice(0, 2000)) : undefined,
+		);
 		this.listen();
 	}
 
 	/**
-	 * Initialises the server and opens every given model. Resolves once the
-	 * server is running; rejects when it fails to start.
+	 * Initialises the server, then opens the models `models()` returns at that
+	 * moment (the project may have changed while the server downloaded).
+	 * Resolves once the server is running; rejects when it fails to start.
 	 */
-	async start(models: Iterable<monaco.editor.ITextModel>): Promise<void> {
+	async start(models: () => Iterable<monaco.editor.ITextModel>): Promise<void> {
 		this.options.events.state({ kind: 'starting' });
 		const result = await this.connection.request<lsp.InitializeResult>('initialize', this.initializeParams());
 		this.options.events.loading(null);
@@ -90,7 +96,7 @@ export class LanguageClient {
 		this.syncKind = typeof sync === 'number' ? sync : (sync?.change ?? 0);
 		this.connection.notify('initialized', {});
 		this.ready = true;
-		for (const model of models) this.addModel(model);
+		for (const model of models()) this.addModel(model);
 		this.registerFeatures();
 		const info = result.serverInfo;
 		this.options.events.state({ kind: 'running', server: info ? `${info.name}${info.version ? ' ' + info.version : ''}` : 'language server' });
@@ -109,7 +115,7 @@ export class LanguageClient {
 		const listener = model.onDidChangeContent((e) => this.changed(model, e));
 		this.models.set(key, { model, listener });
 		this.connection.notify('textDocument/didOpen', {
-			textDocument: { uri: key, languageId: model.getLanguageId(), version: model.getVersionId(), text: model.getValue() },
+			textDocument: { uri: key, languageId: languageIdOf(model), version: model.getVersionId(), text: model.getValue() },
 		} satisfies lsp.DidOpenTextDocumentParams);
 		if (created) this.watched(key, 1);
 	}
@@ -133,8 +139,8 @@ export class LanguageClient {
 		this.stopping = true;
 		if (this.ready) {
 			const timeout = new Promise((resolve) => setTimeout(resolve, 2000));
-			await Promise.race([this.connection.request('shutdown', null).catch(() => {}), timeout]);
-			this.connection.notify('exit', null);
+			await Promise.race([this.connection.request('shutdown', undefined).catch(() => {}), timeout]);
+			this.connection.notify('exit', undefined);
 		}
 		this.connection.dispose();
 	}
@@ -235,7 +241,13 @@ export class LanguageClient {
 			(p as lsp.ConfigurationParams).items.map((item) => (item.section ? lookup(this.options.settings, item.section) : this.options.settings) ?? null),
 		);
 		conn.onRequest('workspace/workspaceFolders', () => [{ uri: this.options.rootUri, name: 'workspace' }]);
-		conn.onRequest('client/registerCapability', () => null);
+		// Every dynamicRegistration is declared false, so a registration is a
+		// server's own choice; its features are already wired statically.
+		conn.onRequest('client/registerCapability', (p) => {
+			const methods = (p as lsp.RegistrationParams).registrations.map((r) => r.method);
+			events.log('log', `server registered ${methods.join(', ')} (handled by the static setup)`);
+			return null;
+		});
 		conn.onRequest('client/unregisterCapability', () => null);
 		conn.onRequest('window/workDoneProgress/create', () => null);
 		conn.onRequest('window/showMessageRequest', (p) => {
@@ -244,7 +256,9 @@ export class LanguageClient {
 		});
 		conn.onRequest('window/showDocument', (p) => {
 			const d = p as lsp.ShowDocumentParams;
-			events.open(monaco.Uri.parse(d.uri), d.selection && c.toRange(d.selection));
+			const uri = monaco.Uri.parse(d.uri);
+			if (d.external || !monaco.editor.getModel(uri)) return { success: false };
+			events.open(uri, d.selection && c.toRange(d.selection));
 			return { success: true };
 		});
 		conn.onRequest('workspace/applyEdit', (p) => ({ applied: this.applyEdit((p as lsp.ApplyWorkspaceEditParams).edit) }));
@@ -642,4 +656,16 @@ function lookup(settings: Record<string, unknown>, section: string): unknown {
 		value = (value as Record<string, unknown>)[key];
 	}
 	return value;
+}
+
+/**
+ * The LSP language id of a model. Monaco's own id is right for every source
+ * language here; files Monaco has no grammar for are named by extension.
+ */
+function languageIdOf(model: monaco.editor.ITextModel): string {
+	const id = model.getLanguageId();
+	if (id !== 'plaintext') return id;
+	const name = model.uri.path.slice(model.uri.path.lastIndexOf('/') + 1);
+	const ext = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : '';
+	return ({ json: 'json', jsonc: 'jsonc', toml: 'toml', md: 'markdown', txt: 'plaintext' } as Record<string, string>)[ext] ?? 'plaintext';
 }

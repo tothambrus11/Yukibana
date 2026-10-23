@@ -17,10 +17,12 @@ export function uriOf(path: string): monaco.Uri {
 	return monaco.Uri.parse(ROOT_URI + path.split('/').map(encodeURIComponent).join('/'));
 }
 
+const ROOT_PATH = '/workspace/';
+
 /** The project path of a model URI, or `null` for a URI outside the workspace. */
 export function pathOf(uri: monaco.Uri): string | null {
-	const s = uri.toString(true);
-	return s.startsWith(ROOT_URI) ? s.slice(ROOT_URI.length) : null;
+	// `uri.path` is decoded; `toString(true)` would still escape `#` and `?`.
+	return uri.scheme === 'file' && !uri.authority && uri.path.startsWith(ROOT_PATH) ? uri.path.slice(ROOT_PATH.length) : null;
 }
 
 /** One line of the output panel. */
@@ -68,8 +70,13 @@ export class Workspace {
 	private saveTimer: ReturnType<typeof setTimeout> | undefined;
 	private logId = 0;
 	private host: EditorHost | null = null;
-	/** Bumped on every switch, so a slow start of an old client cannot win. */
+	/** Bumped by every language switch, so a switch overtaken by a later one is skipped. */
 	private generation = 0;
+	/**
+	 * Switching, resetting and restarting run one after another on this
+	 * chain, so none of them sees the half-done state of another.
+	 */
+	private transitions: Promise<void> = Promise.resolve();
 
 	constructor() {
 		monaco.editor.onDidChangeMarkers(() => this.refreshProblems());
@@ -86,33 +93,48 @@ export class Workspace {
 	 * Selects a language: saves and closes the current project, stops its
 	 * server, then loads the language's project and starts its server.
 	 */
-	async switchTo(language: LanguageId): Promise<void> {
+	switchTo(language: LanguageId): Promise<void> {
 		const generation = ++this.generation;
-		if (this.models.size) this.saveNow();
-		await this.stopClient();
-		this.disposeModels();
-		this.language = language;
-		saveLanguage(language);
-		this.load(loadProject(language, (m) => this.write('warning', m)));
-		if (generation !== this.generation) return;
-		await this.startClient(generation);
+		return this.serially(async () => {
+			if (generation !== this.generation) return; // a later switch replaces this one
+			await this.closeProject();
+			this.language = language;
+			saveLanguage(language);
+			this.load(loadProject(language, (m) => this.write('warning', m)));
+			this.startClient();
+		});
 	}
 
 	/** Replaces the current project with the language's sample, after the user confirmed. */
-	async resetProject(): Promise<void> {
-		const generation = ++this.generation;
-		await this.stopClient();
-		this.disposeModels();
-		this.load(sampleProject(this.language));
-		this.saveNow();
-		await this.startClient(generation);
+	resetProject(): Promise<void> {
+		return this.serially(async () => {
+			await this.stopClient();
+			this.disposeModels();
+			this.load(sampleProject(this.language));
+			this.saveNow();
+			this.startClient();
+		});
 	}
 
 	/** Restarts the language server on the same files. */
-	async restartServer(): Promise<void> {
-		const generation = ++this.generation;
-		await this.stopClient();
-		await this.startClient(generation);
+	restartServer(): Promise<void> {
+		return this.serially(async () => {
+			await this.stopClient();
+			this.startClient();
+		});
+	}
+
+	/** Saves now instead of after the debounce: the page is being hidden or reloaded. */
+	flush(): void {
+		if (this.models.size) this.saveNow();
+	}
+
+	/**
+	 * Another tab saved this language's project. Each tab keeps its own
+	 * copy, so the last to save wins; say so rather than lose work silently.
+	 */
+	savedElsewhere(language: LanguageId): void {
+		if (language === this.language) this.write('warning', `This ${languageOf(language).label} project was changed in another tab. Whichever tab saves last keeps its version.`);
 	}
 
 	/** Shows a file in the editor. */
@@ -134,7 +156,12 @@ export class Workspace {
 
 	/** Why a new file or folder cannot be called `path`, or `null`. */
 	nameProblem(path: string): string | null {
-		return pathProblem(path) ?? (this.models.has(path) || this.folders.includes(path) || this.isImpliedFolder(path) ? `"${path}" already exists.` : null);
+		const problem = pathProblem(path);
+		if (problem) return problem;
+		if (this.models.has(path) || this.folders.includes(path) || this.isImpliedFolder(path)) return `"${path}" already exists.`;
+		// A server mirrors the project into a file system, where a file cannot also be a folder.
+		for (let p = parentOf(path); p; p = parentOf(p)) if (this.models.has(p)) return `"${p}" is a file, not a folder.`;
+		return null;
 	}
 
 	/** Creates an empty file (and its folders) and opens it. */
@@ -243,7 +270,26 @@ export class Workspace {
 		this.problems = [];
 	}
 
-	private async startClient(generation: number): Promise<void> {
+	private serially(transition: () => Promise<void>): Promise<void> {
+		const next = this.transitions.then(transition);
+		this.transitions = next.catch((e: unknown) => this.write('error', e instanceof Error ? e.message : String(e)));
+		return this.transitions;
+	}
+
+	/** Saves the project, stops its server, and removes its files from the editor. */
+	private async closeProject(): Promise<void> {
+		this.flush();
+		await this.stopClient();
+		this.flush(); // edits typed while the server was shutting down
+		this.disposeModels();
+	}
+
+	/**
+	 * Starts the language's server on the current files. Does not wait for
+	 * it: a pack may take a while to download, and a switch away meanwhile
+	 * must not queue behind it. Stopping the client cancels the download.
+	 */
+	private startClient(): void {
 		const language = languageOf(this.language);
 		const client = new LanguageClient({
 			// Relative to the page, so the app works from any folder of a static host.
@@ -267,15 +313,13 @@ export class Workspace {
 		});
 		this.client = client;
 		this.write('info', `Starting the ${language.label} language server`);
-		try {
-			await client.start(this.models.values());
-		} catch (e) {
-			if (generation !== this.generation) return;
+				client.start(() => this.models.values()).catch(async (e: unknown) => {
+			if (this.client !== client) return;
 			this.write('error', `${language.label} language server: ${e instanceof Error ? e.message : String(e)}`);
 			// A worker that fails to load says nothing about why; a missing pack is the usual reason.
 			const status = await fetch(client.serverUrl, { method: 'HEAD' }).then((r) => r.status, () => 0);
 			if (status === 404) this.write('error', `The ${language.label} pack is not installed: ${client.serverUrl.pathname} was not found. Build it with packs/${language.id}/build.sh.`);
-		}
+		});
 	}
 
 	private async stopClient(): Promise<void> {

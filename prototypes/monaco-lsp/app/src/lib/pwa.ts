@@ -7,8 +7,11 @@
 
 const RELOADED = 'yukibana.code.isolation-reload';
 
-/** Starts registration; never throws, since the app also works without it, just not offline. */
-export function registerServiceWorker(report: (message: string) => void): void {
+/**
+ * Starts registration; never throws, since the app also works without it,
+ * just not offline. `beforeReload` runs before the one-time reload, to save.
+ */
+export function registerServiceWorker(report: (message: string) => void, beforeReload: () => void): void {
 	if (!('serviceWorker' in navigator)) {
 		report('This browser has no service workers: the app will not work offline.');
 		return;
@@ -19,7 +22,7 @@ export function registerServiceWorker(report: (message: string) => void): void {
 		.catch((e: unknown) => report(`The service worker did not register: ${e instanceof Error ? e.message : String(e)}`));
 
 	if (crossOriginIsolated) {
-		sessionStorage.removeItem(RELOADED);
+		session(() => sessionStorage.removeItem(RELOADED));
 		return;
 	}
 	if (hadController) {
@@ -29,8 +32,20 @@ export function registerServiceWorker(report: (message: string) => void): void {
 		return;
 	}
 	navigator.serviceWorker.addEventListener('controllerchange', () => {
-		if (sessionStorage.getItem(RELOADED)) return;
-		sessionStorage.setItem(RELOADED, '1');
+		// Without session storage there is no way to tell a second reload from
+		// the first, so do not reload at all rather than risk a loop.
+		if (session(() => sessionStorage.getItem(RELOADED)) !== null) return;
+		if (session(() => sessionStorage.setItem(RELOADED, '1')) === null) return;
+		beforeReload();
 		location.reload();
 	});
+}
+
+/** Runs a session storage access; `null` also when storage is unavailable (blocked, private mode). */
+function session<T>(access: () => T): T | null {
+	try {
+		return access();
+	} catch {
+		return null;
+	}
 }

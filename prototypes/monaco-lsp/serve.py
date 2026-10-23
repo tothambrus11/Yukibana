@@ -16,6 +16,7 @@ import functools
 import http.server
 import mimetypes
 import os
+import urllib.parse
 
 mimetypes.add_type("application/wasm", ".wasm")
 mimetypes.add_type("text/javascript", ".js")
@@ -28,7 +29,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cross-Origin-Opener-Policy", "same-origin")
         self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
         self.send_header("Cross-Origin-Resource-Policy", "same-origin")
-        if self.path.endswith("service-worker.js") or self.path.endswith(".html") or self.path.endswith("/"):
+        path = urllib.parse.urlsplit(self.path).path
+        if path.endswith("service-worker.js") or path.endswith(".html") or path.endswith("/"):
             self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 
@@ -36,7 +38,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         path = self.translate_path(self.path)
         if os.path.isdir(path):
             path = os.path.join(path, "index.html")
-        accepted = self.headers.get("Accept-Encoding", "")
+        accepted = {
+            part.split(";")[0].strip()
+            for part in self.headers.get("Accept-Encoding", "").split(",")
+            if not part.replace(" ", "").endswith(";q=0")
+        }
         for encoding, suffix in (("br", ".br"), ("gzip", ".gz")):
             if encoding in accepted and os.path.isfile(path + suffix) and os.path.isfile(path):
                 return self._send_compressed(path, path + suffix, encoding)
