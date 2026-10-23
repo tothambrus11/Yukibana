@@ -129,7 +129,7 @@ fi
 cp -p "$CACHE/stage/swift-sysroot.tar" "$OUT/swift-sysroot.tar"
 
 step "server.js, typecheck.js, runner.js"
-"$HERE/node_modules/.bin/esbuild" "$HERE/src/server.js" --minify --format=esm --target=es2022 \
+"$HERE/node_modules/.bin/esbuild" "$HERE/src/server.js" --bundle --minify --format=esm --target=es2022 \
   --legal-comments=none --outfile="$OUT/server.js" --log-level=warning
 size() { stat -c %s "$OUT/$1"; }
 SIZES="{\"swift-frontend.wasm\":$(size swift-frontend.wasm),\"wasm-ld.wasm\":$(size wasm-ld.wasm),\"swift-sysroot.tar\":$(size swift-sysroot.tar)}"

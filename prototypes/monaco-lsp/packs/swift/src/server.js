@@ -3,7 +3,7 @@
 // wasm32-wasi with the swift.org Wasm SDK. It is NOT SourceKit-LSP (see
 // README.md). swift-ls.wasm parses; it does not type-check. Type errors come
 // from the real Swift 6.3.3 compiler frontend (swift-frontend.wasm, from
-// swift-toolchain-wasm), which typecheck.js runs with -typecheck in a nested
+// swift-toolchain-wasm), which typecheck.js runs with -emit-sil in a nested
 // worker, loaded lazily after `initialize`; its diagnostics are merged with
 // the syntax ones. Completion, hover and navigation stay syntactic.
 //
@@ -11,6 +11,8 @@
 // file owns the protocol: positions (LSP's UTF-16 line/character against the
 // wasm's UTF-8 byte offsets), the document store, the capability list. The
 // wasm owns every answer about Swift.
+
+import { readDiagnostics } from './dia.js';
 
 const NAME = 'swift-syntax-ls + swift-frontend 6.3.3 type checker';
 const VERSION = '0.2.0 (swift-syntax 604.0.0 on the Swift 6.4.1 Wasm SDK; diagnostics also from swift-frontend 6.3.3, swift-toolchain-wasm release swift-6.3.3-wasm)';
@@ -254,6 +256,7 @@ const live = (uri) => (broken.has(uri) ? undefined : docs.get(uri));
 async function setDoc(uri, text, version) {
     const doc = new Doc(uri, text, version);
     docs.set(uri, doc);
+    fixes.delete(uri); // computed on the old text
     broken.delete(uri); // new text, new chance
     try {
         doc.diagnostics = await call('set', uri, 0, text);
@@ -301,6 +304,7 @@ function markBroken(doc) {
 async function closeDoc(uri) {
     docs.delete(uri);
     semantic.delete(uri);
+    fixes.delete(uri);
     scheduleCheck();
     const wasBroken = broken.delete(uri);
     if (!wasBroken) await call('remove', uri);
@@ -319,7 +323,7 @@ const location = (l) => {
 // ---------------------------------------------------------------- type checking
 
 /**
- * Semantic diagnostics: the real compiler's `-typecheck` over every open
+ * Semantic diagnostics: the real compiler's `-emit-sil` over every open
  * .swift file, run by typecheck.js in a nested worker so a check never holds
  * up completion or hover. It starts on the first document (the frontend is
  * ~110 MB of wasm, fetched from the same URL as the runner's), runs
@@ -329,6 +333,7 @@ const location = (l) => {
  */
 const CHECK_DELAY = 350;
 const semantic = new Map(); // uri -> LSP diagnostics of the newest completed check
+const fixes = new Map(); // uri -> compiler fix-its of the newest completed check, see fixesOf
 let checker = null;
 let checkerDown = false;
 let checkTimer = 0;
@@ -375,7 +380,7 @@ function sendCheck() {
     checker.postMessage({ type: 'check', id: checkId, files });
 }
 
-function applyCheck({ id, output, ms }) {
+function applyCheck({ id, output, dia, ms }) {
     if (!snapshot || id !== snapshot.id) return; // superseded
     const docsThen = snapshot.docs;
     for (const [uri, d] of docsThen) if (docs.get(uri) !== d) return; // changed since: a newer check is scheduled
@@ -400,13 +405,65 @@ function applyCheck({ id, output, ms }) {
             ...(related.length ? { relatedInformation: related } : {}),
         });
     }
+    fixes.clear();
+    if (dia) {
+        try {
+            for (const [uri, list] of fixesOf(readDiagnostics(new Uint8Array(dia)), docsThen, found)) fixes.set(uri, list);
+        } catch (e) {
+            log(2, `swift-frontend: could not read its fix-its: ${e?.message ?? e}`);
+        }
+    }
     for (const [uri, list] of found) {
         const before = JSON.stringify(semantic.get(uri) ?? []);
         semantic.set(uri, list);
         if (JSON.stringify(list) !== before) publish(docs.get(uri));
     }
-    log(4, `swift-frontend -typecheck: ${[...found.values()].flat().length} diagnostics in ${ms} ms`);
+    log(4, `swift-frontend check: ${[...found.values()].flat().length} diagnostics in ${ms} ms`);
 }
+
+/**
+ * The compiler's fix-its as quick fixes, by the URI of the diagnostic they
+ * fix: `{ range, title, diagnostic, edit }`. A fix-it on an error or warning
+ * is titled after it; one on a note (`add stubs for conformance`) is titled
+ * by the note and offered on its parent's range, where the user's cursor is.
+ * Edits are byte ranges in the file text the check saw (`docsThen`), so they
+ * are only offered while that text is current (applyCheck runs on exactly
+ * that text, and an edit clears the fix-its with the diagnostics).
+ */
+function fixesOf(diagnostics, docsThen, found) {
+    const out = new Map();
+    const docOf = (file) => {
+        const uri = file.startsWith('/workspace/') ? uriOf(file.slice('/workspace/'.length)) : null;
+        return uri && docsThen.has(uri) ? [uri, docsThen.get(uri)] : [null, null];
+    };
+    for (const d of diagnostics) {
+        const [uri, doc] = docOf(d.file);
+        if (!doc) continue;
+        const line = d.line - 1;
+        // The LSP diagnostic this compiler diagnostic became (same line and message).
+        const diagnostic = found.get(uri)?.find((x) => x.range.start.line === line && x.message.startsWith(d.message));
+        const range = diagnostic?.range ?? doc.range(d.offset, d.offset);
+        for (const [source, title] of [[d, `Fix: ${d.message}`], ...d.notes.map((n) => [n, n.message.charAt(0).toUpperCase() + n.message.slice(1)])]) {
+            if (!source.fixits.length) continue;
+            const changes = {};
+            let usable = true;
+            for (const f of source.fixits) {
+                const [furi, fdoc] = docOf(f.start.file);
+                if (!fdoc) usable = false;
+                else (changes[furi] ??= []).push({ range: fdoc.range(f.start.offset, f.end.offset), newText: placeholders(f.text) });
+            }
+            if (usable) (out.get(uri) ?? out.set(uri, []).get(uri)).push({ range, title, diagnostic, edit: { changes } });
+        }
+    }
+    return out;
+}
+
+/**
+ * Editor placeholders (`<#code#>`) as plain text (`code`), as SourceKit-LSP
+ * does for a client that applies edits rather than snippets: what is left
+ * then fails to compile and says what to fill in.
+ */
+const placeholders = (text) => text.replace(/<#(?:T##)?(.*?)(?:##.*?)?#>/g, '$1');
 
 /**
  * The frontend's LLVM-style output: `file:line:col: severity: message`,
@@ -609,6 +666,12 @@ const handlers = {
                     edit: { changes: { [doc.uri]: fix.edits.map((x) => ({ range: doc.range(x.s, x.e), newText: x.t })) } },
                 });
             }
+        }
+        // The compiler's fix-its, while the text they were computed on is still current.
+        const before = (a, b) => a.line < b.line || (a.line === b.line && a.character <= b.character);
+        for (const fix of fixes.get(doc.uri) ?? []) {
+            if (!before(fix.range.start, p.range.end) || !before(p.range.start, fix.range.end)) continue;
+            actions.push({ title: fix.title, kind: 'quickfix', ...(fix.diagnostic ? { diagnostics: [fix.diagnostic], isPreferred: true } : {}), edit: fix.edit });
         }
         return actions;
     },

@@ -72,6 +72,18 @@ export function typecheckArgs(sources) {
 }
 
 /**
+ * The editor's live check: `-emit-sil`, which type-checks and then runs the
+ * mandatory SIL passes, because several everyday errors are only found
+ * there, not by `-typecheck`: a missing return, a variable used before it is
+ * initialised, a `let` assigned twice, unreachable code. Measured on the
+ * sample: about 200 ms warm against 110 ms for `-typecheck`. The SIL itself
+ * goes to `output` and is not read.
+ */
+export function diagnoseArgs(sources, output) {
+    return ['swift-frontend', '-frontend', '-emit-sil', ...sources, ...commonFrontendArgs(), '-o', output];
+}
+
+/**
  * The libraries every program links, in link order: yukibana-swift's
  * pipeline.ts STDLIB_LIBRARIES, its stand-in for swift-autolink-extract.
  * Libraries a program's own imports need (Synchronization, RegexBuilder,

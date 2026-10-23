@@ -5,7 +5,7 @@ This pack has three parts, and they are named for what they are:
 | part | what it is | what it does |
 |---|---|---|
 | `server.js` + `swift-ls.wasm` | **swift-syntax-ls**, a small language server written for this pack on Apple's [swift-syntax](https://github.com/swiftlang/swift-syntax) 604.0.0, compiled to wasm32-wasip1 with the swift.org Swift 6.4.1 Wasm SDK | syntax diagnostics with fix-its, outline, semantic tokens, formatting, and **heuristic** completion, hover, definition, references, rename and signature help |
-| `typecheck.js` | a nested worker of `server.js` that runs **swift-frontend 6.3.3** (`swift-frontend.wasm`) with `-typecheck` | **semantic diagnostics** from the real compiler (type errors, unknown names, warnings), merged with the syntax ones |
+| `typecheck.js` | a nested worker of `server.js` that runs **swift-frontend 6.3.3** (`swift-frontend.wasm`) with `-emit-sil` (type checking plus the mandatory SIL passes) | **semantic diagnostics** from the real compiler (type errors, unknown names, warnings), merged with the syntax ones |
 | `runner.js` | **swift-frontend 6.3.3 + wasm-ld** compile and link the project, then the program runs under WASI in the worker | **Run**: stdout/stderr streamed, interactive `readLine()`, compiler errors on stderr |
 
 `swift-frontend.wasm`, `wasm-ld.wasm` and the sysroot come from Ambrus Tóth's
@@ -94,8 +94,18 @@ the runner (one cached copy for both) and reports the download as
 
 * 350 ms after the last edit, the server sends every open `.swift` file. The
   worker writes them under `/workspace` and runs
-  `swift-frontend -frontend -typecheck <files> ...` (same flags as the
-  runner's compile, with no output).
+  `swift-frontend -frontend -emit-sil <files> ... -serialize-diagnostics-path
+  /tmp/typecheck.dia` (same flags as the runner's compile; the SIL is
+  discarded). `-emit-sil` rather than `-typecheck`, because the mandatory SIL
+  passes find errors type checking does not: a missing return, use before
+  initialisation, unreachable code. It costs about 200 ms warm instead of
+  110 ms.
+* Fix-its: the frontend's text output drops any fix-it that spans lines
+  (`add stubs for conformance`), so the worker also returns the serialized
+  diagnostics file, which `src/dia.js` reads (an LLVM bitstream reader, about
+  150 lines). Each fix-it becomes a quick fix on its diagnostic, titled by
+  the note it belongs to; editor placeholders (`<#code#>`) become their
+  plain name, as SourceKit-LSP does for clients that apply edits.
 * A result is used only if no document changed since its snapshot, so a
   superseded check is discarded. When edits arrive during a check, the
   worker runs only the newest one next. In the test, six edits inside the
@@ -301,7 +311,7 @@ app/static/packs/swift/
   server.js            module Worker: LSP protocol, documents, UTF-16 <-> UTF-8
                        positions, a 14-function WASI shim; merges diagnostics
   swift-ls.wasm        packs/swift/server (Swift) + swift-syntax, wasm32-wasi reactor
-  typecheck.js         nested worker: swift-frontend -typecheck
+  typecheck.js         nested worker: swift-frontend -emit-sil (diagnostics and fix-its)
   runner.js            the runner
   swift-frontend.wasm  swift-toolchain-wasm swift-6.3.3-wasm, stripped
   wasm-ld.wasm         idem
@@ -332,7 +342,7 @@ too, outside any guard, and after that every request on every file failed.
 | LSP feature | what it does | real or heuristic |
 |---|---|---|
 | diagnostics, syntax | swift-syntax's `ParseDiagnosticsGenerator`: the compiler's own **syntax** errors and messages ("expected ')' to end function call"), on every keystroke | real |
-| diagnostics, semantic | **swift-frontend 6.3.3 `-typecheck`** over every open `.swift` file (see "Type checking") | real: the compiler's own errors and warnings |
+| diagnostics, semantic | **swift-frontend 6.3.3 `-emit-sil`** (type checking + mandatory SIL passes; fix-its as quick fixes) over every open `.swift` file (see "Type checking") | real: the compiler's own errors and warnings |
 | code actions | the parser's fix-its as quick fixes with edits ("insert ')'") | real |
 | document symbols | outline of types, extensions, members, cases, top-level declarations | real (syntax) |
 | semantic tokens | swift-syntax's `SwiftIDEUtils` classifier (keywords, types, literals, comments, attributes, `#if`) plus declaration names | real (syntax) |

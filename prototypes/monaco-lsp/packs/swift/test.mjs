@@ -232,6 +232,27 @@ try {
         .flatMap((m) => m.params.diagnostics.map((x) => /specified type '(\w+)'/.exec(x.message)?.[1])).filter(Boolean);
     check('superseded edits are not checked: diagnostics only for the last text', errors(last).length === 1 &&
         !seen.some((type) => TYPES.slice(0, -1).includes(type)), `${show(last)}; target types seen: ${[...new Set(seen)].join(', ')}`);
+
+    // The compiler's fix-its (only in its serialized diagnostics) are quick fixes.
+    since = (await lsp.log()).length;
+    const CONFORM = 'protocol A {\n    func a() -> Int\n}\n\nstruct K : A {\n    \n}\n';
+    lsp.notify('textDocument/didChange', { textDocument: { uri: uri('Typed.swift'), version: 20 }, contentChanges: [{ text: CONFORM }] });
+    const conform = await diagnostics('Typed.swift', (d) => errors(d).some((x) => /does not conform/.test(x.message)), since, 60000);
+    const conformError = errors(conform).find((x) => /does not conform/.test(x.message));
+    const stubs = await lsp.request('textDocument/codeAction', {
+        textDocument: { uri: uri('Typed.swift') }, range: conformError?.range ?? { start: { line: 4, character: 7 }, end: { line: 4, character: 7 } },
+        context: { diagnostics: conformError ? [conformError] : [] },
+    });
+    const addStubs = (stubs.result ?? []).find((a) => a.title === 'Add stubs for conformance');
+    const stubEdit = addStubs?.edit?.changes?.[uri('Typed.swift')]?.[0];
+    check('"add stubs for conformance" from swift-frontend is a quick fix that inserts the missing method',
+        !!stubEdit && stubEdit.range.start.line === 4 && stubEdit.range.start.character === 14 && /func a\(\) -> Int \{\n\s+code\n\s+\}/.test(stubEdit.newText),
+        JSON.stringify(stubs.result?.map((a) => [a.title, a.edit])));
+    // Errors found by the mandatory SIL passes, not by -typecheck, show while typing.
+    since = (await lsp.log()).length;
+    lsp.notify('textDocument/didChange', { textDocument: { uri: uri('Typed.swift'), version: 21 }, contentChanges: [{ text: 'func f(_ c: Bool) -> Int {\n    if c {\n    } else {\n    }\n}\n' }] });
+    const missing = await diagnostics('Typed.swift', (d) => errors(d).some((x) => /missing return/.test(x.message)), since, 60000);
+    check('a missing return (a SIL diagnostic) is reported while editing', errors(missing ?? []).some((x) => /missing return in global function expected to return 'Int'/.test(x.message)), show(missing));
     lsp.notify('textDocument/didClose', { textDocument: { uri: uri('Typed.swift') } });
 
     since = (await lsp.log()).length;
@@ -239,7 +260,7 @@ try {
     const broken = await diagnostics('main.swift', (d) => errors(d).length > 0, since);
     check('an introduced error is a diagnostic', errors(broken).some((d) => /expected '\)' to end function call/.test(d.message)), show(broken));
     // Wait for the type checker's run on the broken text, then look again.
-    for (let i = 0; i < 300 && !(await lsp.log()).slice(since).some((m) => m.method === 'window/logMessage' && /-typecheck:/.test(m.params.message)); i++)
+    for (let i = 0; i < 300 && !(await lsp.log()).slice(since).some((m) => m.method === 'window/logMessage' && /swift-frontend check:/.test(m.params.message)); i++)
         await page.waitForTimeout(100);
     const merged = await diagnostics('main.swift', () => true, since);
     check('the type checker\'s copy of the syntax error is not shown twice',
