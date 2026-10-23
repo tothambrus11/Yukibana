@@ -1,4 +1,4 @@
-// The C/C++ pack's Worker: clangd (LLVM 21, Emscripten, no threads) behind
+// The C/C++ pack's Worker: clangd (LLVM 21, Emscripten, with threads) behind
 // the pack transport of ../../CONTRACT.md. One JSON-RPC object per
 // postMessage in each direction; clangd itself speaks Content-Length framed
 // JSON on stdin/stdout, and this file is the translation between the two,
@@ -7,9 +7,12 @@
 // What clangd needs from its host, and where it gets it here:
 //   * its wasm, and the headers <stdio.h> and <vector> come from: fetched
 //     next to this file, with yukibana/loading progress;
-//   * a blocking stdin: clangd suspends through JSPI until a message is
-//     queued (patches/clangd-browser.patch), so no SharedArrayBuffer and no
-//     cross-origin isolation are needed, but the browser must have JSPI;
+//   * threads: Web Workers sharing the module's memory, so the page must be
+//     cross-origin isolated. clangd's main runs on one of them, which leaves
+//     this Worker free to receive messages;
+//   * its input: each message is handed to clangd with clangd_input
+//     (patches/clangd-browser.patch), and clangd's main thread waits for
+//     the next one;
 //   * the project's files on disk, for #include "x.h", compile_flags.txt and
 //     .clangd: every didOpen/didChange/didClose is mirrored into the module's
 //     in-memory file system when it arrives, before clangd reads the message;
@@ -30,12 +33,10 @@
 const WASM_TOTAL = typeof CLANGD_WASM_SIZE === 'number' ? CLANGD_WASM_SIZE : 0;
 const SYSROOT_TOTAL = typeof SYSROOT_SIZE === 'number' ? SYSROOT_SIZE : 0;
 
-/** clangd's command line. -sync: no threads, so every request runs on the
- * one there is, in order. --use-dirty-headers: an edited, unsaved header is
+/** clangd's command line. --use-dirty-headers: an edited, unsaved header is
  * seen by the files including it. The resource dir is where sysroot.tar.gz
  * puts clang's own headers. */
 const ARGS = [
-    '--sync',
     '--background-index=false',
     '--use-dirty-headers',
     '--pch-storage=memory',
@@ -61,64 +62,19 @@ const logMessage = (type, message) => post({ jsonrpc: '2.0', method: 'window/log
 const progress = (label, loaded, total) =>
     post({ jsonrpc: '2.0', method: 'yukibana/loading', params: { label, loaded, total } });
 
-// ---- stdin: whole framed messages, queued; clangd waits for the next one.
+// ---- stdin: each message framed and handed to clangd's input queue.
 
-const encoder = new TextEncoder();
-/** @type {Uint8Array[]} */
-const stdinQueue = [];
-let stdinPos = 0;
-/** @type {(() => void) | null} */
-let wakeClangd = null;
+/** @type {any} the Emscripten module, once loaded */
+let clangd = null;
 
-/** Whether clangd has read a document message: before that, a build
- * configuration file mirrored into the file system needs no reparse. */
-let documentsRead = false;
-/** @type {WeakSet<Uint8Array>} the framed messages that carry a document */
-const documentChunks = new WeakSet();
-let wakeScheduled = false;
-
-function writeStdin(message, isDocument = false) {
-    const body = encoder.encode(JSON.stringify(message));
-    const header = encoder.encode(`Content-Length: ${body.length}\r\n\r\n`);
-    const framed = new Uint8Array(header.length + body.length);
-    framed.set(header);
-    framed.set(body, header.length);
-    if (isDocument) documentChunks.add(framed);
-    stdinQueue.push(framed);
-    // Wake clangd in a task of its own, not now: the app sends a project's
-    // didOpens in one go, and clangd, once resumed, parses without yielding
-    // until it waits for input again. Letting the messages already posted
-    // arrive first means compile_flags.txt is on disk before main.cpp is
-    // parsed, which saves a second parse; correctness does not depend on it
-    // (see reconfigure).
-    if (wakeClangd && !wakeScheduled) {
-        wakeScheduled = true;
-        setTimeout(() => {
-            wakeScheduled = false;
-            wakeClangd?.();
-            wakeClangd = null;
-        });
-    }
-}
-
-/** Module.stdin: the next byte, or undefined when the queue is empty (a
- * short read; never a first byte, since clangd waits before each message). */
-function readStdinByte() {
-    const chunk = stdinQueue[0];
-    if (!chunk) return undefined;
-    if (stdinPos === 0 && documentChunks.has(chunk)) documentsRead = true;
-    const byte = chunk[stdinPos++];
-    if (stdinPos === chunk.length) {
-        stdinQueue.shift();
-        stdinPos = 0;
-    }
-    return byte;
-}
-
-/** Module.waitForStdin, awaited by clangd (JSPI) before reading a message. */
-function waitForStdin() {
-    if (stdinQueue.length > 0) return Promise.resolve();
-    return new Promise((resolve) => (wakeClangd = resolve));
+function writeStdin(message) {
+    const body = JSON.stringify(message);
+    const framed = `Content-Length: ${clangd.lengthBytesUTF8(body)}\r\n\r\n${body}`;
+    const size = clangd.lengthBytesUTF8(framed);
+    const ptr = clangd._malloc(size + 1);
+    clangd.stringToUTF8(framed, ptr, size + 1);
+    clangd._clangd_input(ptr, size); // copies
+    clangd._free(ptr);
 }
 
 // ---- stdout: Content-Length framed JSON, one object per postMessage.
@@ -269,25 +225,24 @@ function receive(message) {
         case 'textDocument/didOpen':
             if (!isCFamily(message.params.textDocument)) return reconfigure(uri);
             forwarded.add(uri);
-            return writeStdin(message, true);
+            return writeStdin(message);
         case 'textDocument/didChange':
             if (!forwarded.has(uri)) return reconfigure(uri);
-            return writeStdin(message, true);
+            return writeStdin(message);
         case 'textDocument/didClose':
             if (!forwarded.delete(uri)) return reconfigure(uri);
-            return writeStdin(message, true);
+            return writeStdin(message);
         default:
             writeStdin(message);
     }
 }
 
 /** After a file that is not a document changed on disk: when it is a build
- * configuration file and clangd may already have parsed something with the
- * old one, ask it to reparse the open files. didSave does that for every
+ * configuration file, ask clangd to reparse the open files. didSave does that for every
  * open file (ClangdLSPServer::onDocumentDidSave); a file whose compile
  * command came out the same is not rebuilt. */
 function reconfigure(uri) {
-    if (!documentsRead || !BUILD_CONFIG.test(new URL(uri).pathname)) return;
+    if (!BUILD_CONFIG.test(new URL(uri).pathname)) return;
     writeStdin({ jsonrpc: '2.0', method: 'textDocument/didSave', params: { textDocument: { uri } } });
 }
 self.onmessage = ({ data }) => receive(data);
@@ -342,11 +297,8 @@ async function unpackSysroot(bytes) {
 }
 
 async function start() {
-    if (typeof WebAssembly.Suspending !== 'function')
-        throw new Error(
-            'this browser has no WebAssembly JavaScript Promise Integration (JSPI), which clangd needs to wait for input; ' +
-                'it ships in Chrome and Edge 137 and later'
-        );
+    if (!crossOriginIsolated)
+        throw new Error('the page is not cross-origin isolated, and clangd needs SharedArrayBuffer for its threads');
     const started = performance.now();
     const [{ default: createClangd }, wasm, sysroot] = await Promise.all([
         import('./clangd.js'),
@@ -358,7 +310,7 @@ async function start() {
     const compiled = WebAssembly.compileStreaming(new Response(wasm, { headers: { 'content-type': 'application/wasm' } }));
     const sysrootBytes = new Response(sysroot).arrayBuffer();
 
-    const clangd = await createClangd({
+    clangd = await createClangd({
         thisProgram: '/usr/bin/clangd',
         instantiateWasm(imports, done) {
             compiled
@@ -366,10 +318,8 @@ async function start() {
                 .catch((error) => fail(`clangd.wasm: ${error}`));
             return {};
         },
-        stdin: readStdinByte,
         stdout: writeStdoutByte,
         stderr: writeStderrByte,
-        waitForStdin,
         onExit(code) {
             logMessage(code === 0 ? 3 : 1, `clangd exited with status ${code}`);
             self.close();

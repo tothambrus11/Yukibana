@@ -1,152 +1,66 @@
---- a/clang-tools-extra/clangd/JSONTransport.cpp
-+++ b/clang-tools-extra/clangd/JSONTransport.cpp
-@@ -16,6 +16,21 @@
- #include <optional>
- #include <system_error>
+--- a/clang-tools-extra/clangd/tool/ClangdMain.cpp
++++ b/clang-tools-extra/clangd/tool/ClangdMain.cpp
+@@ -60,6 +60,45 @@
+ #include <malloc.h>
+ #endif
  
 +#ifdef __EMSCRIPTEN__
-+#include <emscripten.h>
-+#include <stdio_ext.h>
-+// A browser has no blocking stdin: the bytes of the next message arrive as a
-+// JavaScript event, which cannot be delivered while clangd is inside a read.
-+// So, before reading a message whose first byte is not already in stdio's
-+// buffer, suspend (JSPI) until the embedder has queued at least one whole
-+// message. Module.waitForStdin is the embedder's promise for that; it is
-+// expected to deliver messages whole, so the reads that follow never find
-+// stdin empty in the middle of one.
-+EM_ASYNC_JS(void, clangdWaitForStdin, (), {
-+  if (Module.waitForStdin) await Module.waitForStdin();
-+});
++#include <emscripten/emscripten.h>
++#include <condition_variable>
++#include <cstring>
++
++// A browser has no stdin. clangd's main runs on a thread of its own
++// (-sPROXY_TO_PTHREAD), and the Worker that loaded it hands it the client's
++// messages, framed, by calling clangd_input; the transport reads them through
++// a FILE that waits while there is nothing to read.
++namespace {
++std::mutex InputMu;
++std::condition_variable InputArrived;
++std::string Input;
++size_t InputRead = 0;
++
++ssize_t readInput(void *, char *Buf, size_t Size) {
++  std::unique_lock<std::mutex> Lock(InputMu);
++  InputArrived.wait(Lock, [] { return InputRead < Input.size(); });
++  size_t N = std::min(Size, Input.size() - InputRead);
++  std::memcpy(Buf, Input.data() + InputRead, N);
++  InputRead += N;
++  if (InputRead == Input.size()) {
++    Input.clear();
++    InputRead = 0;
++  }
++  return N;
++}
++} // namespace
++
++extern "C" EMSCRIPTEN_KEEPALIVE void clangd_input(const char *Data,
++                                                  size_t Size) {
++  {
++    std::lock_guard<std::mutex> Lock(InputMu);
++    Input.append(Data, Size);
++  }
++  InputArrived.notify_one();
++}
 +#endif
 +
  namespace clang {
  namespace clangd {
- namespace {
-@@ -108,6 +123,10 @@
-                      "Got signal, shutting down");
-       if (ferror(In))
-         return llvm::errorCodeToError(llvm::errnoAsErrorCode());
+ 
+@@ -1031,8 +1070,13 @@
+ #endif
+   } else {
+     log("Starting LSP over stdin/stdout");
 +#ifdef __EMSCRIPTEN__
-+      if (__freadahead(In) == 0)
-+        clangdWaitForStdin();
-+#endif
-       if (readRawMessage(JSON)) {
-         ThreadCrashReporter ScopedReporter([&JSON]() {
-           auto &OS = llvm::errs();
---- a/clang-tools-extra/clangd/support/Shutdown.cpp
-+++ b/clang-tools-extra/clangd/support/Shutdown.cpp
-@@ -7,6 +7,7 @@
- //===----------------------------------------------------------------------===//
- 
- #include "support/Shutdown.h"
-+#include "llvm/Config/llvm-config.h"
- 
- #include <atomic>
- #include <cstdlib>
-@@ -16,6 +17,10 @@
- namespace clangd {
- 
- void abortAfterTimeout(std::chrono::seconds Timeout) {
-+#if !LLVM_ENABLE_THREADS
-+  // Without threads nothing can be lingering, and nothing could watch it.
-+  return;
-+#endif
-   // This is more portable than sys::WatchDog, and yields a stack trace.
-   std::thread([Timeout] {
-     std::this_thread::sleep_for(Timeout);
---- a/clang-tools-extra/clangd/support/Threading.cpp
-+++ b/clang-tools-extra/clangd/support/Threading.cpp
-@@ -107,7 +107,9 @@
-   llvm::thread Thread(
-       /*clang::DesiredStackSize*/ std::optional<unsigned>(8 << 20),
-       std::move(Task));
-+#if LLVM_ENABLE_THREADS
-   Thread.detach();
-+#endif
- }
- 
- Deadline timeoutSeconds(std::optional<double> Seconds) {
---- a/clang-tools-extra/clangd/GlobalCompilationDatabase.cpp
-+++ b/clang-tools-extra/clangd/GlobalCompilationDatabase.cpp
-@@ -7,6 +7,7 @@
- //===----------------------------------------------------------------------===//
- 
- #include "GlobalCompilationDatabase.h"
-+#include "llvm/Config/llvm-config.h"
- #include "Config.h"
- #include "FS.h"
- #include "ProjectModules.h"
-@@ -482,7 +483,9 @@
-   };
-   std::deque<Task> Queue;
-   std::optional<Task> ActiveTask;
-+#if LLVM_ENABLE_THREADS
-   std::thread Thread; // Must be last member.
-+#endif
- 
-   // Thread body: this is just the basic queue procesing boilerplate.
-   void run() {
-@@ -517,9 +520,18 @@
- 
- public:
-   BroadcastThread(DirectoryBasedGlobalCompilationDatabase &Parent)
-+#if LLVM_ENABLE_THREADS
-       : Parent(Parent), Thread([this] { run(); }) {}
++    std::FILE *In = fopencookie(nullptr, "r", {readInput, nullptr, nullptr, nullptr});
 +#else
-+      : Parent(Parent) {}
++    std::FILE *In = stdin;
 +#endif
- 
-   void enqueue(CDBLookupResult Lookup) {
-+#if !LLVM_ENABLE_THREADS
-+    // No thread to hand the task to: broadcast now, on the caller's.
-+    process(Lookup);
-+    return;
-+#endif
-     {
-       assert(!Lookup.PI.SourceRoot.empty());
-       std::lock_guard<std::mutex> Lock(Mu);
-@@ -544,7 +556,9 @@
-       ShouldStop.store(true, std::memory_order_release);
-     }
-     CV.notify_all();
-+#if LLVM_ENABLE_THREADS
-     Thread.join();
-+#endif
+     TransportLayer = newJSONTransport(
+-        stdin, llvm::outs(), InputMirrorStream ? &*InputMirrorStream : nullptr,
++        In, llvm::outs(), InputMirrorStream ? &*InputMirrorStream : nullptr,
+         PrettyPrint, InputStyle);
    }
- };
- 
---- a/clang-tools-extra/CMakeLists.txt
-+++ b/clang-tools-extra/CMakeLists.txt
-@@ -35,9 +35,10 @@
-   add_subdirectory(docs)
- endif()
- 
--# clangd has its own CMake tree. It requires threads.
--CMAKE_DEPENDENT_OPTION(CLANG_ENABLE_CLANGD "Build clangd language server" ON
--                       "LLVM_ENABLE_THREADS" OFF)
-+# clangd has its own CMake tree. Upstream requires threads; in a browser it
-+# runs with -sync instead, every request on the one thread, so it is built
-+# without them (see the rest of this patch for the three places that spawn).
-+option(CLANG_ENABLE_CLANGD "Build clangd language server" ON)
- if (CLANG_ENABLE_CLANGD)
-   add_subdirectory(clangd)
- endif()
---- a/llvm/lib/Support/Threading.cpp
-+++ b/llvm/lib/Support/Threading.cpp
-@@ -46,6 +46,13 @@
- // Unknown if threading turned off
- int llvm::get_physical_cores() { return -1; }
- 
-+// Declared for every configuration but defined only in the Unix and Windows
-+// parts, which a build without threads does not include; clangd's
-+// BackgroundQueue calls it, so clangd without threads failed to link.
-+llvm::SetThreadPriorityResult llvm::set_thread_priority(ThreadPriority) {
-+  return SetThreadPriorityResult::FAILURE;
-+}
-+
- #else
- 
- static int computeHostNumHardwareThreads();
+   if (!PathMappingsArg.empty()) {
 --- a/clang-tools-extra/clangd/ClangdLSPServer.cpp
 +++ b/clang-tools-extra/clangd/ClangdLSPServer.cpp
 @@ -555,6 +555,15 @@
@@ -182,30 +96,3 @@
        llvm::SmallString<256> PosixPath;
        if (!File.empty()) {
          assert(llvm::sys::path::is_absolute(File));
---- a/clang-tools-extra/clangd/support/Threading.h
-+++ b/clang-tools-extra/clangd/support/Threading.h
-@@ -12,6 +12,7 @@
- #include "support/Context.h"
- #include "llvm/ADT/FunctionExtras.h"
- #include "llvm/ADT/Twine.h"
-+#include "llvm/Config/llvm-config.h"
- #include <atomic>
- #include <cassert>
- #include <condition_variable>
-@@ -126,7 +127,16 @@
- template <typename T>
- std::future<T> runAsync(llvm::unique_function<T()> Action) {
-   return std::async(
-+#if LLVM_ENABLE_THREADS
-       std::launch::async,
-+#else
-+      // No thread to start: std::async(async) would throw, and with
-+      // exceptions off that is abort() (code completion's speculative index
-+      // query, after a first completion in a file). Deferred runs the action
-+      // on the caller's thread when the result is asked for, and not at all
-+      // when it never is.
-+      std::launch::deferred,
-+#endif
-       [](llvm::unique_function<T()> &&Action, Context Ctx) {
-         WithContext WithCtx(std::move(Ctx));
-         return Action();

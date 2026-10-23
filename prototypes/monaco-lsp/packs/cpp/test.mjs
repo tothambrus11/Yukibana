@@ -19,7 +19,8 @@
 //
 //   node test.mjs            (after ./build.sh; needs playwright-core)
 //
-// The page is NOT cross-origin isolated: the pack must not need it.
+// The page is cross-origin isolated (COOP/COEP), as the app is: clangd's
+// threads share memory through a SharedArrayBuffer.
 
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
@@ -34,20 +35,21 @@ const TYPES = { '.js': 'text/javascript', '.wasm': 'application/wasm', '.gz': 'a
 
 /** @type {Map<string, string>} path -> Content-Encoding sent, for the report */
 const encodings = new Map();
-/** A static server with no COOP/COEP headers. Plain: raw files, like
+const ISOLATION = { 'cross-origin-opener-policy': 'same-origin', 'cross-origin-embedder-policy': 'require-corp' };
+/** A static server with the COOP/COEP headers. Plain: raw files, like
  * `python3 -m http.server`. Encoding: the .br or .gz sibling when the
  * browser accepts it, with Content-Encoding, like the app's host. */
 async function serve(encoding) {
     const server = createServer(async (req, res) => {
         const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
         if (path === '/__test.html') {
-            res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><link rel=icon href="data:,"><title>cpp pack test</title>');
+            res.writeHead(200, { 'content-type': 'text/html', ...ISOLATION }).end('<!doctype html><link rel=icon href="data:,"><title>cpp pack test</title>');
             return;
         }
         const file = normalize(join(STATIC, path));
         try {
             if (!file.startsWith(STATIC) || !(await stat(file)).isFile()) throw new Error('not a file');
-            const headers = { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' };
+            const headers = { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', ...ISOLATION };
             let body;
             const accepts = String(req.headers['accept-encoding'] ?? '');
             for (const [token, ext] of encoding ? [['br', '.br'], ['gzip', '.gz']] : []) {
@@ -483,6 +485,12 @@ try {
     check('document highlight marks every use of points', (highlight.result ?? []).length === 4, `${(highlight.result ?? []).length} ranges`);
 
     // A new header, then the same header deleted.
+    //
+    // SETTLED: clangd answers an edit at once with the preamble (the
+    // headers' PCH) it has, patched, while it builds the new one, which
+    // here takes seconds. Until then a publish can be stale, even one built
+    // with an older compile_flags.txt, so these checks wait for the
+    // diagnostics they are about rather than for any change.
     const withExtra = SAMPLE_CXX20.replace('#include "geometry.h"', '#include "geometry.h"\n#include "extra.h"').replace('int unused = twice(21);', 'int unused = twice(kAnswer);');
     since = (await lsp.log()).length;
     lsp.notify('textDocument/didOpen', { textDocument: { uri: uri('extra.h'), languageId: 'cpp', version: 1, text: '#pragma once\ninline constexpr int kAnswer = 42;\n' } });
@@ -494,7 +502,7 @@ try {
     lsp.notify('textDocument/didClose', { textDocument: { uri: uri('extra.h') } });
     lsp.notify('workspace/didChangeWatchedFiles', { changes: [{ uri: uri('extra.h'), type: 3 }] });
     lsp.notify('textDocument/didChange', { textDocument: { uri: uri('main.cpp'), version: 5 }, contentChanges: [{ text: withExtra + '\n' }] });
-    const deleted = await diagnostics('main.cpp', (d) => errors(d).length > 0, since, 20000);
+    const deleted = await diagnostics('main.cpp', (d) => errors(d).some((e) => /'extra.h' file not found/.test(e.message)), since, 20000);
     check('a deleted header is not found', errors(deleted).some((d) => /'extra.h' file not found/.test(d.message)), show(deleted));
 
     // A ranged edit after a surrogate pair: the character offset counts the
@@ -506,7 +514,8 @@ try {
     const usesEmoji = SAMPLE_CXX20.replace('int unused = twice(21);', 'int unused = twice(kEmoji + kSmile);');
     since = (await lsp.log()).length;
     lsp.notify('textDocument/didChange', { textDocument: { uri: uri('main.cpp'), version: 6 }, contentChanges: [{ text: usesEmoji }] });
-    const missing = await diagnostics('main.cpp', (d) => errors(d).length > 0, since);
+    // Wait for the diagnostics that mention kSmile: see SETTLED below.
+    const missing = await diagnostics('main.cpp', (d) => errors(d).some((e) => /kSmile/.test(e.message)), since, 20000);
     // Insert ", kSmile = 2" between "1 /* 🙂 */" and ";".
     const at = position(emojiH, '1 /* 🙂 */', '1 /* 🙂 */'.length);
     since = (await lsp.log()).length;
