@@ -1,0 +1,184 @@
+--- a/clang-tools-extra/clangd/JSONTransport.cpp
++++ b/clang-tools-extra/clangd/JSONTransport.cpp
+@@ -16,6 +16,21 @@
+ #include <optional>
+ #include <system_error>
+ 
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++#include <stdio_ext.h>
++// A browser has no blocking stdin: the bytes of the next message arrive as a
++// JavaScript event, which cannot be delivered while clangd is inside a read.
++// So, before reading a message whose first byte is not already in stdio's
++// buffer, suspend (JSPI) until the embedder has queued at least one whole
++// message. Module.waitForStdin is the embedder's promise for that; it is
++// expected to deliver messages whole, so the reads that follow never find
++// stdin empty in the middle of one.
++EM_ASYNC_JS(void, clangdWaitForStdin, (), {
++  if (Module.waitForStdin) await Module.waitForStdin();
++});
++#endif
++
+ namespace clang {
+ namespace clangd {
+ namespace {
+@@ -108,6 +123,10 @@
+                      "Got signal, shutting down");
+       if (ferror(In))
+         return llvm::errorCodeToError(llvm::errnoAsErrorCode());
++#ifdef __EMSCRIPTEN__
++      if (__freadahead(In) == 0)
++        clangdWaitForStdin();
++#endif
+       if (readRawMessage(JSON)) {
+         ThreadCrashReporter ScopedReporter([&JSON]() {
+           auto &OS = llvm::errs();
+--- a/clang-tools-extra/clangd/support/Shutdown.cpp
++++ b/clang-tools-extra/clangd/support/Shutdown.cpp
+@@ -7,6 +7,7 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "support/Shutdown.h"
++#include "llvm/Config/llvm-config.h"
+ 
+ #include <atomic>
+ #include <cstdlib>
+@@ -16,6 +17,10 @@
+ namespace clangd {
+ 
+ void abortAfterTimeout(std::chrono::seconds Timeout) {
++#if !LLVM_ENABLE_THREADS
++  // Without threads nothing can be lingering, and nothing could watch it.
++  return;
++#endif
+   // This is more portable than sys::WatchDog, and yields a stack trace.
+   std::thread([Timeout] {
+     std::this_thread::sleep_for(Timeout);
+--- a/clang-tools-extra/clangd/support/Threading.cpp
++++ b/clang-tools-extra/clangd/support/Threading.cpp
+@@ -107,7 +107,9 @@
+   llvm::thread Thread(
+       /*clang::DesiredStackSize*/ std::optional<unsigned>(8 << 20),
+       std::move(Task));
++#if LLVM_ENABLE_THREADS
+   Thread.detach();
++#endif
+ }
+ 
+ Deadline timeoutSeconds(std::optional<double> Seconds) {
+--- a/clang-tools-extra/clangd/GlobalCompilationDatabase.cpp
++++ b/clang-tools-extra/clangd/GlobalCompilationDatabase.cpp
+@@ -7,6 +7,7 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "GlobalCompilationDatabase.h"
++#include "llvm/Config/llvm-config.h"
+ #include "Config.h"
+ #include "FS.h"
+ #include "ProjectModules.h"
+@@ -482,7 +483,9 @@
+   };
+   std::deque<Task> Queue;
+   std::optional<Task> ActiveTask;
++#if LLVM_ENABLE_THREADS
+   std::thread Thread; // Must be last member.
++#endif
+ 
+   // Thread body: this is just the basic queue procesing boilerplate.
+   void run() {
+@@ -517,9 +520,18 @@
+ 
+ public:
+   BroadcastThread(DirectoryBasedGlobalCompilationDatabase &Parent)
++#if LLVM_ENABLE_THREADS
+       : Parent(Parent), Thread([this] { run(); }) {}
++#else
++      : Parent(Parent) {}
++#endif
+ 
+   void enqueue(CDBLookupResult Lookup) {
++#if !LLVM_ENABLE_THREADS
++    // No thread to hand the task to: broadcast now, on the caller's.
++    process(Lookup);
++    return;
++#endif
+     {
+       assert(!Lookup.PI.SourceRoot.empty());
+       std::lock_guard<std::mutex> Lock(Mu);
+@@ -544,7 +556,9 @@
+       ShouldStop.store(true, std::memory_order_release);
+     }
+     CV.notify_all();
++#if LLVM_ENABLE_THREADS
+     Thread.join();
++#endif
+   }
+ };
+ 
+--- a/clang-tools-extra/CMakeLists.txt
++++ b/clang-tools-extra/CMakeLists.txt
+@@ -35,9 +35,10 @@
+   add_subdirectory(docs)
+ endif()
+ 
+-# clangd has its own CMake tree. It requires threads.
+-CMAKE_DEPENDENT_OPTION(CLANG_ENABLE_CLANGD "Build clangd language server" ON
+-                       "LLVM_ENABLE_THREADS" OFF)
++# clangd has its own CMake tree. Upstream requires threads; in a browser it
++# runs with -sync instead, every request on the one thread, so it is built
++# without them (see the rest of this patch for the three places that spawn).
++option(CLANG_ENABLE_CLANGD "Build clangd language server" ON)
+ if (CLANG_ENABLE_CLANGD)
+   add_subdirectory(clangd)
+ endif()
+--- a/llvm/lib/Support/Threading.cpp
++++ b/llvm/lib/Support/Threading.cpp
+@@ -46,6 +46,13 @@
+ // Unknown if threading turned off
+ int llvm::get_physical_cores() { return -1; }
+ 
++// Declared for every configuration but defined only in the Unix and Windows
++// parts, which a build without threads does not include; clangd's
++// BackgroundQueue calls it, so clangd without threads failed to link.
++llvm::SetThreadPriorityResult llvm::set_thread_priority(ThreadPriority) {
++  return SetThreadPriorityResult::FAILURE;
++}
++
+ #else
+ 
+ static int computeHostNumHardwareThreads();
+--- a/clang-tools-extra/clangd/ClangdLSPServer.cpp
++++ b/clang-tools-extra/clangd/ClangdLSPServer.cpp
+@@ -555,6 +555,15 @@
+     if (const auto &Dir = Params.initializationOptions.compilationDatabasePath)
+       CDBOpts.CompileCommandsDir = Dir;
+     CDBOpts.ContextProvider = Opts.ContextProvider;
++#ifdef __EMSCRIPTEN__
++    // In the browser the file system is in memory and the host writes a
++    // project's compile_flags.txt whenever the editor does, possibly after
++    // clangd has looked for it. Looking again costs a few map lookups, so
++    // never serve a cached answer (by default: 5 s for a file found, 30 s
++    // for one missing).
++    CDBOpts.RevalidateAfter = CDBOpts.RevalidateMissingAfter =
++        std::chrono::steady_clock::duration::zero();
++#endif
+     BaseCDB =
+         std::make_unique<DirectoryBasedGlobalCompilationDatabase>(CDBOpts);
+   }
+--- a/clang-tools-extra/clangd/ClangdServer.cpp
++++ b/clang-tools-extra/clangd/ClangdServer.cpp
+@@ -354,8 +354,14 @@
+       config::Params Params;
+       // Don't reread config files excessively often.
+       // FIXME: when we see a config file change event, use the event timestamp?
++#ifdef __EMSCRIPTEN__
++      // An in-memory file system: rereading .clangd is cheap, and an edit
++      // to it must apply to the next parse, not one 5 s later.
++      Params.FreshTime = std::chrono::steady_clock::now();
++#else
+       Params.FreshTime =
+           std::chrono::steady_clock::now() - std::chrono::seconds(5);
++#endif
+       llvm::SmallString<256> PosixPath;
+       if (!File.empty()) {
+         assert(llvm::sys::path::is_absolute(File));

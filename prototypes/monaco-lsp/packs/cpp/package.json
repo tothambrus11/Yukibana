@@ -1,0 +1,14 @@
+{
+    "name": "yukibana-pack-cpp",
+    "private": true,
+    "description": "Yukibana C/C++ pack: clangd (LLVM 21.1.8, Emscripten) in a module Web Worker. build.sh builds clangd; this file holds the worker's minifier and the test's browser driver.",
+    "type": "module",
+    "scripts": {
+        "build": "./build.sh",
+        "test": "node test.mjs"
+    },
+    "devDependencies": {
+        "esbuild": "0.25.10",
+        "playwright-core": "1.56.1"
+    }
+}
