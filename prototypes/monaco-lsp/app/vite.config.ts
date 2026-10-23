@@ -15,7 +15,7 @@ export default defineConfig({
 		sveltekit({
 			// Every page is prerendered and the app runs entirely in the browser,
 			// so the output is a folder of static files any web server can serve.
-			adapter: adapter({ pages: 'build', assets: 'build', precompress: true }),
+			adapter: adapter({ pages: 'build', assets: 'build', precompress: false }),
 			// Registered by hand (src/lib/pwa.ts), so the page can reload once
 			// to become cross-origin isolated.
 			serviceWorker: { register: false },

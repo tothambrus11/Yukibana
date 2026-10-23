@@ -194,8 +194,7 @@ double distance(const Point &a, const Point &b) {
 		settings: {},
 		entry: 'main.swift',
 		extension: '.swift',
-		runs: false,
-		cannotRun: 'Swift programs cannot run in the browser: no build of the Swift compiler runs in WebAssembly.',
+		runs: true,
 		sample: {
 			'main.swift': `let a = Point(x: 0, y: 0)
 let b = Point(x: 3, y: 4)

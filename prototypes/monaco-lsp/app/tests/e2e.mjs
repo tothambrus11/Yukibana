@@ -26,7 +26,7 @@ const CASES = {
 	python: { output: 'Point(x=0, y=0) to Point(x=3, y=4): 5.0', file: 'main.py', error: '\nundefined_name_xyz\n', access: '\nPoint(1, 2).', member: 'norm', definition: 'distance', definitionFile: 'geometry.py', hover: 'Point' },
 	javascript: { output: '(0, 0) to (3, 4): 5', file: 'main.js', error: '\na.nope();\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'geometry.js', hover: 'Point' },
 	cpp: { output: 'to', file: 'main.cpp', error: '\nint broken = undeclared_xyz;\n', access: '\nvoid f(Point p) { p.', member: 'norm', definition: 'distance', definitionFile: 'geometry', hover: 'Point' },
-	swift: { file: 'main.swift', error: '\nlet x: Int = "no"\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'Geometry.swift', hover: 'Point' },
+	swift: { output: 'to', file: 'main.swift', error: '\nlet x: Int = "no"\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'Geometry.swift', hover: 'Point' },
 	scala: { output: 'to', file: 'Main.scala', error: '\nval broken: Int = "no"\n', access: '\nval q = Point(1, 2)\nval r = q.', member: 'norm', definition: 'distance', definitionFile: 'Geometry.scala', hover: 'Point' },
 };
 
@@ -45,7 +45,14 @@ await new Promise((r) => setTimeout(r, 500));
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? '/opt/pw-browsers/chromium' });
 try {
-	for (const language of languages) await run(language, CASES[language]);
+	for (const language of languages) {
+		try {
+			await run(language, CASES[language]);
+		} catch (e) {
+			console.log(`FAIL ${language}: ${e instanceof Error ? e.message.split('\n')[0] : e}`);
+			failures.push(`${language}: ${e}`);
+		}
+	}
 	if (languages.includes('python') && languages.includes('javascript')) await switching();
 } finally {
 	await browser.close();
