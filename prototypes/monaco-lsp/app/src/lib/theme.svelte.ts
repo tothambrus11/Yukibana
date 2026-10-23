@@ -105,6 +105,8 @@ class ThemeState {
 	private apply(): void {
 		document.documentElement.dataset['theme'] = this.#current;
 		monaco.editor.setTheme(`yukibana-${this.#current}`);
+		// The installed app's title bar: app.html picks by system theme; a toggle overrides both.
+		for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) meta.content = this.#current === 'dark' ? '#121111' : '#fbfafa';
 	}
 }
 

@@ -23,10 +23,10 @@ that holds the project's documents and the bundled `lib.*.d.ts` files.
 
 | file | raw | gzip -9 | brotli 11 |
 |---|---:|---:|---:|
-| `server.js` (adapter, with the node:test/node:assert types) | 28.3 KiB | 9.3 KiB | 8.3 KiB |
+| `server.js` (adapter, with the types of the runner's Node modules) | 33.4 KiB | 10.6 KiB | 9.4 KiB |
 | `typescript-6.0.3.js` (minified ESM) | 3520.1 KiB | 1005.5 KiB | 781.0 KiB |
 | `libs-6.0.3.json` (64 lib files) | 2538.8 KiB | 387.0 KiB | 279.3 KiB |
-| **total** | **6087.2 KiB** | **1401.8 KiB** | **1068.6 KiB** |
+| **total** | **6092.3 KiB** | **1403.1 KiB** | **1069.7 KiB** |
 
 `build.sh` writes `.gz` and `.br` siblings for each file. On a local
 connection, `initialize` answers about 220 ms after the worker starts,
@@ -183,7 +183,7 @@ The alternative named in the task, `@typescript/vfs`, was not needed: the
   * Runs `npm ci` with its cache in `$PACK_CACHE/javascript/npm`, but only
     when the lock file changed.
   * Refuses a TypeScript version that is not 5.x or 6.x.
-  * Typechecks the adapter, then builds the three files into
+  * Typechecks the adapter, then builds the server's three files, `runner.js` and `strip.js` into
     `../../app/static/packs/javascript/` and writes `.gz` and `.br` siblings.
   * Incremental: big outputs are rebuilt only when their inputs change.
   * A clean build (npm install plus brotli 11 on 6 MB) takes about
@@ -195,14 +195,24 @@ The alternative named in the task, `@typescript/vfs`, was not needed: the
 * `tools/compress.mjs`: writes the compressed siblings and prints the size
   table.
 * `src/node/`: the runner's `node:test` (`test.ts`), `node:assert`
-  (`assert.ts`, with `inspect.ts` for its messages) and their types for the
-  server (`builtins.d.ts`).
+  (`assert.ts`, with `inspect.ts` for its messages), `process` and
+  `node:readline` (`process.ts`), and their types for the server
+  (`builtins.d.ts`).
+* `src/strip.ts` and `src/typescript-global.ts`: `strip.js`, which is
+  ts-blank-space bundled against the runner's copy of TypeScript.
 * `test-run.mjs` (`node test-run.mjs` after `./build.sh`): the runner in
   Chromium with COOP/COEP: the sample and a program reading two lines with
   `prompt()`, then test mode: the sample's tests, a failing one, the
   comparison with `node --test`, a test file that does not load, no test
   files, an uncaught error during a test, `test/` files and `console.log` in
-  tests, and `node:test` in a plain run.
+  tests, and `node:test` in a plain run; TypeScript (a run, a stack trace
+  at the `.ts` line, an `enum` refused, tests in `*.test.ts`, a failure
+  located in the `.ts` file); `process.argv`/`exit`/`exitCode`/
+  `stdout.write` and `node:readline` (`question`, `readline/promises`,
+  `for await`, `'line'` events); the environment; and `preview` (the page
+  built, run in a sandboxed `srcdoc` iframe under COEP, a missing import).
+* `test.mjs` also checks that a `.ts` CLI using `process` and
+  `node:readline` type-checks and that what they lack is an error.
 * `test.mjs` (`node test.mjs` after `./build.sh`)
   * Serves `app/static` over HTTP and serves the `.br` siblings like the
     app's host would.
@@ -233,8 +243,9 @@ The alternative named in the task, `@typescript/vfs`, was not needed: the
 
 ## Running
 
-`runner.js` (38.7 KiB raw, 16.1 KiB gzip, 14.2 KiB brotli; 8.9 KiB brotli
-before test mode) runs the project in its own module worker, as
+`runner.js` (48.0 KiB raw, 20.0 KiB gzip, 17.6 KiB brotli; 14.2 KiB
+brotli before TypeScript, `process` and `readline`, 8.9 KiB before test
+mode) runs the project in its own module worker, as
 `CONTRACT.md` ("Running a program") describes. Every project file is an ES
 module; each becomes a `blob:` URL whose relative imports (static,
 `export ... from`, and `import()` with a literal string) are rewritten to the
@@ -261,7 +272,177 @@ imported with `with { type: 'json' }`.
 
 Limits: circular imports between project files cannot be linked this way
 and are reported; bare imports (`'lodash'`) fail, since there are no
-packages; the program runs in a worker, so there is no DOM.
+packages (see "Packages"); the program runs in a worker, so there is no DOM.
+
+## Environment
+
+What a program run with **Run** (or **Test**) has, checked by
+`test-run.mjs` ("environment"):
+
+* **A module Web Worker of the app's page**, in the browser's own engine
+  (V8 in Chrome, SpiderMonkey in Firefox, JavaScriptCore in Safari), at the
+  language level of that browser. It is not Node and not Deno.
+* **Worker globals:** `fetch` (with `Request`, `Response`, `Headers`,
+  `AbortController`), `WebSocket`, `WebAssembly`, `crypto`
+  (`getRandomValues`, `randomUUID`, `subtle`), `TextEncoder`/`TextDecoder`,
+  `structuredClone`, `Intl`, `URL`, `Blob`, `atob`/`btoa`, `performance`,
+  timers (`setTimeout`, `setInterval`, `queueMicrotask`), `indexedDB`,
+  `OffscreenCanvas` (2D and WebGL contexts), `SharedArrayBuffer` and
+  `Atomics` (the page is cross-origin isolated).
+* **Added by the runner:** `console` (to the terminal), `prompt()`, the
+  `process` global, and the modules `node:test`, `node:assert`,
+  `node:assert/strict`, `node:process`, `node:readline` and
+  `node:readline/promises` (each also without `node:`).
+* **No DOM** in Run: `document`, `window`, `localStorage` and `alert` do
+  not exist. The editor still loads the `lib.dom` types (they hold the
+  declarations of `console`, `fetch` and the rest that the worker shares),
+  so `document` type-checks and then fails at run time. A web project
+  (see "Preview") is where the DOM is.
+* **No other Node:** no `fs`, `path`, `os`, `child_process`, `http`,
+  `Buffer`, `require`, `__dirname` or `global`, and `process.env` is empty.
+  An import of another `node:` module fails with the browser's "Failed to
+  resolve module specifier".
+* **The network is the browser's:** `fetch` reaches any server that allows
+  it with CORS. The page is isolated with COEP `require-corp`, so a
+  cross-origin response without CORS is refused. This is the user's
+  program talking to the network; the app's own code still loads nothing
+  from a third party.
+* **No packages:** no npm and no `node_modules`. See "Packages".
+
+## Command-line programs
+
+Run already works as a command-line program's terminal: output appears as
+it is printed, ANSI colours are rendered, and input is typed when the
+program asks for it. On top of `prompt()`, `src/node/process.ts` provides
+the Node API a CLI is written with, over the same stdin protocol:
+
+* **`process`:** `process.argv` is `['node', '/workspace/main.js']`. The
+  app's message may carry `args` (an array) to append, but the app does
+  not offer a field for them yet. `process.exit(code)` ends the run at
+  once with that status (it throws to unwind the stack, and nothing
+  printed after it is shown). `process.exitCode` is the status when the
+  program ends by itself. `process.stdout.write` and
+  `process.stderr.write` print without a newline. `process.env` is `{}`,
+  `process.platform` is `'browser'`, `process.cwd()` is `/workspace`, and
+  `process.nextTick` queues a microtask.
+* **`node:readline`:** `createInterface({ input: process.stdin, output:
+  process.stdout })`, `rl.question(query, callback)`, `'line'` and
+  `'close'` events, `for await (const line of rl)`, `setPrompt`/`prompt`
+  and `close`. `node:readline/promises` has `await rl.question(query)`. As
+  in Node, a question takes the next line before `'line'` listeners do.
+  Each line is read in a timer of its own, so the program's callbacks run
+  between lines and an interface waiting for input keeps the run alive.
+  End of input (Ctrl+D) closes it.
+* **Typed in the editor** (`src/node/builtins.d.ts`) with only what exists,
+  so `process.hrtime()` or `rl.history` is an error before it can crash.
+* **Not there:** `process.stdin` as a stream (`on('data')`, `read()`), raw
+  mode and key events, `readline.emitKeypressEvents`, the cursor movement
+  functions, and signals (`process.on('SIGINT')`): Stop terminates the
+  worker.
+
+## TypeScript
+
+The `typescript` project kind (app/src/lib/languages.ts) uses this pack's
+server and runner as they are. The server was already the TypeScript
+language service, and the sample's `tsconfig.json` turns `strict` on.
+
+* **Run and Test strip the types, as Node 22.18 and later do** (`node
+  main.ts`). `src/strip.ts` is
+  [ts-blank-space](https://github.com/bloomberg/ts-blank-space) 0.9.0
+  (Bloomberg, Apache-2.0), which uses TypeScript's own parser to replace
+  each type annotation with whitespace. Every line and column of the output
+  is the same as in the source. Stack traces, `node:test`'s `test at
+  file:line:col` and `assert.ok`'s quoted expression therefore point into
+  the `.ts` file without a source map (a worker's `Error.stack` would not
+  apply one anyway).
+* **TypeScript comes from the server's file.** For a project with a `.ts`
+  or `.mts` file, the runner fetches `typescript-6.0.3.js` from the same
+  URL the server uses, so the browser and the service worker keep one
+  copy. It then imports `strip.js` (9.5 KiB raw, 2.8 KiB brotli), which is
+  ts-blank-space bundled against that copy. Loading and evaluating the
+  3.5 MB file takes about 215 ms in a worker on the test machine (from
+  cache), once per Run. A JavaScript project does not load it. A separate
+  stripper would not have been smaller: amaro (Node's own, SWC compiled to
+  WebAssembly) is 6 MB unpacked, and sucrase is about 1 MB with its
+  dependencies, while the TypeScript download is already being made.
+* **Syntax that is more than types** (`enum`, `namespace` with values,
+  constructor parameter properties, `import x = require()`) is refused with
+  Node's reason (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`) and its position. The
+  sample's `tsconfig.json` sets `erasableSyntaxOnly`, so the editor marks
+  such syntax first. It also sets `allowImportingTsExtensions` and
+  `verbatimModuleSyntax`, because Node needs `./geometry.ts` spelled out
+  and keeps value imports as written.
+* **Test** finds `*.test.ts` and Node's other patterns with `.ts` and
+  `.mts`, as `node --test` does with type stripping.
+* **Not supported:** `.tsx` and `.cts`. Types are not checked at Run, only
+  in the editor, as with Node.
+
+## Preview (web projects)
+
+The `web` project kind (`index.html`, `style.css`, `main.ts`) uses the
+same server. Monaco highlights HTML and CSS with its own grammars but has
+no HTML or CSS language service here (Monaco's are 0.7 MB and 1.0 MB). Run
+shows the page in the app's **Preview** panel (app/src/lib/preview.ts),
+and this runner builds it: `{ type: 'preview', id, files, entry:
+'index.html' }` is answered with `{ type: 'page', id, html, styles, errors
+}`. The worker stays alive for the next request, so TypeScript is loaded
+once per preview.
+
+* **One self-contained document.** A `<link rel="stylesheet">` to a
+  project file becomes `<style data-yukibana-href="style.css">`. A
+  `<script src>` to a project file, and any inline module script, becomes a
+  `data:` URL whose imports are linked the way Vite resolves them
+  (`./counter`, `./counter.js` and `./counter.ts` all find `counter.ts`,
+  and `/main.ts` is at the project root). TypeScript is stripped as for
+  Run, or compiled with `ts.transpileModule` when it has an `enum` (as Vite
+  would). A bridge script goes first in `<head>`.
+* **The iframe** is `sandbox="allow-scripts allow-forms allow-modals"`
+  without `allow-same-origin`, and gets the document as `srcdoc`. The page
+  has an opaque origin, so it cannot read the app's storage or DOM. That is
+  also why the document is self-contained: a service worker does not serve
+  a document with an opaque origin, and `blob:` URLs belong to the app's
+  origin. An `about:srcdoc` document inherits the app's COEP
+  `require-corp`, and meets it because it loads nothing. A page that
+  fetches or embeds from another origin needs CORS or CORP headers from
+  that origin.
+* **Console:** the bridge posts `console.log/info/debug` (as stdout),
+  `warn/error` (as stderr), and uncaught errors and rejections to the app,
+  which prints them in the terminal. The app accepts these messages only
+  from that iframe's window.
+* **Live reload:** edits are gathered for 300 ms. If every changed file is
+  a stylesheet of the page, the app posts the new text and the bridge
+  replaces that `<style>`, so the page reloads nothing and keeps its state.
+  Any other change rebuilds the page and reloads the iframe. This is live
+  reload, not hot module replacement. A build error (a missing import)
+  goes to the terminal, and the last page stays.
+* **Limits:** relative URLs other than stylesheets and scripts (images,
+  `fetch('./data.json')`, CSS `url()` and `@import`) do not resolve,
+  because the document has no folder of its own. Project files are text,
+  so there are no images to serve anyway. There are no bare imports
+  (`'lit'`), no CSS modules and no `import.meta.env`. **Download** gives a
+  Vite 8 project (`npm run dev` with real HMR, `npm run build`), which
+  `app/tests/export.mjs` builds.
+
+## Packages
+
+Bare imports (`import _ from 'lodash'`) are not implemented. These are the
+options, and choosing one is a product decision rather than a technical
+one:
+
+1. **An import map to a CDN** (esm.sh, jsDelivr) inside the run. It is
+   simple, but the program's code then comes from a third party at run
+   time, which the pack contract rules out for the app's own code. It also
+   works only online, and the editor gets no types unless the `.d.ts`
+   files are fetched too.
+2. **Packages fetched from the npm registry in the browser** (tarballs,
+   unpacked and cached by the service worker), with types from the
+   packages' `.d.ts` files. This raises the same third-party question, and
+   also needs a module resolver and CommonJS interop.
+3. **A curated set shipped in the pack**: a few packages, pre-bundled as
+   ES modules with their types. This works offline and fits the contract,
+   but each package is a decision about size and maintenance.
+4. **None**, as now: the platform's standard library and the Node built-ins
+   listed above.
 
 ## Testing
 
@@ -270,7 +451,7 @@ does with no arguments, in the browser:
 
 * **Which files.** Node 22's default patterns: `*.test.js`, `*-test.js`,
   `*_test.js`, `test-*.js`, `test.js` in any directory and every file
-  under a `test/` directory (`.mjs` too), outside `node_modules`, in path
+  under a `test/` directory (`.mjs`, `.ts` and `.mts` too), outside `node_modules`, in path
   order. `tests/geometry.test.js` is one; `tests/helpers.js` is not. No
   test file at all is exit 1 with a message on stderr (Node would exit 0).
 * **How.** Each file is imported like a program's entry, with its own

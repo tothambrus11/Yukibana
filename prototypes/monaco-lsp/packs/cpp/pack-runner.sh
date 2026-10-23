@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The second half of the runner build (build-runner.sh calls it after the
 # LLVM step; it can also run on its own once cc.wasm exists in the cache):
-# the WASI sysroot, GoogleTest's libraries (gtest.tar), runner.js, and the
+# the WASI sysroot, the test frameworks' libraries (gtest.tar, catch2.tar,
+# doctest.tar), runner.js, and the
 # files' .gz/.br siblings, all into ../../app/static/packs/cpp/.
 set -euo pipefail
 
@@ -95,15 +96,26 @@ tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C
   | gzip -9n > "$OUT/wasi-sysroot.tar.gz"
 rm -rf x stage
 
-step "GoogleTest libraries (gtest.tar)"
-# Fetched by runner.js only to build tests (or a program that includes
-# <gtest/...>). The headers are in sysroot.tar.gz (build.sh), which both
-# workers download anyway. Plain tar: its .br/.gz siblings are what travels.
-mkdir -p stage/wasi/lib/wasm32-wasip1
-cp "$EH/lib/libgtest.a" "$EH/lib/libgtest_main.a" stage/wasi/lib/wasm32-wasip1/
-tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C stage -c wasi > "$OUT/gtest.tar"
+step "test framework libraries (gtest.tar, catch2.tar, doctest.tar)"
+# One archive per framework, fetched by runner.js only to build tests (or a
+# program) that include that framework, so a project downloads the one it
+# uses. The headers are in sysroot.tar.gz (build.sh), which both workers
+# download anyway. Plain tar: its .br/.gz siblings are what travels.
+"$HERE/build-test-frameworks.sh"
+TESTFW="$CACHE/testfw"
+pack_libs() { # archive dir libs...
+  local archive=$1 dir=$2; shift 2
+  rm -rf stage && mkdir -p stage/wasi/lib/wasm32-wasip1
+  for lib in "$@"; do cp "$dir/lib/$lib" stage/wasi/lib/wasm32-wasip1/; done
+  tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C stage -c wasi > "$OUT/$archive"
+  rm -rf stage
+}
+pack_libs gtest.tar "$EH" libgtest.a libgtest_main.a
+pack_libs catch2.tar "$TESTFW" libCatch2.a libCatch2Main.a
+pack_libs doctest.tar "$TESTFW" libdoctest_main.a
 cp "$EH/LICENSE-googletest.txt" "$OUT/LICENSE-googletest.txt"
-rm -rf stage
+cp "$TESTFW/LICENSE-catch2.txt" "$OUT/LICENSE-catch2.txt"
+cp "$TESTFW/LICENSE-doctest.txt" "$OUT/LICENSE-doctest.txt"
 
 step "runner"
 if [ -f "$B/bin/llvm.wasm" ]; then
@@ -115,8 +127,10 @@ fi
   --target=es2022 --external:./cc.js --define:CC_WASM_SIZE="$(stat -c %s "$OUT/cc.wasm" 2>/dev/null || echo 0)" \
   --define:WASI_SYSROOT_SIZE="$(stat -c %s "$OUT/wasi-sysroot.tar.gz")" \
   --define:GTEST_SIZE="$(stat -c %s "$OUT/gtest.tar")" \
+  --define:CATCH2_SIZE="$(stat -c %s "$OUT/catch2.tar")" \
+  --define:DOCTEST_SIZE="$(stat -c %s "$OUT/doctest.tar")" \
   --define:SYSROOT_SIZE="$(stat -c %s "$OUT/sysroot.tar.gz")" --log-level=warning
-files=("$OUT/runner.js" "$OUT/gtest.tar")
+files=("$OUT/runner.js" "$OUT/gtest.tar" "$OUT/catch2.tar" "$OUT/doctest.tar")
 [ -f "$OUT/cc.wasm" ] && files+=("$OUT/cc.js" "$OUT/cc.wasm")
 node "$HERE/compress.mjs" "${files[@]}"
-ls -la "$OUT"/runner.js "$OUT"/cc.* "$OUT"/wasi-sysroot.tar.gz "$OUT"/gtest.tar* 2>/dev/null || true
+ls -la "$OUT"/runner.js "$OUT"/cc.* "$OUT"/wasi-sysroot.tar.gz "$OUT"/{gtest,catch2,doctest}.tar* 2>/dev/null || true

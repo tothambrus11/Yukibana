@@ -10,10 +10,14 @@ real clangd, built from source here; nothing is a third-party prebuilt.
 freestanding headers (`stddef.h`, `stdarg.h`, `stdint.h`, ... in
 `/usr/lib/clang/21/include`). clangd parses as `x86_64-linux-musl` with
 `-stdlib=libc++` (the build's default triple and C++ library), so
-`#include <stdio.h>`, `<vector>`, `<string>`, `<cmath>` resolve. GoogleTest
-**1.18.0**'s headers are there too (`/usr/include/gtest`, with libc++abi's
-`cxxabi.h`, which they include), so `#include <gtest/gtest.h>` in a test
-resolves in the editor (see "Running", Tests).
+`#include <stdio.h>`, `<vector>`, `<string>`, `<cmath>` resolve. The test
+frameworks' headers are there too: GoogleTest **1.18.0** (`/usr/include/gtest`,
+with libc++abi's `cxxabi.h`, which they include), Catch2 **3.16.1**
+(`/usr/include/catch2`, with the `catch_user_config.hpp` of the wasm build)
+and doctest **2.5.3** (`/usr/include/doctest/doctest.h`), so
+`#include <gtest/gtest.h>`, `<catch2/catch_test_macros.hpp>` or
+`<doctest/doctest.h>` in a test resolves in the editor (see "Running",
+Tests).
 
 ## Files (served at `/packs/cpp/`)
 
@@ -22,10 +26,12 @@ resolves in the editor (see "Running", Tests).
 | `server.js` | the worker: transport, file mirroring, loader (esbuild-minified) | 5.4 KB | 2.7 KB | 2.4 KB |
 | `clangd.js` | Emscripten glue, ES module | 76 KB | 20 KB | 18 KB |
 | `clangd.wasm` | clangd 21.1.8, `-Oz` | 24.0 MB | 8.5 MB | 6.0 MB |
-| `sysroot.tar.gz` | 1955 headers: musl, libc++, clang freestanding, GoogleTest | 1.9 MB (gzip, unpacked in the worker) | | |
+| `sysroot.tar.gz` | 2139 headers: musl, libc++, clang freestanding, GoogleTest, Catch2, doctest | 2.1 MB (gzip, unpacked in the worker) | | |
 
-First load is about **7.9 MB** with brotli (10.5 MB with gzip); GoogleTest's
-headers are 0.13 MB of it. The `LICENSE-*.txt` files are not fetched.
+First load is about **8.1 MB** with brotli (10.7 MB with gzip); the test
+frameworks' headers are 0.31 MB of it (GoogleTest 0.13 MB, Catch2's 183
+headers 0.12 MB, doctest's one 0.06 MB; Catch2 and doctest grew the archive
+from 1,938,546 to 2,119,426 bytes). The `LICENSE-*.txt` files are not fetched.
 
 `server.js` downloads `clangd.wasm` and `sysroot.tar.gz` in parallel when
 the worker starts, reporting each with `yukibana/loading`, compiles the wasm
@@ -280,6 +286,21 @@ interpreted or simulated, and no server is involved.
   without pthreads, gMock or stream redirection (`CaptureStdout` and death
   tests need `dup`/`dup2`, which WASI does not have). `libgtest.a` and
   `libgtest_main.a` are `gtest.tar`; the headers are in `sysroot.tar.gz`.
+* **Catch2 3.16.1 and doctest 2.5.3**, built by `build-test-frameworks.sh`
+  with the same compiler and flags (C++17). Catch2 is a shallow clone of its
+  `v3.16.1` tag checked against the tag's commit (`0809213`; GitHub's source
+  archives are not reachable from this build machine and Catch2 publishes no
+  source tarball), configured with `CATCH_CONFIG_NO_POSIX_SIGNALS` (WASI has
+  no signals); `libCatch2.a` and `libCatch2Main.a` are `catch2.tar`. doctest
+  is one header, pinned by SHA-256 at its `v2.5.3` commit; its
+  implementation and `main` (`DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN`, without
+  POSIX signals) are compiled once into `libdoctest_main.a`, which is
+  `doctest.tar`, so a Test does not compile doctest's implementation every
+  time. One line of the shipped `doctest.h` is changed: doctest turns its
+  exception support off for any `__wasi__` target, from before WASI had
+  exceptions (`CHECK_THROWS_AS` would not compile); the copy here keeps it
+  on when clang announces WebAssembly exception handling
+  (`__wasm_exception_handling__`). The headers are in `sysroot.tar.gz`.
 * **Headers shared with the language server**: libc++'s headers and clang's
   own headers come from `sysroot.tar.gz`, the file `server.js` already
   downloads, so the browser and service worker fetch it once.
@@ -326,19 +347,49 @@ which adds roughly 0.1 to 0.3 s to linking. Exceptions stay the default
 anyway; nothing in the downloads needed `-fno-exceptions`.
 
 **Tests** (`{ type: 'test' }`, the app's Test button): the project's tests
-are GoogleTest files under `tests/` (the sample has
-`tests/geometry_test.cpp`). The runner compiles every `.c`/`.cpp` of the
-project except the entry file and any other file that defines `main`, plus
-everything under `tests/`, and links them with `-lgtest` and, unless a test
-file defines its own `main`, `-u __main_argc_argv -lgtest_main` (wasi-libc
-refers to `main(argc, argv)` only weakly, which would not pull it from the
-archive). GoogleTest's report is the program's stdout, in its terminal
-colours (`GTEST_COLOR=yes` in the program's environment, as
-`--gtest_color=yes` would; the app's terminal renders ANSI colours); the
-exit status is 0 only when every test passed. `gtest.tar` is fetched the first time tests are
-built (or a Run compiles a file that includes `<gtest/...>`), never for a
-plain Run. Including `<gtest/gtest.h>` makes a test file slow to compile:
-about 3.5 s for the sample's three tests, against 0.4 s for `geometry.cpp`.
+are files under `tests/` (the sample has `tests/geometry_test.cpp`) written
+for **GoogleTest, doctest or Catch2 v3**. The framework is the one they
+include (`<gtest/...>`, `<doctest/...>`, `<catch2/...>`, comments left out),
+as a real build would need it; nothing else records it, and there is no
+other setting. Tests that include two frameworks are refused before anything
+is compiled: "The tests mix test frameworks: tests/geometry_test.cpp
+includes <gtest/...> (GoogleTest), tests/other_test.cpp includes
+<catch2/...> (Catch2). A test program links one of them; convert or remove
+the others." (exit 1). Tests that include none and define no `main` are
+refused too. The runner compiles every `.c`/`.cpp` of the project except
+the entry file and any other file that defines `main`, plus everything
+under `tests/`, and links the framework's libraries (`-lgtest`,
+`-lCatch2`, nothing for doctest) and, unless a test file defines its own
+`main`, the framework's main with `-u __main_argc_argv` (`-lgtest_main`,
+`-lCatch2Main`, `-ldoctest_main`; wasi-libc refers to `main(argc, argv)`
+only weakly, which would not pull it from the archive). For doctest, a test
+that defines `DOCTEST_CONFIG_IMPLEMENT` or `DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN`
+itself gets no prebuilt implementation (tested: it links once). The report
+is the program's stdout in the framework's own terminal colours, which each
+gives only to a terminal it recognises, so they are asked for: GoogleTest
+with `GTEST_COLOR=yes` in the environment, doctest with `--force-colors`,
+Catch2 with `--colour-mode ansi` on the command line (the app's terminal
+renders ANSI colours). The exit status is 0 only when every test passed
+(GoogleTest and doctest exit 1 otherwise, Catch2 42, as natively). Each
+framework's archive is fetched the first time its tests are built (or a Run
+compiles a file that includes it), never for a plain Run, and a project
+fetches only its own framework's. Including `<gtest/gtest.h>` makes a test
+file slow to compile: about 3.5 s for the sample's three tests, against
+0.4 s for `geometry.cpp`; the same tests take about 2.1 s with doctest and
+2.5 s with Catch2 (`catch_test_macros.hpp` and its floating-point matchers),
+in the runs below on a shared machine.
+
+The app's top bar has a **Test framework** choice next to Test for C++
+projects (`app/src/lib/cpp-tests.ts`). It shows the framework `tests/`
+includes ("Mixed frameworks" or "Test framework" when that is not one).
+Choosing one rewrites every test file that is still a sample test as the app
+wrote it (the sample's three geometry tests exist in all three frameworks)
+for the chosen framework; tests someone wrote or changed are left as they
+are, and a sample test file of the chosen framework is added instead
+(`tests/geometry_test.cpp`'s tests while `geometry.h` is the sample's, else
+a test of `std::string` that needs nothing of the project), with a warning
+in the output panel when the tests now mix frameworks. The Download's
+CMakeLists.txt fetches the same framework (`app/src/lib/export.ts`).
 `#include "geometry.h"` from `tests/` resolves through `-I.` in the
 sample's `compile_flags.txt`, for clang and clangd alike (clangd resolves it
 against the directory of `compile_flags.txt`).
@@ -347,19 +398,22 @@ against the directory of `compile_flags.txt`).
 
 | file | what | raw | gzip | brotli |
 | --- | --- | --- | --- | --- |
-| `runner.js` | the worker, with `wasi.js` (esbuild-minified) | 9.4 KB | 4.5 KB | 4.1 KB |
+| `runner.js` | the worker, with `wasi.js` (esbuild-minified) | 11.2 KB | 5.2 KB | 4.8 KB |
 | `cc.js` | Emscripten glue, ES module | 74 KB | 20 KB | 18 KB |
 | `cc.wasm` | clang + wasm-ld 21.1.8, `-Oz` | 42.4 MB | 15.7 MB | 11.3 MB |
 | `wasi-sysroot.tar.gz` | 234 files: wasi-libc headers, libs (libc++ with exceptions), crt1, builtins | 0.99 MB (gzip, unpacked in the worker) | | |
-| `sysroot.tar.gz` | shared with `server.js` (see above) | 1.9 MB | | |
-| `gtest.tar` | `libgtest.a`, `libgtest_main.a`; fetched only for tests | 563 KB | 152 KB | 110 KB |
+| `sysroot.tar.gz` | shared with `server.js` (see above) | 2.1 MB | | |
+| `gtest.tar` | `libgtest.a`, `libgtest_main.a`; fetched only for GoogleTest tests | 563 KB | 152 KB | 110 KB |
+| `catch2.tar` | `libCatch2.a`, `libCatch2Main.a`; fetched only for Catch2 tests | 1.63 MB | 424 KB | 279 KB |
+| `doctest.tar` | `libdoctest_main.a` (implementation and main); fetched only for doctest tests | 297 KB | 87 KB | 64 KB |
 
-The first Run downloads **14.2 MB** (with brotli for the files that have
+The first Run downloads **14.4 MB** (with brotli for the files that have
 `.br` siblings; the test below measures exactly this). That drops to
 **12.3 MB** when the language server has already fetched
-`sysroot.tar.gz`. The first Test adds 110 KB (`gtest.tar`). Later runs
-download nothing. Exceptions cost 41 KB of that (`wasi-sysroot.tar.gz`),
-GoogleTest's headers 0.13 MB (`sysroot.tar.gz`).
+`sysroot.tar.gz`. The first Test adds the framework's archive: 110 KB for
+GoogleTest, 64 KB for doctest, 279 KB for Catch2. Later runs download
+nothing. Exceptions cost 41 KB of that (`wasi-sysroot.tar.gz`), the test
+frameworks' headers 0.31 MB (`sysroot.tar.gz`).
 
 **Test** (`node test-run.mjs`): headless Chromium 1194, app/static served
 with `Cross-Origin-Opener-Policy: same-origin` and
@@ -369,11 +423,11 @@ is a disk cache. The machine was shared with other builds.
 
 ```text
 PASS  the page is crossOriginIsolated
-PASS  sample project (cold): prints the distance and the norm, exits 0  "5.000000\n5.000000\n" code=0 in 11086 ms, 14.2 MB transferred; Loading the compiler@29, Compiling geometry.cpp (1/2)@667, Compiling main.cpp (2/2)@2284, Linking@10035, Running@10532
-PASS  sample project (warm): same output from the browser cache  code=0 in 4265 ms, 0 bytes transferred; Loading the compiler@36, Compiling geometry.cpp (1/2)@1150, Compiling main.cpp (2/2)@1911, Linking@4095, Running@4252
-PASS  loading messages for each download  wasi-sysroot.tar.gz 987401/987401, sysroot.tar.gz 1938546/1938546, cc.wasm 42410950/42410950
-PASS  C++ (cin): prompt without newline, two lines of stdin, their sum  "first number: second number: sum: 42\n" requests=2 seen-before-input=["first number: ","first number: second number: "] code=0 3111 ms
-PASS  C (scanf): prompt without newline, two lines of stdin, their sum  "first number: second number: sum: 42\n" requests=2 seen-before-input=["first number: ","first number: second number: "] code=0 1081 ms
+PASS  sample project (cold): prints the distance and the norm, exits 0  "5.000000\n5.000000\n" code=0 in 7301 ms, 14.4 MB transferred; Loading the compiler@27, Compiling geometry.cpp (1/2)@779, Compiling main.cpp (2/2)@2323, Linking@6784, Running@7221
+PASS  sample project (warm): same output from the browser cache  code=0 in 4101 ms, 0 bytes transferred; Loading the compiler@71, Compiling geometry.cpp (1/2)@659, Compiling main.cpp (2/2)@1134, Linking@3448, Running@4020
+PASS  loading messages for each download  wasi-sysroot.tar.gz 987401/987401, sysroot.tar.gz 2119442/2119442, cc.wasm 42410950/42410950
+PASS  C++ (cin): prompt without newline, two lines of stdin, their sum  "first number: second number: sum: 42\n" requests=2 seen-before-input=["first number: ","first number: second number: "] code=0 3440 ms
+PASS  C (scanf): prompt without newline, two lines of stdin, their sum  "first number: second number: sum: 42\n" requests=2 seen-before-input=["first number: ","first number: second number: "] code=0 1492 ms
 PASS  end of file on stdin (Ctrl-D) ends scanf  code=2 "first number: "
 PASS  compile error: clang diagnostics on stderr, non-zero exit  code=1
 PASS  4 MB of locals work; deep recursion ends in a stack-overflow message, exit 134  deepest completed: 4000 calls; "The program crashed: Maximum call stack size exceeded (stack overflow: the browser allows only a few thousand nested calls)"
@@ -382,17 +436,27 @@ PASS  long double prints: C (printf %Lf)  "0.333333\n" code=0 ""
 PASS  vector index out of bounds: the program is stopped, exit 134, nothing after it runs  code=134 "The program crashed: unreachable (abort(), or a failed check: in C++, for example, an index out of range on a vector, string, array or span)"
 PASS  C++ exceptions: thrown and caught (own type, std::stoi, vector::at), destructors run while unwinding  "caught custom\nstoi: invalid_argument\nat: out_of_range\ndestructor ran\nint 42\n" code=0 ""
 PASS  uncaught C++ exception: terminate message with type and what(), exit 134  code=134 "libc++abi: terminating due to uncaught exception of type std::logic_error: boom"
-PASS  sample's GoogleTest tests: all pass, exit 0, main.cpp left out  code=0 in 5138 ms, 110 kB transferred (gtest.tar [563200,563200]); Loading the compiler@24, Compiling geometry.cpp (1/2)@762, Compiling tests/geometry_test.cpp (2/2)@1195, Linking@4830, Running the tests@5096
-PASS  a failing test: reported on stdout with file and line, exit non-zero  code=1 in 8035 ms
-PASS  test mode without tests/: says so, exit 1  "No tests to run: put GoogleTest files in tests/, for example tests/geometry_test.cpp."
+PASS  sample's GoogleTest tests: all pass, exit 0, main.cpp left out  code=0 in 4873 ms, 110 kB transferred (gtest.tar [563200,563200]); Loading the compiler@28, Compiling geometry.cpp (1/2)@582, Compiling tests/geometry_test.cpp (2/2)@944, Linking@4524, Running the tests@4837
+PASS  GoogleTest's report is in its terminal colours: green [ RUN ]/[ OK ]/[ PASSED ], nothing else escaped  "Running main() from googletest/src/gtest_main.cc\n\u001b[0;32m[==========] \u001b[mRunning 3 tests from 1 test suite.\n\u001b[0;32m[-----"
+PASS  a failing test: reported on stdout with file and line, exit non-zero  code=1 in 8723 ms
+PASS  a failing test is in red  "13 ms total)\n\u001b[0;32m[  PASSED  ] \u001b[m3 tests.\n\u001b[0;31m[  FAILED  ] \u001b[m2 tests, listed below:\n\u001b[0;31m[  FAILED  ] \u001b[mBroken.NormIsWrong\n\u001b[0;31m[  FAILED  ] \u001b[mBroken.ThrowsSomethingElse\n\n 2 FAILED TESTS\n"
+PASS  doctest: the sample's tests pass, exit 0, only doctest.tar fetched  code=0 in 3477 ms (doctest.tar [296960,296960]; archives: doctest.tar); Loading the compiler@17, Compiling geometry.cpp (1/2)@664, Compiling tests/geometry_test.cpp (2/2)@1106, Linking@3238, Running the tests@3448
+PASS  doctest: the report is in colour (--force-colors)  "\u001b[0;36m[doctest] \u001b[0mdoctest version is \"2.5.3\"\n\u001b[0;36m[doctest] \u001b[0mrun with \"--help\" for options\n\u001b[0m\u001b[0m\u001b[0m\u001b[0;33m=="
+PASS  doctest: failing tests are reported with file and line, exit non-zero  code=1 in 5914 ms
+PASS  catch2: the sample's tests pass, exit 0, only catch2.tar fetched  code=0 in 3743 ms (catch2.tar [1628160,1628160]; archives: catch2.tar); Loading the compiler@31, Compiling geometry.cpp (1/2)@666, Compiling tests/geometry_test.cpp (2/2)@1006, Linking@3466, Running the tests@3720
+PASS  catch2: the report is in colour (--colour-mode ansi)  "Randomness seeded to: 773790583\n\u001b[1;31m\u001b[1;33m\u001b[0m\u001b[0m\u001b[1;32m==========================================================="
+PASS  catch2: failing tests are reported with file and line, exit non-zero  code=42 in 5887 ms
+PASS  doctest with DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN in a test: links once, passes  code=0 ""
+PASS  tests that mix GoogleTest and Catch2: a message naming both files, exit 1, nothing compiled  "The tests mix test frameworks: tests/geometry_test.cpp includes <gtest/...> (GoogleTest), tests/other_test.cpp includes <catch2/...> (Catch2). A test program links one of them; convert or remove the others."
+PASS  test mode without tests/: says so, exit 1  "No tests to run: put test files (GoogleTest, doctest or Catch2) in tests/, for example tests/geometry_test.cpp."
 PASS  duplicate main: the link error names main.cpp and lib/other.cpp, non-zero exit  code=1 (wasm-ld: error: duplicate symbol: main / >>> defined in lib/other.cpp / >>> defined in main.cpp, and the same for __original_main and __main_void)
-PASS  compiler cannot be instantiated: error on stderr and an exit message  code=1 "clang could not start: WebAssembly.Memory(): could not allocate memory" 765 ms
-PASS  endless loop: terminated by the page, which stays responsive  stopped after 2316 ms; Loading the compiler@33, Compiling main.cpp (1/1)@584, Linking@1096, Running@1266
+PASS  compiler cannot be instantiated: error on stderr and an exit message  code=1 "clang could not start: WebAssembly.Memory(): could not allocate memory" 673 ms
+PASS  endless loop: terminated by the page, which stays responsive  stopped after 2249 ms; Loading the compiler@27, Compiling main.cpp (1/1)@511, Linking@936, Running@1236
 all passed
 ```
 
-On a local server the cold run takes about 6 s (11 s in the run above, on a
-machine busy with a Swift build). On a real network, add the time to
+On a local server the cold run takes about 6 s (7 s in the run above, on a
+machine shared with other builds). On a real network, add the time to
 download 12 MB. The warm run takes about 3 s, nearly all of it compiling:
 `<vector>` + `<cstdio>` at `-O2` takes about 2 s for `main.cpp`. Linking
 takes about 0.2 s warm (0.5 s cold).
@@ -419,6 +483,67 @@ Running main() from googletest/src/gtest_main.cc
 [  PASSED  ] 3 tests.
 ```
 
+The same failing tests in doctest and in Catch2 (`tests/broken_test.cpp`
+beside the sample's tests converted by the framework choice), as their own
+reports print them, colours removed; exit status 1 and 42:
+
+```text
+[doctest] doctest version is "2.5.3"
+[doctest] run with "--help" for options
+===============================================================================
+tests/broken_test.cpp:7:
+TEST CASE:  norm is wrong
+
+tests/broken_test.cpp:9: ERROR: CHECK( p.norm() == doctest::Approx(6.0) ) is NOT correct!
+  values: CHECK( 5 == Approx( 6 ) )
+
+===============================================================================
+tests/broken_test.cpp:12:
+TEST CASE:  throws something else
+
+tests/broken_test.cpp:13: ERROR: CHECK_THROWS_AS( throw std::runtime_error("x"), std::logic_error ) threw a DIFFERENT exception: "x"
+
+===============================================================================
+[doctest] test cases: 5 | 3 passed | 2 failed | 0 skipped
+[doctest] assertions: 6 | 4 passed | 2 failed |
+[doctest] Status: FAILURE!
+```
+
+```text
+Randomness seeded to: 527262531
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+main is a Catch2 v3.16.1 host application.
+Run with -? for options
+
+-------------------------------------------------------------------------------
+throws something else
+-------------------------------------------------------------------------------
+tests/broken_test.cpp:13
+...............................................................................
+
+tests/broken_test.cpp:14: FAILED:
+  REQUIRE_THROWS_AS( throw std::runtime_error("x"), std::logic_error )
+due to unexpected exception with message:
+  x
+
+-------------------------------------------------------------------------------
+norm is wrong
+-------------------------------------------------------------------------------
+tests/broken_test.cpp:8
+...............................................................................
+
+tests/broken_test.cpp:10: FAILED:
+  REQUIRE_THAT( p.norm(), Catch::Matchers::WithinULP(6.0, 4) )
+with expansion:
+  5.0 is within 4 ULPs of 6.0000000000000000e+00 ([5.9999999999999964e+00, 6.
+  0000000000000036e+00])
+
+===============================================================================
+test cases: 5 | 3 passed | 2 failed
+assertions: 6 | 4 passed | 2 failed
+```
+
 **Standard input**: when the program reads and has no input buffered, the
 runner flushes, posts `{ type: 'stdin' }` and blocks in `Atomics.wait`.
 C's stdio (musl-based) does not flush stdout before reading stdin; C++'s
@@ -434,12 +559,20 @@ SharedArrayBuffer (a page that is not isolated), stdin is at end of file.
   with exnref; see Exceptions above). In an older one every C++ program
   fails at `WebAssembly.compile`: the runner prints the browser's
   `CompileError` on stderr and exits 1. C programs are unaffected.
-* **Tests are GoogleTest only, without gMock** (`<gmock/gmock.h>` is not
-  shipped), and without what needs `dup`/`dup2`: death tests
-  (`EXPECT_DEATH`) and `testing::internal::CaptureStdout`. Test files live
+* **Tests are GoogleTest without gMock** (`<gmock/gmock.h>` is not
+  shipped) and without what needs `dup`/`dup2` (death tests,
+  `EXPECT_DEATH`, and `testing::internal::CaptureStdout`), **doctest**, or
+  **Catch2 v3**, one framework per project: tests that include two are
+  refused with a message naming a file of each. No signal handling in
+  doctest or Catch2 (WASI has none): a crash in a test ends the whole run
+  with the runner's crash message instead of a report naming the test.
+  Test files live
   under `tests/`; a Run ignores that directory, a Test leaves out the
   program's `main`. Whether a file "defines main" is a textual check
-  (`int main(` or `auto main(` outside comments).
+  (`int main(` or `auto main(` outside comments, or doctest's
+  `DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN`), and so is the framework (its
+  `#include` lines): a framework included only through a header outside
+  `tests/` is not seen.
 * **Call depth**: V8 runs wasm on the worker's native stack (about 1 MB).
   The test's small recursive function completes 4,000 nested calls but not
   8,000, far fewer than a native process allows. Running out is reported as
@@ -487,13 +620,16 @@ tarball and applies the patch. It configures `build-wasm-cc` (MinSizeRel,
 `-Oz`, no tests/docs/static analyzer/plugins) and builds `llvm-driver`
 (2526 steps). It then calls `pack-runner.sh`: the WASI sysroot (download,
 checks, strip, the libraries with exceptions laid over wasi-sdk's, pack),
-`gtest.tar`, `runner.js` (esbuild), and `.gz`/`.br` siblings.
+`gtest.tar`, `catch2.tar`, `doctest.tar`, `runner.js` (esbuild), and
+`.gz`/`.br` siblings.
 `build-cxx-runtime.sh` (called by `build.sh` before the sysroot step, and
 again by `pack-runner.sh`, a no-op once cached in `$PACK_CACHE/cpp/eh`)
 fetches wasi-sdk 30's toolchain and GoogleTest, extracts `libunwind/` from
 the LLVM tarball, and builds libc++, libc++abi, `Unwind-wasm.c`,
 `src/uncaught.cpp` and GoogleTest: about 1.5 minutes at `-j3` on this
-machine, plus the 119 MB download the first time.
+machine, plus the 119 MB download the first time. `build-test-frameworks.sh`
+(called the same way, cached in `$PACK_CACHE/cpp/testfw`) builds Catch2 and
+doctest with that toolchain: about 1.5 minutes at `-j3`.
 Time on this machine (4 cores shared with another agent's clangd build,
 `-j3`, `nice`): **102 minutes** for the LLVM step, about 3 minutes for the
 rest (mostly brotli on `cc.wasm`). The build tree `build-wasm-cc` is

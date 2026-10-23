@@ -1,0 +1,59 @@
+Third-party software in the Rust pack (app/static/packs/rust/)
+==============================================================
+
+rust-analyzer.wasm
+  rust-analyzer's IDE crates (ra_ap_ide, ra_ap_ide_db, ra_ap_hir and the
+  other ra_ap_* crates, version 0.0.358), https://github.com/rust-lang/rust-analyzer
+  Copyright the rust-analyzer developers. MIT OR Apache-2.0.
+  Their crates.io dependencies (salsa, rowan, chalk/next-solver crates,
+  smallvec, hashbrown, serde_json, ...) are MIT and/or Apache-2.0
+  (Cargo.lock in packs/rust/server lists them); the Rust standard library
+  compiled into it is MIT OR Apache-2.0.
+
+std-src.tar
+  core, alloc and std from rust-src 1.98.0, https://github.com/rust-lang/rust
+  Copyright the Rust Project Developers. MIT OR Apache-2.0.
+
+miri.wasm, sysroot.tar
+  Miri and rustc (1.78.0-dev), compiled to WebAssembly by bjorn3
+  (https://github.com/rust-lang/miri/issues/722), and the
+  x86_64-unknown-linux-gnu sysroot built with it, as published by rubri
+  (https://github.com/LyonSyonII/rubri, MIT) at commit
+  00de75bcec3d8cf5156aef2382c738cbfe069986. Miri, rustc and the standard
+  library: Copyright the Rust Project Developers, MIT OR Apache-2.0. The
+  sysroot's other crates (hashbrown, libc, memchr, object, gimli, addr2line,
+  miniz_oxide, adler, cfg-if, rustc-demangle, getopts, unicode-width,
+  compiler_builtins) are MIT and/or Apache-2.0 (compiler_builtins also
+  carries the LLVM exception).
+
+runner.js
+  includes browser_wasi_shim 0.4.2, https://github.com/bjorn3/browser_wasi_shim,
+  Copyright bjorn3 and contributors, MIT OR Apache-2.0.
+
+The MIT licence, as these projects use it:
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+The Apache License 2.0 is at https://www.apache.org/licenses/LICENSE-2.0

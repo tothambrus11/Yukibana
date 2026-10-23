@@ -14,6 +14,9 @@
 //   gtest.tar            GoogleTest's libraries, fetched only to build tests
 //                        (type 'test') or a program that includes <gtest/...>;
 //                        its headers are in sysroot.tar.gz
+//   catch2.tar           the same for Catch2 v3 (<catch2/...>)
+//   doctest.tar          the same for doctest (<doctest/...>): its
+//                        implementation and main, prebuilt
 //
 // Each tool call gets a fresh instance of cc.wasm (compiled once): clang and
 // lld keep global state, and a browser cannot fork. Files go from one
@@ -21,12 +24,14 @@
 
 import { createWasi, ProcExit } from './wasi.js';
 
-/* global CC_WASM_SIZE, WASI_SYSROOT_SIZE, SYSROOT_SIZE, GTEST_SIZE */
+/* global CC_WASM_SIZE, WASI_SYSROOT_SIZE, SYSROOT_SIZE, GTEST_SIZE, CATCH2_SIZE, DOCTEST_SIZE */
 const SIZES = {
     'cc.wasm': typeof CC_WASM_SIZE === 'number' ? CC_WASM_SIZE : 0,
     'wasi-sysroot.tar.gz': typeof WASI_SYSROOT_SIZE === 'number' ? WASI_SYSROOT_SIZE : 0,
     'sysroot.tar.gz': typeof SYSROOT_SIZE === 'number' ? SYSROOT_SIZE : 0,
     'gtest.tar': typeof GTEST_SIZE === 'number' ? GTEST_SIZE : 0,
+    'catch2.tar': typeof CATCH2_SIZE === 'number' ? CATCH2_SIZE : 0,
+    'doctest.tar': typeof DOCTEST_SIZE === 'number' ? DOCTEST_SIZE : 0,
 };
 
 const TARGET = ['--target=wasm32-wasip1', '--sysroot=/wasi', '-resource-dir=/usr/lib/clang/21'];
@@ -41,13 +46,72 @@ const OBJ = '.yukibana/obj/';
 const LIB = '/wasi/lib/wasm32-wasip1';
 /** Where a project keeps its tests (type 'test'); left out of a plain run. */
 const TESTS = /^tests\//;
-const INCLUDES_GTEST = /#\s*include\s*[<"]gtest\//;
+
+/**
+ * The test frameworks, told apart by what a file includes, as a real build
+ * would need them: `include` matches a file's `#include` lines (comments
+ * left out). Each one's libraries are an archive of their own, fetched the
+ * first time a project uses it. `main` is linked when no source defines one;
+ * `args` and `env` give the report its colours (the app's terminal renders
+ * ANSI; none of the three colours a stream it does not take for a terminal).
+ */
+const FRAMEWORKS = {
+    gtest: {
+        name: 'GoogleTest', header: '<gtest/gtest.h>', include: /^[ \t]*#[ \t]*include[ \t]*[<"]gtest\//m,
+        archive: 'gtest.tar', libs: ['-lgtest'], main: ['-lgtest_main'],
+        // As --gtest_color=yes would; the environment also reaches a test
+        // file with its own main, whatever it does with argv.
+        args: [], env: { GTEST_COLOR: 'yes' },
+    },
+    doctest: {
+        name: 'doctest', header: '<doctest/doctest.h>', include: /^[ \t]*#[ \t]*include[ \t]*[<"]doctest\//m,
+        // doctest is header-only; its implementation and main are one
+        // prebuilt object (DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN), linked unless
+        // the project implements doctest itself.
+        archive: 'doctest.tar', libs: [], main: ['-ldoctest_main'],
+        args: ['--force-colors'], env: {},
+    },
+    catch2: {
+        name: 'Catch2', header: '<catch2/catch_test_macros.hpp>', include: /^[ \t]*#[ \t]*include[ \t]*[<"]catch2\//m,
+        archive: 'catch2.tar', libs: ['-lCatch2'], main: ['-lCatch2Main'],
+        args: ['--colour-mode', 'ansi'], env: {},
+    },
+};
+
+const withoutComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
 /** Whether a source defines main: `int main(` or `auto main(` outside
- * comments. A heuristic, enough to leave the program's own main out of a
- * test build and to link GoogleTest's main only when there is none. */
-const definesMain = (text) =>
-    /\b(?:int|auto)\s+main\s*\(/.test(text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, ''));
+ * comments, or doctest's DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN. A heuristic,
+ * enough to leave the program's own main out of a test build and to link a
+ * framework's main only when there is none. */
+const definesMain = (text) => {
+    const code = withoutComments(text);
+    return /\b(?:int|auto)\s+main\s*\(/.test(code) || /^[ \t]*#[ \t]*define[ \t]+DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN\b/m.test(code);
+};
+
+/** Whether a source implements doctest itself (DOCTEST_CONFIG_IMPLEMENT or _WITH_MAIN). */
+const implementsDoctest = (text) => /^[ \t]*#[ \t]*define[ \t]+DOCTEST_CONFIG_IMPLEMENT/m.test(withoutComments(text));
+
+/**
+ * The test framework the given files use: the one their #includes name, or
+ * null for none. Throws, naming a file of each, when they use more than one,
+ * which no single test program can link.
+ */
+function frameworkOf(files, paths) {
+    const found = new Map();
+    for (const path of paths) {
+        const code = withoutComments(files[path] ?? '');
+        for (const [id, fw] of Object.entries(FRAMEWORKS)) if (!found.has(id) && fw.include.test(code)) found.set(id, path);
+    }
+    if (found.size > 1) {
+        const which = [...found].map(([id, path]) => `${path} includes ${FRAMEWORKS[id].header.replace(/\/.*>/, '/...>')} (${FRAMEWORKS[id].name})`);
+        throw new UserError(`The tests mix test frameworks: ${which.join(', ')}. A test program links one of them; convert or remove the others.\n`);
+    }
+    return found.size ? [...found.keys()][0] : null;
+}
+
+/** An error that is the project's, reported on stderr as it is, exit status 1. */
+class UserError extends Error {}
 
 const post = (msg) => self.postMessage(msg);
 const phase = (text) => post({ type: 'phase', text });
@@ -120,12 +184,12 @@ function load() {
         // From the server's sysroot: libc++'s headers, laid under the WASI
         // sysroot where clang's WASI driver looks for them, and clang's own
         // headers. Not its musl headers: the target is WASI, not Linux.
-        // GoogleTest's headers too: they are a few dozen small files.
+        // The test frameworks' headers too (a few hundred small files).
         const files = [];
         for (const [path, bytes] of server) {
             if (path.startsWith('/usr/include/c++/v1/'))
                 files.push(['/wasi/include/wasm32-wasip1/c++/v1/' + path.slice('/usr/include/c++/v1/'.length), bytes]);
-            else if (path.startsWith('/usr/include/gtest/')) files.push(['/wasi/include/' + path.slice('/usr/include/'.length), bytes]);
+            else if (/^\/usr\/include\/(gtest|catch2|doctest)\//.test(path)) files.push(['/wasi/include/' + path.slice('/usr/include/'.length), bytes]);
             else if (path.startsWith('/usr/lib/clang/')) files.push([path, bytes]);
         }
         files.push(...wasi); // after: its __config_site replaces the musl one
@@ -134,15 +198,15 @@ function load() {
     return toolchain;
 }
 
-let gtest = null;
+const frameworks = {};
 
-/** Adds GoogleTest's libraries to the toolchain's files (once). */
-function loadGtest() {
-    gtest ??= (async () => {
-        const [{ files }, tar] = await Promise.all([load(), download('gtest.tar')]);
+/** Adds a test framework's libraries to the toolchain's files (once each). */
+function loadFramework(id) {
+    frameworks[id] ??= (async () => {
+        const [{ files }, tar] = await Promise.all([load(), download(FRAMEWORKS[id].archive)]);
         files.push(...(await untar(tar)));
     })();
-    return gtest;
+    return frameworks[id];
 }
 
 /**
@@ -233,9 +297,20 @@ function flagsFor(files, cxx) {
  * type 'run': every .c/.cpp of the project except those under tests/.
  * type 'test': the project's sources without the program's main (the entry
  * file, and any other file that defines main) plus tests/**, linked with
- * GoogleTest and, unless a test file has its own main, gtest_main.
+ * the test framework they include (GoogleTest, doctest or Catch2) and,
+ * unless a test file has its own main, that framework's main.
  */
-async function run({ type, files, entry, stdin }) {
+async function run(request) {
+    try {
+        return await build(request);
+    } catch (error) {
+        if (!(error instanceof UserError)) throw error;
+        stderr(error.message);
+        return 1;
+    }
+}
+
+async function build({ type, files, entry, stdin }) {
     const all = Object.keys(files)
         .filter((p) => CXX.test(p) || C.test(p))
         .sort();
@@ -244,7 +319,7 @@ async function run({ type, files, entry, stdin }) {
     if (testing) {
         const tests = all.filter((p) => TESTS.test(p));
         if (tests.length === 0) {
-            stderr('No tests to run: put GoogleTest files in tests/, for example tests/geometry_test.cpp.\n');
+            stderr('No tests to run: put test files (GoogleTest, doctest or Catch2) in tests/, for example tests/geometry_test.cpp.\n');
             return 1;
         }
         sources = [...all.filter((p) => !TESTS.test(p) && p !== entry && !definesMain(files[p])), ...tests];
@@ -255,10 +330,17 @@ async function run({ type, files, entry, stdin }) {
             return 1;
         }
     }
-    const usesGtest = testing || sources.some((p) => INCLUDES_GTEST.test(files[p]));
+    // What the compiled sources include decides the framework, and so do
+    // tests/' headers, which only the sources that include them compile.
+    const scanned = [...sources, ...(testing ? Object.keys(files).filter((p) => TESTS.test(p) && !sources.includes(p)) : [])];
+    const framework = frameworkOf(files, scanned);
+    const ownMain = sources.some((p) => definesMain(files[p]));
+    if (testing && !framework && !ownMain)
+        throw new UserError('No test framework: the files in tests/ include none of <gtest/gtest.h>, <doctest/doctest.h> or <catch2/...>, and none defines main.\n');
+    const fw = framework ? FRAMEWORKS[framework] : null;
     const cxxProgram = sources.some((p) => CXX.test(p));
     phase('Loading the compiler');
-    await (usesGtest ? Promise.all([load(), loadGtest()]) : load());
+    await (framework ? Promise.all([load(), loadFramework(framework)]) : load());
 
     const objects = {};
     for (const [i, source] of sources.entries()) {
@@ -293,18 +375,19 @@ async function run({ type, files, entry, stdin }) {
 
     phase('Linking');
     const lib = LIB;
-    // GoogleTest's main is in an archive, and wasi-libc's __main_void only
+    // A framework's main is in an archive, and wasi-libc's __main_void only
     // refers weakly to __main_argc_argv (main(argc, argv)), which does not
-    // pull an archive member: -u does.
-    const gtestMain = usesGtest && !sources.some((p) => definesMain(files[p]));
+    // pull an archive member: -u does. doctest's is also its implementation,
+    // which a project that implements doctest itself already has.
+    const frameworkMain = fw && !ownMain && !(framework === 'doctest' && sources.some((p) => implementsDoctest(files[p])));
     const { code, out } = await tool(
         'wasm-ld',
         [
             '-m', 'wasm32', '-L' + lib, lib + '/crt1-command.o',
             ...Object.keys(objects),
             ...(cxxProgram ? [lib + '/yukibana-uncaught.o'] : []),
-            ...(gtestMain ? ['-u', '__main_argc_argv', '-lgtest_main'] : []),
-            ...(usesGtest ? ['-lgtest'] : []),
+            ...(frameworkMain ? ['-u', '__main_argc_argv', ...fw.main] : []),
+            ...(fw ? fw.libs : []),
             // libc-printscan-long-double: without it, printing a long double
             // (printf("%Lf"), or cout, through libc++'s num_put) aborts with
             // "Support for formatting long double values is currently disabled".
@@ -340,13 +423,12 @@ async function run({ type, files, entry, stdin }) {
         fflush(new DataView(memory.buffer).getUint32(stdout.value, true));
     };
     const wasi = createWasi({
-        args: ['main'],
-        // GoogleTest colours its report only on a terminal it recognises;
-        // the app's terminal renders ANSI colours, so it is told to, as
-        // --gtest_color=yes would (the environment also reaches a test file
-        // with its own main, whatever it does with argv). Nothing else is in
-        // the environment.
-        env: usesGtest ? { GTEST_COLOR: 'yes' } : {},
+        // The frameworks colour their reports only on a terminal they
+        // recognise; the app's terminal renders ANSI colours, so they are
+        // told to (FRAMEWORKS). The arguments go to a test program, or to
+        // the framework's own main; nothing else is in the environment.
+        args: ['main', ...(fw && (testing || frameworkMain) ? fw.args : [])],
+        env: fw ? fw.env : {},
         stdin,
         write: (fd, text) => post({ type: fd === 1 ? 'stdout' : 'stderr', text }),
         requestInput: () => post({ type: 'stdin' }),

@@ -111,6 +111,14 @@ A runner that can also run the project's tests takes the same message with
 runs them, with the same messages back: the report on stdout, exit 0 only
 when every test passed.
 
+A language may use another language's pack (`pack` in
+`app/src/lib/languages.ts`): TypeScript and web projects use the
+`javascript` pack's server and runner. That runner also takes
+`{ type: 'preview', id, files, entry }` for a web project's Preview panel
+and answers it with a page rather than a run (packs/javascript/README.md,
+"Preview"); this is the JavaScript pack's own addition, not something
+other runners need.
+
 Runner to app, any number of times:
 
 ```ts

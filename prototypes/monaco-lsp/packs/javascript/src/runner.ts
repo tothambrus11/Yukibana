@@ -1,6 +1,6 @@
 /**
- * Runs a JavaScript project in this worker, as the "Running a program"
- * section of packs/CONTRACT.md describes.
+ * Runs a JavaScript or TypeScript project in this worker, as the "Running a
+ * program" section of packs/CONTRACT.md describes.
  *
  * The project's files are ES modules. Each one becomes a `blob:` URL whose
  * relative imports (`./geometry.js`, `../lib/x.js`, a literal `import()`)
@@ -9,11 +9,21 @@
  * that merely look like imports are left alone. The entry is then imported,
  * and the browser runs the graph as it would any other module graph.
  *
- * The program sees an ordinary worker: `console` writes to the terminal and
- * `prompt(message)` reads a line from it (blocking, like the browser's own
- * `prompt`). The program has ended when its modules have been evaluated and
- * no timer it started is pending; promises it awaits without a timer
- * (an unanswered `fetch`) are not tracked, and such a program needs Stop.
+ * `.ts` and `.mts` files have their types stripped first, as `node main.ts`
+ * does (Node 22.18 and later): types become whitespace (strip.ts), so lines
+ * and columns stay those of the source, and syntax that is more than types
+ * (`enum`, `namespace`, parameter properties) is refused with Node's reason.
+ * TypeScript itself is loaded only for a project that has such files, from
+ * the file the language server downloads (one download, cached once).
+ *
+ * The program sees an ordinary worker plus the Node globals a command-line
+ * program needs: `console` writes to the terminal, `prompt(message)` reads a
+ * line from it (blocking, like the browser's own `prompt`), and `process`
+ * (`argv`, `exit`, `exitCode`, `stdout.write`) and `node:readline` work over
+ * the same terminal (src/node/process.ts). The program has ended when its
+ * modules have been evaluated and no timer it started is pending; promises
+ * it awaits without a timer (an unanswered `fetch`) are not tracked, and such
+ * a program needs Stop.
  *
  * `node:test`, `node:assert` and `node:assert/strict` (and `assert`,
  * `assert/strict`) import this pack's own versions (`src/node/`), so a
@@ -21,42 +31,95 @@
  * imports every test file `node --test` would find, each with its own copy
  * of the project's modules, runs their tests one after another and prints a
  * report like Node's spec reporter; exit 0 only when every test passed.
+ *
+ * `type: 'preview'` is this pack's addition to the contract, for web
+ * projects: the worker stays alive and answers each request with the page
+ * (`index.html`) as one self-contained document for a sandboxed iframe,
+ * its stylesheets inlined and its module scripts linked as `data:` URLs
+ * (see `buildPage`).
  */
 import { init, parse } from 'es-module-lexer/minimal';
+import type * as TS from 'typescript';
 import { legacy as assertLegacy, setSources, strict as assertStrict } from './node/assert';
+import { createProcess, createReadline, ExitSignal, type Io } from './node/process';
 import * as nodeTest from './node/test';
+import type * as Strip from './strip';
+
+// Injected by build.sh: the TypeScript file next to this script (the one the
+// language server downloads) and its uncompressed size, for the progress bar.
+declare const __TS_FILE__: string;
+declare const __TS_SIZE__: number;
 
 type ToApp =
+	| { type: 'loading'; label: string; loaded: number; total: number }
 	| { type: 'phase'; text: string }
 	| { type: 'stdout' | 'stderr'; text: string }
 	| { type: 'stdin' }
-	| { type: 'exit'; code: number };
+	| { type: 'exit'; code: number }
+	| Page;
+
+/**
+ * The answer to a `preview` request: the page as one HTML document, or
+ * `html: null` and the reasons it could not be built. `styles` are the
+ * project paths of the stylesheets the page inlined, in the
+ * `<style data-yukibana-href="path">` elements the app may swap in place.
+ */
+interface Page {
+	type: 'page';
+	id: number;
+	html: string | null;
+	styles: string[];
+	errors: string[];
+}
 
 interface Run {
 	type: 'run' | 'test';
 	files: Record<string, string>;
 	entry: string;
 	stdin: SharedArrayBuffer | null;
+	/** Arguments after the entry in `process.argv`; none when absent. */
+	args?: string[];
 }
 
-const send = (message: ToApp) => postMessage(message);
+interface Preview {
+	type: 'preview';
+	/** Echoed in the answer, so the app can drop answers to requests it has replaced. */
+	id: number;
+	files: Record<string, string>;
+	/** The page, e.g. `index.html`. */
+	entry: string;
+}
+
+/** Messages after the run has ended are dropped: `process.exit()` stops the program's output there. */
+const send = (message: ToApp) => {
+	if (!exited) postMessage(message);
+};
 
 /** A problem in the project itself (a missing or circular import), reported without a stack. */
 class ProjectError extends Error {}
 
-onmessage = (e: MessageEvent<Run>) => {
-	if (e.data.type !== 'run' && e.data.type !== 'test') return;
+onmessage = (e: MessageEvent<Run | Preview>) => {
+	const m = e.data;
+	// A preview worker serves one request after another until the app terminates it.
+	if (m.type === 'preview') {
+		void preview(m);
+		return;
+	}
+	if (m.type !== 'run' && m.type !== 'test') return;
 	onmessage = null;
-	void (e.data.type === 'test' ? runTests(e.data) : run(e.data));
+	void (m.type === 'test' ? runTests(m) : run(m));
 };
 
 /** The real timers, before `trackTimers` wraps them: test timeouts are not the program's timers. */
 const realTimers = { setTimeout: globalThis.setTimeout.bind(globalThis), clearTimeout: globalThis.clearTimeout.bind(globalThis) };
 const writeLine = (text: string) => send({ type: 'stdout', text: `${text}\n` });
 
-async function run({ files, entry, stdin }: Run): Promise<void> {
+/** How `node` links a project: exact paths, Node's built-in modules, types stripped strictly. */
+const NODE: LinkOptions = { url: blobUrl, resolution: 'exact', builtins: true, lenient: false };
+
+async function run({ files, entry, stdin, args }: Run): Promise<void> {
 	installConsole();
-	installPrompt(stdin);
+	const process = installProcess(installPrompt(stdin), entry, args ?? []);
 	const timers = trackTimers();
 	addEventListener('unhandledrejection', (e) => fail(e.reason));
 	addEventListener('error', (e) => {
@@ -67,7 +130,8 @@ async function run({ files, entry, stdin }: Run): Promise<void> {
 	let url: string;
 	try {
 		await init();
-		url = link(files, entry);
+		await loadTypeScriptFor(files);
+		url = link(files, entry, NODE);
 	} catch (e) {
 		fail(e);
 		return;
@@ -90,40 +154,44 @@ async function run({ files, entry, stdin }: Run): Promise<void> {
 		exit(nodeTest.summary(performance.now() - started));
 		return;
 	}
-	exit(0);
+	exit(Number(process.exitCode ?? 0) || 0);
 }
+
+/** TypeScript sources the runner strips: `.ts` and `.mts`, not declaration files. */
+const isTypeScript = (path: string) => /\.m?ts$/.test(path) && !/\.d\.m?ts$/.test(path);
 
 /**
- * The files `node --test` runs when given no paths (Node 22's defaults):
- * `*.test.js`, `*-test.js`, `*_test.js`, `test-*.js`, `test.js` in any
- * directory and every file under a `test/` directory, `.mjs` too, outside
- * node_modules.
+ * The files `node --test` runs when given no paths (Node 22's defaults, with
+ * type stripping): `*.test.js`, `*-test.js`, `*_test.js`, `test-*.js`,
+ * `test.js` in any directory and every file under a `test/` directory,
+ * `.mjs`, `.ts` and `.mts` too, outside node_modules.
  */
 function isTestFile(path: string): boolean {
-	if (!/\.m?js$/.test(path) || /(^|\/)node_modules\//.test(path)) return false;
+	if (!/\.m?[jt]s$/.test(path) || /\.d\.m?ts$/.test(path) || /(^|\/)node_modules\//.test(path)) return false;
 	const name = path.slice(path.lastIndexOf('/') + 1);
-	return /(^|\/)test\//.test(path) || /^(.+[.\-_]test|test-.*|test)\.m?js$/.test(name);
+	return /(^|\/)test\//.test(path) || /^(.+[.\-_]test|test-.*|test)\.m?[jt]s$/.test(name);
 }
 
-async function runTests({ files, stdin }: Run): Promise<void> {
+async function runTests({ files, stdin, entry, args }: Run): Promise<void> {
 	installConsole();
-	installPrompt(stdin);
+	installProcess(installPrompt(stdin), entry, args ?? []);
 	const tests = Object.keys(files).filter(isTestFile).sort();
 	if (tests.length === 0) {
-		send({ type: 'stderr', text: 'No test files found: node --test looks for *.test.js, *-test.js, *_test.js, test-*.js, test.js and test/**/*.js.\n' });
+		send({ type: 'stderr', text: 'No test files found: node --test looks for *.test.js, *-test.js, *_test.js, test-*.js, test.js and test/**/*.js (and the same with .mjs, .ts and .mts).\n' });
 		exit(1);
 		return;
 	}
 	addEventListener('unhandledrejection', (e) => {
 		e.preventDefault();
-		nodeTest.reportUncaught(e.reason);
+		if (!(e.reason instanceof ExitSignal)) nodeTest.reportUncaught(e.reason);
 	});
 	addEventListener('error', (e) => {
 		e.preventDefault();
-		nodeTest.reportUncaught(e.error ?? e.message);
+		if (!(e.error instanceof ExitSignal)) nodeTest.reportUncaught(e.error ?? e.message);
 	});
 	try {
 		await init();
+		await loadTypeScriptFor(files);
 	} catch (e) {
 		fail(e);
 		return;
@@ -138,7 +206,7 @@ async function runTests({ files, stdin }: Run): Promise<void> {
 		try {
 			// A fresh link per file: each test file gets its own instances of the
 			// project's modules, as in Node, where every file is its own process.
-			await import(/* @vite-ignore */ link(files, file));
+			await import(/* @vite-ignore */ link(files, file, NODE));
 		} catch (e) {
 			error = e;
 		}
@@ -152,6 +220,7 @@ async function runTests({ files, stdin }: Run): Promise<void> {
  * small module (a `blob:` URL, made once) that re-exports one of these
  * objects through a global symbol: the test files and the runner must share
  * one `node:test` registry, which a second copy of its code could not.
+ * `node:process` and `node:readline` are added by `installProcess`.
  */
 const BUILTINS: Record<string, Record<string, unknown>> = {
 	'node:test': { ...nodeTest.test, default: nodeTest.test, test: nodeTest.test },
@@ -176,12 +245,38 @@ function builtinUrl(specifier: string): string | undefined {
 	return url;
 }
 
+/**
+ * The `process` global, `node:process` and `node:readline(/promises)` (with
+ * and without the prefix), over the terminal. `argv` is Node's shape:
+ * `['node', '/workspace/main.ts', ...args]`.
+ */
+function installProcess(readLine: () => string | null, entry: string, args: string[]) {
+	const io: Io = {
+		write: (stream, text) => send({ type: stream, text }),
+		readLine,
+		exit,
+		argv: ['node', `/workspace/${entry}`, ...args],
+	};
+	const process = createProcess(io);
+	Object.defineProperty(globalThis, 'process', { value: process, writable: true, configurable: true });
+	const { readline, promises } = createReadline(io);
+	for (const [name, module] of [
+		['process', { ...process, default: process }],
+		['readline', readline],
+		['readline/promises', promises],
+	] as const) {
+		BUILTINS[name] = module;
+		BUILTINS[`node:${name}`] = module;
+	}
+	return process;
+}
+
 let exited = false;
 
 function exit(code: number): void {
 	if (exited) return;
-	exited = true;
 	send({ type: 'exit', code });
+	exited = true;
 	close();
 }
 
@@ -193,31 +288,167 @@ function fail(error: unknown): void {
 	exit(1);
 }
 
+// ---------------------------------------------------------------------------
+// TypeScript
+
+let typescript: Promise<{ ts: typeof TS; strip: typeof Strip.blankSourceFile }> | null = null;
+
+/** Loads TypeScript and the stripper, once, if the project has a `.ts` file. */
+async function loadTypeScriptFor(files: Record<string, string>): Promise<void> {
+	if (!Object.keys(files).some(isTypeScript)) return;
+	typescript ??= (async () => {
+		send({ type: 'phase', text: 'Loading TypeScript' });
+		const started = performance.now();
+		const bytes = await download(__TS_FILE__, __TS_SIZE__);
+		// Imported from the bytes already fetched, as the server does, so it is downloaded once.
+		const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'text/javascript' }));
+		let ts: typeof TS;
+		try {
+			ts = ((await import(/* @vite-ignore */ url)) as { default: typeof TS }).default;
+		} finally {
+			URL.revokeObjectURL(url);
+		}
+		Object.defineProperty(globalThis, Symbol.for('yukibana.typescript'), { value: ts });
+		const { blankSourceFile } = (await import(/* @vite-ignore */ new URL('strip.js', import.meta.url).href)) as typeof Strip;
+		send({ type: 'phase', text: `TypeScript loaded in ${Math.round(performance.now() - started)} ms` });
+		return { ts, strip: blankSourceFile };
+	})();
+	stripper = await typescript;
+}
+
+let stripper: { ts: typeof TS; strip: typeof Strip.blankSourceFile } | null = null;
+
+/** Fetches `file` next to this script, reporting progress as `loading` messages. */
+async function download(file: string, total: number): Promise<Uint8Array> {
+	const response = await fetch(new URL(file, import.meta.url));
+	if (!response.ok || !response.body) throw new ProjectError(`Could not load TypeScript: GET ${file}: HTTP ${response.status}`);
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let loaded = 0;
+	let reported = -1;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		chunks.push(value);
+		loaded += value.byteLength;
+		const step = Math.floor((loaded / Math.max(total, 1)) * 20);
+		if (step !== reported) {
+			reported = step;
+			send({ type: 'loading', label: file, loaded, total: Math.max(total, loaded) });
+		}
+	}
+	const bytes = new Uint8Array(loaded);
+	let at = 0;
+	for (const c of chunks) {
+		bytes.set(c, at);
+		at += c.byteLength;
+	}
+	return bytes;
+}
+
+/** What a construct `node` will not strip is called in its refusal. */
+const UNSUPPORTED: Record<string, string> = {
+	EnumDeclaration: 'An enum',
+	ModuleDeclaration: 'A namespace with values',
+	Parameter: 'A parameter property',
+	ImportEqualsDeclaration: '`import x = require()`',
+	ExportAssignment: '`export =`',
+};
+
+/**
+ * The JavaScript of a project file: TypeScript with its types replaced by
+ * whitespace, anything else as it is. Syntax that is more than types is a
+ * `ProjectError` with Node's reason, unless `lenient`, in which case the
+ * file is compiled with `ts.transpileModule` instead (as a bundler would;
+ * its lines may then differ from the source's).
+ */
+function toJavaScript(path: string, source: string, lenient: boolean): string {
+	if (!isTypeScript(path)) return source;
+	if (!stripper) throw new Error('TypeScript was not loaded');
+	const { ts, strip } = stripper;
+	const file = ts.createSourceFile(path, source, { languageVersion: ts.ScriptTarget.ESNext, impliedNodeFormat: ts.ModuleKind.ESNext, jsDocParsingMode: ts.JSDocParsingMode.ParseNone }, false, ts.ScriptKind.TS);
+	const unsupported: TS.Node[] = [];
+	const js = strip(file, (node) => unsupported.push(node));
+	const first = unsupported[0];
+	if (!first) return js;
+	if (lenient) return ts.transpileModule(source, { fileName: path, compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
+	const { line, character } = file.getLineAndCharacterOfPosition(first.getStart(file));
+	const what = UNSUPPORTED[ts.SyntaxKind[first.kind]] ?? `TypeScript syntax (${ts.SyntaxKind[first.kind]})`;
+	throw new ProjectError(
+		`${path}:${line + 1}:${character + 1}: ${what} is not supported when types are only stripped, which is how node runs .ts files (ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX). The project's tsconfig.json can say so in the editor with "erasableSyntaxOnly": true.`,
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Linking
+
+interface LinkOptions {
+	/** The URL a module (or JSON file) is loaded from. */
+	url(text: string, type: string): string;
+	/**
+	 * 'exact': a relative import names the file, as in Node. 'bundler': as
+	 * Vite resolves, also without the extension (`./x` is `x.ts` or `x.js`,
+	 * or `x/index.ts`) and `./x.js` for `x.ts`.
+	 */
+	resolution: 'exact' | 'bundler';
+	/** Whether `node:test`, `node:assert` and the rest resolve to the runner's own. */
+	builtins: boolean;
+	/** See `toJavaScript`. */
+	lenient: boolean;
+}
+
+function blobUrl(text: string, type: string): string {
+	return URL.createObjectURL(new Blob([text], { type }));
+}
+
+/** A `data:` URL, base64 so that nesting one in another module grows it by a third, not threefold. */
+function dataUrl(text: string, type: string): string {
+	const bytes = new TextEncoder().encode(text);
+	let binary = '';
+	for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+	return `data:${type};base64,${btoa(binary)}`;
+}
+
+/** The files a relative import of `target` may mean, in order. */
+function candidates(target: string, resolution: LinkOptions['resolution']): string[] {
+	if (resolution === 'exact') return [target];
+	const out = [target];
+	if (/\.m?js$/.test(target)) out.push(target.replace(/js$/, 'ts'));
+	if (!/\.[^/]*$/.test(target)) out.push(`${target}.ts`, `${target}.js`, `${target}/index.ts`, `${target}/index.js`);
+	return out;
+}
+
 /**
  * The `blob:` URL of `entry`, after giving every project module it reaches a
  * URL of its own. Throws a `ProjectError` naming an import that leaves the
  * project, names no file, or closes a cycle (a blob URL must exist before it
  * can be imported, so cyclic graphs cannot be linked this way).
  */
-function link(files: Record<string, string>, entry: string): string {
+function link(files: Record<string, string>, entry: string, options: LinkOptions): string {
+	return linker(files, options)(entry, null);
+}
+
+/** A function from a project path to its module URL, sharing one URL per module across calls. */
+function linker(files: Record<string, string>, options: LinkOptions): (path: string, from: string | null) => string {
 	const urls = new Map<string, string>();
 	const visiting = new Set<string>();
 
 	const visit = (path: string, from: string | null): string => {
 		const done = urls.get(path);
 		if (done) return done;
-		const source = files[path];
+		const source = Object.hasOwn(files, path) ? files[path] : undefined;
 		if (source === undefined) throw new ProjectError(from ? `${from}: cannot find module '${path}'` : `There is no file ${path} to run.`);
 		if (visiting.has(path)) throw new ProjectError(`${path}: circular imports cannot be run here (${[...visiting, path].join(' -> ')})`);
 		visiting.add(path);
 
 		let url: string;
 		if (path.endsWith('.json')) {
-			url = URL.createObjectURL(new Blob([source], { type: 'application/json' }));
+			url = options.url(source, 'application/json');
 		} else {
+			const js = toJavaScript(path, source, options.lenient);
 			let imports;
 			try {
-				[imports] = parse(source, path);
+				[imports] = parse(js, path);
 			} catch (e) {
 				throw new ProjectError(`${path}: ${e instanceof Error ? e.message : String(e)}`);
 			}
@@ -226,29 +457,28 @@ function link(files: Record<string, string>, entry: string): string {
 			for (const i of imports) {
 				const specifier = i.n;
 				if (specifier === undefined) continue;
-				let targetUrl = builtinUrl(specifier);
+				let targetUrl = options.builtins ? builtinUrl(specifier) : undefined;
 				if (targetUrl === undefined) {
 					// Bare specifiers ('lodash') and computed ones stay as written, and fail as they would anyway.
-					if (!/^\.{1,2}\//.test(specifier)) continue;
-					const target = resolve(path, specifier);
+					if (!/^\.{1,2}\//.test(specifier) && !(options.resolution === 'bundler' && specifier.startsWith('/'))) continue;
+					const target = specifier.startsWith('/') ? resolve('', specifier.slice(1)) : resolve(path, specifier);
 					if (target === null) throw new ProjectError(`${path}: '${specifier}' points outside the project`);
-					targetUrl = visit(target, path);
+					targetUrl = visit(candidates(target, options.resolution).find((c) => Object.hasOwn(files, c)) ?? target, path);
 				}
 				// A static import's range is the bare specifier; a dynamic one's is the
 				// whole argument, quotes included.
 				const quoted = i.d >= 0;
-				out += source.slice(last, i.s) + (quoted ? JSON.stringify(targetUrl) : targetUrl);
+				out += js.slice(last, i.s) + (quoted ? JSON.stringify(targetUrl) : targetUrl);
 				last = i.e;
 			}
-			out += source.slice(last) + `\n//# sourceURL=${path}`;
-			url = URL.createObjectURL(new Blob([out], { type: 'text/javascript' }));
+			out += js.slice(last) + `\n//# sourceURL=${path}`;
+			url = options.url(out, 'text/javascript');
 		}
 		visiting.delete(path);
 		urls.set(path, url);
 		return url;
 	};
-
-	return visit(entry, null);
+	return visit;
 }
 
 /** `specifier` relative to the file `from`, as a project path, or `null` above the root. */
@@ -262,6 +492,120 @@ function resolve(from: string, specifier: string): string | null {
 		} else parts.push(segment);
 	}
 	return parts.join('/');
+}
+
+// ---------------------------------------------------------------------------
+// Preview
+
+/** How a page links its scripts: as a bundler (Vite) would, in the browser, without Node's modules. */
+const PAGE: LinkOptions = { url: dataUrl, resolution: 'bundler', builtins: false, lenient: true };
+
+async function preview({ id, files, entry }: Preview): Promise<void> {
+	try {
+		await init();
+		await loadTypeScriptFor(files);
+		postMessage({ type: 'page', id, ...buildPage(files, entry) } satisfies Page);
+	} catch (e) {
+		const error = e instanceof ProjectError ? e.message : e instanceof Error ? (e.stack ?? e.message) : String(e);
+		postMessage({ type: 'page', id, html: null, styles: [], errors: [error] } satisfies Page);
+	}
+}
+
+/**
+ * What the page runs before anything else: `console` and uncaught errors
+ * are posted to the app (which shows them in the terminal), and the app's
+ * `{ yukibana: 'css', href, text }` replaces a stylesheet in place. The
+ * page is a sandboxed iframe with an opaque origin, so `postMessage` is
+ * its only way out, and the app checks that a message comes from it.
+ */
+const BRIDGE = `<script>(() => {
+const post = (type, text) => parent.postMessage({ yukibana: 'preview', type, text }, '*');
+const show = (v) => { if (typeof v === 'string') return v; if (v instanceof Error) return v.stack || String(v); try { const s = JSON.stringify(v); return s === undefined ? String(v) : s; } catch { return String(v); } };
+for (const [name, stream] of [['log', 'stdout'], ['info', 'stdout'], ['debug', 'stdout'], ['warn', 'stderr'], ['error', 'stderr']]) {
+  const original = console[name].bind(console);
+  console[name] = (...args) => { original(...args); post(stream, args.map(show).join(' ') + '\\n'); };
+}
+addEventListener('error', (e) => post('stderr', 'Uncaught ' + (e.error ? show(e.error) : e.message) + '\\n'));
+addEventListener('unhandledrejection', (e) => post('stderr', 'Uncaught (in promise) ' + show(e.reason) + '\\n'));
+addEventListener('message', (e) => {
+  const m = e.data;
+  if (e.source !== parent || !m || m.yukibana !== 'css') return;
+  for (const s of document.querySelectorAll('style[data-yukibana-href]')) if (s.dataset.yukibanaHref === m.href) s.textContent = m.text;
+});
+})();</script>`;
+
+/** Tags the page rewrites: comments (kept as they are), scripts with their text, and links. */
+const TAGS = /<!--[\s\S]*?-->|<script\b([^>]*)>([\s\S]*?)<\/script\s*>|<link\b([^>]*)>/gi;
+const ATTRIBUTE = /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
+
+function attributes(text: string): Map<string, string> {
+	const out = new Map<string, string>();
+	for (const m of text.matchAll(ATTRIBUTE)) out.set(m[1]!.toLowerCase(), m[2] ?? m[3] ?? m[4] ?? '');
+	return out;
+}
+
+/** The project path a page's URL names, or `null` for one that is not a project file (`https:`, `data:`, `#top`). */
+function local(page: string, href: string): string | null {
+	const url = href.trim().replace(/[?#].*$/, '');
+	if (url === '' || /^[a-z][\w+.-]*:/i.test(url) || url.startsWith('//')) return null;
+	return url.startsWith('/') ? resolve('', decodeURI(url.slice(1))) : resolve(page, decodeURI(url));
+}
+
+const escapeAttribute = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+
+/**
+ * The page `entry` as one document that needs nothing from the app's
+ * origin: `<link rel="stylesheet">` to a project file becomes a `<style>`
+ * holding it, `<script src>` to a project file and inline module scripts
+ * get `data:` URLs whose imports are linked as Vite would resolve them (with
+ * TypeScript compiled), and the bridge script goes first. Other URLs are
+ * left as they are; a relative one that is not a stylesheet or a script
+ * (an image, a CSS `url()`) does not resolve, since the document has no
+ * folder of its own.
+ */
+function buildPage(files: Record<string, string>, entry: string): Omit<Page, 'type' | 'id'> {
+	const html = Object.hasOwn(files, entry) ? files[entry] : undefined;
+	if (html === undefined) throw new ProjectError(`There is no ${entry} to preview.`);
+	const sources = { ...files };
+	const visit = linker(sources, PAGE);
+	const styles: string[] = [];
+	let inline = 0;
+	const body = html.replace(TAGS, (whole: string, scriptAttributes: string | undefined, scriptText: string | undefined, linkAttributes: string | undefined) => {
+		if (scriptAttributes !== undefined) {
+			const attrs = attributes(scriptAttributes);
+			const module = attrs.get('type')?.toLowerCase() === 'module';
+			const src = attrs.get('src');
+			let url: string;
+			if (src !== undefined) {
+				const path = local(entry, src);
+				if (path === null) return whole;
+				if (module) url = visit(path, entry);
+				else {
+					const text = Object.hasOwn(files, path) ? files[path] : undefined;
+					if (text === undefined) throw new ProjectError(`${entry}: cannot find script '${src}'`);
+					url = dataUrl(toJavaScript(path, text, true) + `\n//# sourceURL=${path}`, 'text/javascript');
+				}
+			} else if (module && scriptText?.trim()) {
+				const path = `${entry}#script${++inline}.js`;
+				sources[path] = scriptText;
+				url = visit(path, null);
+			} else return whole;
+			const rest = scriptAttributes.replace(/\s+src\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/i, '');
+			return `<script${rest} src="${url}"></script>`;
+		}
+		const attrs = attributes(linkAttributes ?? '');
+		const href = attrs.get('href');
+		if (!/(^|\s)stylesheet(\s|$)/i.test(attrs.get('rel') ?? '') || href === undefined) return whole;
+		const path = local(entry, href);
+		if (path === null) return whole;
+		const css = Object.hasOwn(files, path) ? files[path] : undefined;
+		if (css === undefined) throw new ProjectError(`${entry}: cannot find stylesheet '${href}'`);
+		styles.push(path);
+		return `<style data-yukibana-href="${escapeAttribute(path)}">${css.replace(/<\/style/gi, '<\\/style')}</style>`;
+	});
+	const head = /<head\b[^>]*>/i.exec(body) ?? /<html\b[^>]*>/i.exec(body) ?? /<!doctype\b[^>]*>/i.exec(body);
+	const at = head ? head.index + head[0].length : 0;
+	return { html: body.slice(0, at) + BRIDGE + body.slice(at), styles, errors: [] };
 }
 
 /** `console` methods write to the terminal: `error`, `warn` and `trace` to stderr. */
@@ -324,8 +668,9 @@ function inspect(value: unknown, depth: number, seen: Set<object>): string {
  * `prompt(message)` writes the message and blocks until the user enters a
  * line, which it returns without its newline; `null` at end of input, or
  * when the page is not cross-origin isolated and there is no input at all.
+ * Returns the line reader itself, which `process` and `readline` share.
  */
-function installPrompt(stdin: SharedArrayBuffer | null): void {
+function installPrompt(stdin: SharedArrayBuffer | null): () => string | null {
 	const decoder = new TextDecoder();
 	let buffered = '';
 	let ended = stdin === null;
@@ -344,8 +689,7 @@ function installPrompt(stdin: SharedArrayBuffer | null): void {
 		}
 		Atomics.store(state, 0, 0);
 	};
-	const prompt = (message?: unknown): string | null => {
-		if (message !== undefined && message !== '') send({ type: 'stdout', text: String(message) });
+	const readLine = (): string | null => {
 		while (!buffered.includes('\n') && !ended) read();
 		if (buffered === '') return null;
 		const end = buffered.indexOf('\n');
@@ -353,7 +697,12 @@ function installPrompt(stdin: SharedArrayBuffer | null): void {
 		buffered = end < 0 ? '' : buffered.slice(end + 1);
 		return line;
 	};
+	const prompt = (message?: unknown): string | null => {
+		if (message !== undefined && message !== '') send({ type: 'stdout', text: String(message) });
+		return readLine();
+	};
 	Object.assign(globalThis, { prompt });
+	return readLine;
 }
 
 /**

@@ -6,10 +6,12 @@
  */
 import { monaco } from './monaco';
 import { LanguageClient, type ClientState, type LoadingProgress, type LogLevel } from './lsp/client';
-import { isLanguageId, languageOf, LANGUAGES, type LanguageId } from './languages';
+import { isLanguageId, languageOf, LANGUAGES, packOf, type LanguageId } from './languages';
 import { Runner } from './run.svelte';
+import { Preview } from './preview';
 import { exportProject } from './export';
 import { zip } from './zip';
+import { chooseTestFramework, detectTestFramework, TESTS_DIR, type TestFramework } from './cpp-tests';
 import { baseName, loadLanguage, loadProject, parentOf, pathOf, pathProblem, ROOT_URI, sampleProject, saveLanguage, saveProject, type Project } from './project';
 
 /** The model URI of a project path. */
@@ -41,6 +43,10 @@ export interface EditorHost {
 	closeAll(): void;
 	/** Brings the terminal panel to the front. */
 	showTerminal(): void;
+	/** Opens the Preview panel (a web project's page), creating it the first time. */
+	showPreview(): void;
+	/** Closes the Preview panel, if it is open. */
+	hidePreview(): void;
 }
 
 const SAVE_DELAY_MS = 400;
@@ -57,8 +63,16 @@ export class Workspace {
 	progress = $state<LoadingProgress | null>(null);
 	log = $state<LogLine[]>([]);
 	problems = $state<Problem[]>([]);
+	/**
+	 * A C++ project's test framework, as its tests/ files include it
+	 * (cpp-tests.ts): `mixed` when they include more than one, null when
+	 * none (or the project is not C++).
+	 */
+	testFramework = $state<TestFramework | 'mixed' | null>(null);
 	/** The program run from this project, if any, and the terminal's contents. */
 	readonly runner = new Runner();
+	/** A web project's page, shown in the Preview panel; its console goes to the terminal. */
+	readonly preview = new Preview(this.runner);
 
 	private client: LanguageClient | null = null;
 	private readonly models = new Map<string, monaco.editor.ITextModel>();
@@ -104,6 +118,7 @@ export class Workspace {
 	/** Replaces the current project with the language's sample, after the user confirmed. */
 	resetProject(): Promise<void> {
 		return this.serially(async () => {
+			this.preview.stop();
 			await this.stopClient();
 			this.disposeModels();
 			this.load(sampleProject(this.language));
@@ -128,6 +143,13 @@ export class Workspace {
 	run(mode: 'run' | 'test' = 'run'): void {
 		const language = languageOf(this.language);
 		if (mode === 'run' ? !language.runs : !language.tests) return;
+		if (mode === 'run' && language.preview) {
+			this.host?.showPreview();
+			this.host?.showTerminal();
+			this.runner.attach(`Previewing ${language.preview}. Its console appears here; edits reload the page, and a stylesheet edit is applied without a reload.`);
+			this.preview.start(packOf(language), language.preview, () => this.currentFiles());
+			return;
+		}
 		const entry = this.models.has(language.entry) ? language.entry : this.active;
 		if (!entry) {
 			this.write('warning', `There is no ${language.entry} to run.`);
@@ -136,7 +158,7 @@ export class Workspace {
 		const files: Record<string, string> = {};
 		for (const [path, model] of this.models) files[path] = model.getValue();
 		this.host?.showTerminal();
-		this.runner.start(this.language, files, entry, mode);
+		this.runner.start(packOf(language), files, entry, mode);
 	}
 
 	/**
@@ -171,6 +193,24 @@ export class Workspace {
 		this.write('info', `Downloaded ${name}.zip${generated}.`);
 	}
 
+	/**
+	 * Switches a C++ project's tests to `framework` (cpp-tests.ts): the
+	 * sample's tests are rewritten for it, or a sample test file is added,
+	 * and the output panel says which.
+	 */
+	chooseTestFramework(framework: TestFramework): void {
+		const change = chooseTestFramework(this.currentFiles(), framework, languageOf('cpp').sample);
+		for (const [path, text] of Object.entries(change.write)) {
+			const model = this.models.get(path);
+			if (model) model.pushEditOperations([], [{ range: model.getFullModelRange(), text }], () => null);
+			else this.addModel(path, text, true);
+		}
+		this.files = [...this.models.keys()].sort();
+		if (change.show) this.host?.open(change.show);
+		this.write(change.mixed ? 'warning' : 'info', change.message);
+		this.scheduleSave();
+	}
+
 	/** Saves now instead of after the debounce: the page is being hidden or reloaded. */
 	flush(): void {
 		if (this.models.size) this.saveNow();
@@ -182,6 +222,13 @@ export class Workspace {
 	 */
 	savedElsewhere(language: LanguageId): void {
 		if (language === this.language) this.write('warning', `This ${languageOf(language).label} project was changed in another tab. Whichever tab saves last keeps its version.`);
+	}
+
+	/** Every file of the project as last edited. */
+	private currentFiles(): Record<string, string> {
+		const files: Record<string, string> = {};
+		for (const [path, model] of this.models) files[path] = model.getValue();
+		return files;
 	}
 
 	/** Shows a file in the editor. */
@@ -291,12 +338,17 @@ export class Workspace {
 		for (const p of open) this.host?.open(p);
 		const active = project.active ?? open[0];
 		if (active) this.host?.open(active);
+		this.refreshTestFramework();
 	}
 
 	private addModel(path: string, text: string, created: boolean): void {
 		const model = monaco.editor.createModel(text, undefined, uriOf(path));
-		model.onDidChangeContent(() => this.scheduleSave());
+		model.onDidChangeContent(() => {
+			this.scheduleSave();
+			this.preview.changed(path);
+		});
 		this.models.set(path, model);
+		if (created) this.preview.changed(path);
 		this.client?.addModel(model, created);
 	}
 
@@ -306,6 +358,7 @@ export class Workspace {
 		this.host?.close(path);
 		this.client?.removeModel(model);
 		this.models.delete(path);
+		this.preview.changed(path);
 		model.dispose();
 	}
 
@@ -327,6 +380,8 @@ export class Workspace {
 	private async closeProject(): Promise<void> {
 		this.runner.stop(false);
 		this.runner.clear();
+		this.preview.stop();
+		this.host?.hidePreview();
 		this.flush();
 		await this.stopClient();
 		this.flush(); // edits typed while the server was shutting down
@@ -342,7 +397,7 @@ export class Workspace {
 		const language = languageOf(this.language);
 		const client = new LanguageClient({
 			// Relative to the page, so the app works from any folder of a static host.
-			serverUrl: new URL(`packs/${language.id}/server.js`, document.baseURI),
+			serverUrl: new URL(`packs/${packOf(language)}/server.js`, document.baseURI),
 			languages: language.monacoLanguages,
 			rootUri: ROOT_URI,
 			settings: language.settings,
@@ -367,7 +422,7 @@ export class Workspace {
 			this.write('error', `${language.label} language server: ${e instanceof Error ? e.message : String(e)}`);
 			// A worker that fails to load says nothing about why; a missing pack is the usual reason.
 			const status = await fetch(client.serverUrl, { method: 'HEAD' }).then((r) => r.status, () => 0);
-			if (status === 404) this.write('error', `The ${language.label} pack is not installed: ${client.serverUrl.pathname} was not found. Build it with packs/${language.id}/build.sh.`);
+			if (status === 404) this.write('error', `The ${language.label} pack is not installed: ${client.serverUrl.pathname} was not found. Build it with packs/${packOf(language)}/build.sh.`);
 		});
 	}
 
@@ -388,7 +443,20 @@ export class Workspace {
 			.sort((a, b) => a.path.localeCompare(b.path) || severityOrder(a.marker) - severityOrder(b.marker) || a.marker.startLineNumber - b.marker.startLineNumber);
 	}
 
+	private refreshTestFramework(): void {
+		if (this.language !== 'cpp') {
+			this.testFramework = null;
+			return;
+		}
+		// Only tests/ decides, so a keystroke elsewhere reads no other file.
+		const tests: Record<string, string> = {};
+		for (const [path, model] of this.models) if (path.startsWith(TESTS_DIR)) tests[path] = model.getValue();
+		const detected = detectTestFramework(tests);
+		this.testFramework = detected.mixed ? 'mixed' : detected.framework;
+	}
+
 	private scheduleSave(): void {
+		this.refreshTestFramework();
 		clearTimeout(this.saveTimer);
 		this.saveTimer = setTimeout(() => this.saveNow(), SAVE_DELAY_MS);
 	}

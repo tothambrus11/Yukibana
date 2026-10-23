@@ -1,15 +1,25 @@
 /**
  * The one place Monaco is imported. It loads the bare editor API plus only
- * the editor features and syntax grammars this app uses, so none of Monaco's
- * own TypeScript, CSS or HTML language services reach the bundle: every
- * language feature comes from a language server pack. The exception is JSON:
- * configuration files (`jsconfig.json`, `tsconfig.json`) get Monaco's JSON
- * service, with their schemas, since no pack's server knows them.
+ * the editor features and syntax grammars this app uses, so Monaco's own
+ * TypeScript service never reaches the bundle: language features come from a
+ * language server pack. The exceptions are the languages no pack serves:
+ * JSON (configuration files such as `jsconfig.json` and `tsconfig.json`, with
+ * their schemas), HTML, and CSS with SCSS and Less, which get Monaco's own
+ * language services. Each of those is a small `register` module here; its
+ * code (`*Mode.js`) and its worker are separate chunks, fetched the first
+ * time a model of that language exists, so a Python session never downloads
+ * them.
  */
 import * as monaco from 'monaco-editor/editor/editor.api';
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker';
+// `?worker` imports are constructors holding the worker file's URL: the
+// worker itself is only fetched by `new`, in getWorker below.
 import JsonWorker from 'monaco-editor/languages/features/json/json.worker?worker';
+import HtmlWorker from 'monaco-editor/languages/features/html/html.worker?worker';
+import CssWorker from 'monaco-editor/languages/features/css/css.worker?worker';
 import { jsonDefaults } from 'monaco-editor/languages/features/json/register';
+import 'monaco-editor/languages/features/html/register';
+import 'monaco-editor/languages/features/css/register';
 import { StandaloneServices } from 'monaco-editor/editor/standalone/browser/standaloneServices';
 import { OneReference } from 'monaco-editor/editor/contrib/gotoSymbol/browser/referencesModel';
 import { ICommandService } from 'monaco-editor/platform/commands/common/commands';
@@ -54,6 +64,8 @@ import 'monaco-editor/editor/contrib/caretOperations/browser/caretOperations';
 import 'monaco-editor/editor/contrib/caretOperations/browser/transpose';
 import 'monaco-editor/editor/contrib/clipboard/browser/clipboard';
 import 'monaco-editor/editor/contrib/codeAction/browser/codeActionContributions';
+// Colour swatches and the colour picker, for the CSS service's colours.
+import 'monaco-editor/editor/contrib/colorPicker/browser/colorPickerContribution';
 import 'monaco-editor/editor/contrib/comment/browser/comment';
 import 'monaco-editor/editor/contrib/contextmenu/browser/contextmenu';
 import 'monaco-editor/editor/contrib/cursorUndo/browser/cursorUndo';
@@ -91,13 +103,26 @@ import 'monaco-editor/editor/standalone/browser/referenceSearch/standaloneRefere
 import 'monaco-editor/languages/definitions/python/register';
 import 'monaco-editor/languages/definitions/javascript/register';
 import 'monaco-editor/languages/definitions/typescript/register';
+// Web projects: HTML and CSS (SCSS, Less) grammars; their language services
+// are registered at the top of this file.
+import 'monaco-editor/languages/definitions/html/register';
+import 'monaco-editor/languages/definitions/css/register';
+import 'monaco-editor/languages/definitions/scss/register';
+import 'monaco-editor/languages/definitions/less/register';
 import 'monaco-editor/languages/definitions/cpp/register';
 import 'monaco-editor/languages/definitions/swift/register';
 import 'monaco-editor/languages/definitions/scala/register';
+import 'monaco-editor/languages/definitions/rust/register';
+import 'monaco-editor/languages/definitions/php/register';
+import 'monaco-editor/languages/definitions/java/register';
+import 'monaco-editor/languages/definitions/kotlin/register';
 
-// Monaco runs diffing and word-based helpers in a worker of its own, and the
-// JSON service in another (loaded only when a JSON file is opened).
-self.MonacoEnvironment = { getWorker: (_id, label) => (label === 'json' ? new JsonWorker() : new EditorWorker()) };
+// Monaco runs diffing and word-based helpers in a worker of its own, and each
+// of the JSON, HTML and CSS services in another, started the first time the
+// service is asked about a model. The label is the model's language; HTML's
+// service also serves Handlebars and Razor, CSS's SCSS and Less.
+const WORKERS: Record<string, new () => Worker> = { json: JsonWorker, html: HtmlWorker, handlebars: HtmlWorker, razor: HtmlWorker, css: CssWorker, scss: CssWorker, less: CssWorker };
+self.MonacoEnvironment = { getWorker: (_id, label) => new (WORKERS[label] ?? EditorWorker)() };
 
 // The schemas ship with the app (static/schemas/, from SchemaStore) and are
 // fetched from it on demand: never from a third-party host. The files are

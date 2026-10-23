@@ -5,21 +5,32 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { createDock } from '../lib/dock';
-	import { LANGUAGES, languageOf, type LanguageId } from '../lib/languages';
+	import { LANGUAGES, languageOf, packOf, type LanguageId } from '../lib/languages';
 	import { registerServiceWorker } from '../lib/pwa';
+	import { offline } from '../lib/offline.svelte';
+	import Offline from '../lib/components/Offline.svelte';
 	import { theme } from '../lib/theme.svelte';
 	import { Workspace } from '../lib/workspace.svelte';
 	import { monaco } from '../lib/monaco';
 	import { projectLanguageOf } from '../lib/project';
+	import { TEST_FRAMEWORKS, type TestFramework } from '../lib/cpp-tests';
 
 	const workspace = new Workspace();
 	let dockElement: HTMLElement;
 	let dock: ReturnType<typeof createDock> | undefined;
+	let offlineDialog = $state<Offline>();
+	/** Set when a new build is installed and waiting: activates it and reloads. */
+	let applyUpdate = $state<(() => void) | null>(null);
 
 	onMount(() => {
 		dock = createDock(dockElement, workspace);
 		workspace.attach(dock);
-		registerServiceWorker((m) => workspace.write('warning', m), () => workspace.flush());
+		registerServiceWorker({
+			report: (m) => workspace.write('warning', m),
+			beforeReload: () => workspace.flush(),
+			updateReady: (apply) => (applyUpdate = apply),
+		});
+		void offline.refresh();
 		// The save is debounced; a page being hidden may never come back.
 		const hidden = () => document.visibilityState === 'hidden' && workspace.flush();
 		const flush = () => workspace.flush();
@@ -39,6 +50,10 @@
 	});
 
 	$effect(() => dock?.setProblemCount(workspace.problems.length));
+	// A pack used for the first time is cached as it downloads: say so in the language list.
+	$effect(() => {
+		if (workspace.clientState.kind === 'running') setTimeout(() => void offline.refresh(), 2000);
+	});
 
 	const errors = $derived(workspace.problems.filter((p) => p.marker.severity === monaco.MarkerSeverity.Error).length);
 	const warnings = $derived(workspace.problems.filter((p) => p.marker.severity === monaco.MarkerSeverity.Warning).length);
@@ -62,7 +77,7 @@
 		<span class="sr-only">Language</span>
 		<select value={workspace.language} onchange={(e) => void workspace.switchTo(e.currentTarget.value as LanguageId)}>
 			{#each LANGUAGES as l (l.id)}
-				<option value={l.id}>{l.label}</option>
+				<option value={l.id}>{l.label}{offline.isPackCached(packOf(l)) ? ' (offline)' : ''}</option>
 			{/each}
 		</select>
 		<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>
@@ -80,6 +95,27 @@
 			<button class="button" onclick={() => workspace.run('test')} title="Run the project's tests (Ctrl+Shift+Enter)">Test</button>
 		{/if}
 	{/if}
+	{#if workspace.language === 'cpp'}
+		<!-- What tests/ includes is the framework; choosing one converts the sample's tests or adds a sample test. -->
+		<label class="select framework" title="Test framework: choosing one converts the sample's tests to it, or adds a sample test file">
+			<span class="sr-only">Test framework</span>
+			<select
+				value={workspace.testFramework ?? ''}
+				onchange={(e) => {
+					workspace.chooseTestFramework(e.currentTarget.value as TestFramework);
+					e.currentTarget.value = workspace.testFramework ?? '';
+				}}
+			>
+				{#if workspace.testFramework === null || workspace.testFramework === 'mixed'}
+					<option value={workspace.testFramework ?? ''} disabled>{workspace.testFramework === 'mixed' ? 'Mixed frameworks' : 'Test framework'}</option>
+				{/if}
+				{#each TEST_FRAMEWORKS as f (f.id)}
+					<option value={f.id}>{f.label}</option>
+				{/each}
+			</select>
+			<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>
+		</label>
+	{/if}
 
 	<button class="button" onclick={() => void workspace.download()} title="Download the project as a zip, with the build files an IDE needs">Download</button>
 	<button class="button" onclick={reset} title="Replace this language's project with the sample">Reset project</button>
@@ -87,6 +123,12 @@
 
 	<span class="spacer"></span>
 
+	{#if applyUpdate}
+		<button class="button update" onclick={() => applyUpdate?.()} title="A new version of the app is installed: reload to use it">New version: reload</button>
+	{/if}
+	<button class="icon-button offline-button" onclick={() => offlineDialog?.show()} aria-label="Offline use" title="Offline: languages available without a network, Download everything">
+		<svg viewBox="0 0 24 24"><path d="M7 18a5 5 0 0 1-.6-9.96A6 6 0 0 1 18 9a4.5 4.5 0 0 1-.5 9H7z" /><path d="M12 10v6M9.5 13.5 12 16l2.5-2.5" /></svg>
+	</button>
 	<button class="icon-button" onclick={() => theme.toggle()} aria-label="Switch to {theme.current === 'dark' ? 'light' : 'dark'} theme" title="Toggle theme">
 		{#if theme.current === 'dark'}
 			<svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" /></svg>
@@ -97,6 +139,8 @@
 </header>
 
 <main class="dock" bind:this={dockElement}></main>
+
+<Offline bind:this={offlineDialog} />
 
 <footer class="status-bar">
 	<span class="state">
@@ -212,6 +256,10 @@
 	}
 	.run.stop svg {
 		fill: var(--red-high);
+	}
+	.update {
+		border-color: var(--accent);
+		color: var(--accent-high);
 	}
 	.run:disabled {
 		opacity: 0.5;
@@ -337,7 +385,8 @@
 			gap: 0.4rem;
 		}
 		.product,
-		.button:not(.run) {
+		.button:not(.run, .update),
+		.framework {
 			display: none;
 		}
 	}

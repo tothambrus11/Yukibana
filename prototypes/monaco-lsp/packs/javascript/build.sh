@@ -32,7 +32,7 @@ mkdir -p "$OUT"
 for f in "$OUT"/*; do
   [[ -e "$f" ]] || continue
   case "$(basename "$f")" in
-    server.js|server.js.*|runner.js|runner.js.*|"$TS_FILE"|"$TS_FILE".*|"$LIBS_FILE"|"$LIBS_FILE".*) ;;
+    server.js|server.js.*|runner.js|runner.js.*|strip.js|strip.js.*|"$TS_FILE"|"$TS_FILE".*|"$LIBS_FILE"|"$LIBS_FILE".*) ;;
     *) rm -f "$f" ;;
   esac
 done
@@ -63,8 +63,13 @@ npx esbuild src/server.ts --bundle --minify --format=esm --target=es2022 --log-l
   --outfile="$OUT/server.js"
 
 # The program runner: a worker of its own, independent of the server, with
-# its own node:test and node:assert (src/node/).
+# its own node:test, node:assert, process and node:readline (src/node/). For
+# a project with .ts files it loads the server's typescript.js (same URL, so
+# one download) and strip.js, ts-blank-space bundled against that copy.
 npx esbuild src/runner.ts --bundle --minify --format=esm --target=es2022 --log-level=warning \
+  --define:__TS_FILE__="\"$TS_FILE\"" --define:__TS_SIZE__="$(size "$OUT/$TS_FILE")" \
   --outfile="$OUT/runner.js"
+npx esbuild src/strip.ts --bundle --minify --format=esm --target=es2022 --log-level=warning \
+  --alias:typescript=./src/typescript-global.ts --outfile="$OUT/strip.js"
 
 node tools/compress.mjs "$OUT"

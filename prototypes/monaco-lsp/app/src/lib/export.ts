@@ -46,7 +46,12 @@ const BUILD: Record<LanguageId, BuildFiles> = {
 	swift: { paths: ['Package.swift'], generate: (p) => ({ 'Package.swift': packageSwift(p.files, p.paths) }) },
 	python: { paths: ['pyproject.toml'], generate: (p) => ({ 'pyproject.toml': pyprojectToml(p.files) }) },
 	javascript: { paths: ['package.json'], generate: (p) => ({ 'package.json': packageJson(p.language.entry) }) },
+	typescript: { paths: ['package.json'], generate: (p) => ({ 'package.json': typescriptPackageJson(p.language.entry) }) },
+	web: { paths: ['package.json'], generate: () => ({ 'package.json': vitePackageJson() }) },
 	scala: { paths: ['build.sbt', 'project/build.properties'], generate: (p) => ({ 'build.sbt': buildSbt(p.files), 'project/build.properties': `sbt.version=${SBT_VERSION}\n` }) },
+	php: { paths: ['composer.json', 'phpunit.xml'], generate: (p) => ({ 'composer.json': composerJson(p.language.entry), 'phpunit.xml': phpunitXml(p.files) }) },
+	rust: { paths: ['Cargo.toml'], generate: (p) => ({ 'Cargo.toml': cargoToml(p.files) }) },
+	java: { paths: ['pom.xml'], generate: (p) => ({ 'pom.xml': pomXml(p.files, p.language.entry) }) },
 };
 
 /**
@@ -86,14 +91,47 @@ const TESTS = /^tests\//;
  */
 const GTEST_VERSION = '1.18.0';
 const GTEST_SHA256 = '6e3191c1455468b3fc35a417fb565c1c5071aee1b7e7f85e30cf48a98d37d8b5';
+/**
+ * Catch2 and doctest as the browser runs them (packs/cpp/build-test-frameworks.sh),
+ * pinned by the commit of their release tags: neither publishes a source
+ * archive of its own, and a commit names its whole tree.
+ */
+const CATCH2_VERSION = '3.16.1';
+const CATCH2_COMMIT = '08092139210881f01a34e60c5f2fd6afa0ea4024';
+const DOCTEST_VERSION = '2.5.3';
+const DOCTEST_COMMIT = '2d0a9359a60c51affe2a9bebb1be1dca47868151';
+
+const withoutComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
 /**
  * Whether a source defines main: `int main(` or `auto main(` outside
- * comments. The runner's heuristic, so the test executable leaves out the
- * same files a Test in the browser does.
+ * comments, or doctest's DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN. The runner's
+ * heuristic, so the test executable leaves out the same files a Test in the
+ * browser does.
  */
 function definesMain(text: string): boolean {
-	return /\b(?:int|auto)\s+main\s*\(/.test(text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, ''));
+	const code = withoutComments(text);
+	return /\b(?:int|auto)\s+main\s*\(/.test(code) || /^[ \t]*#[ \t]*define[ \t]+DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN\b/m.test(code);
+}
+
+/** Whether a source implements doctest itself (DOCTEST_CONFIG_IMPLEMENT, with or without main). */
+function implementsDoctest(text: string): boolean {
+	return /^[ \t]*#[ \t]*define[ \t]+DOCTEST_CONFIG_IMPLEMENT/m.test(withoutComments(text));
+}
+
+type TestFramework = 'gtest' | 'doctest' | 'catch2';
+
+/**
+ * The test framework tests/ includes (<gtest/...>, <doctest/...>,
+ * <catch2/...>), as the runner and app/src/lib/cpp-tests.ts tell it; the
+ * first in that order when several are (the browser refuses to build those
+ * tests; the CMakeLists links one and the compiler names what is missing).
+ * GoogleTest when none is, as before there was a choice.
+ */
+function testFrameworkOf(files: Files): TestFramework {
+	const code = Object.keys(files).filter((p) => TESTS.test(p)).map((p) => withoutComments(files[p] ?? '')).join('\n');
+	for (const id of ['gtest', 'doctest', 'catch2'] as const) if (new RegExp(`^[ \\t]*#[ \\t]*include[ \\t]*[<"]${id}/`, 'm').test(code)) return id;
+	return 'gtest';
 }
 
 /** What compile_flags.txt says, sorted into what CMake has a word for. */
@@ -157,10 +195,11 @@ function cmakeDir(dir: string): string {
  * CMakeLists.txt for the project as the C++ pack builds it: one executable,
  * `app`, from every C/C++ source outside tests/; when tests/ has sources, a
  * second one, `app_tests`, from those plus the program's sources without its
- * main, linked with GoogleTest (gtest_main unless a test defines main) and
- * registered with CTest. compile_flags.txt's standard, include directories,
- * definitions and options apply to both, not to GoogleTest itself, so a
- * `-Werror` there does not fail on GoogleTest's code. The options are left
+ * main, linked with the test framework tests/ includes (GoogleTest, doctest
+ * or Catch2, fetched with FetchContent; its main unless a test defines one)
+ * and registered with CTest test by test. compile_flags.txt's standard,
+ * include directories, definitions and options apply to both, not to the
+ * framework itself, so a `-Werror` there does not fail on the framework's code. The options are left
  * out for MSVC, which does not take GCC-style flags. compile_commands.json is
  * written to the build folder for clangd. Without compile_flags.txt the
  * compiler's default standard applies, as it does for clangd.
@@ -212,26 +251,71 @@ export function cmakeLists(files: Files, entry: string): string {
 		);
 	}
 	if (tests.length) {
-		lines.push(
-			`# The tests: tests/ and the program's sources without its main, with GoogleTest ${GTEST_VERSION},`,
-			'# the version the browser runs. Downloaded once, when the build is configured.',
-			'include(FetchContent)',
-			'FetchContent_Declare(googletest',
-			`    URL https://github.com/google/googletest/releases/download/v${GTEST_VERSION}/googletest-${GTEST_VERSION}.tar.gz`,
-			`    URL_HASH SHA256=${GTEST_SHA256}`,
-			')',
-			'# On Windows, use the same C runtime as the project; never install GoogleTest.',
-			'set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)',
-			'set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)',
-			'FetchContent_MakeAvailable(googletest)',
-			'',
-			'enable_testing()',
-			`add_executable(app_tests${list([...underTest, ...tests])}\n)`,
-			`target_link_libraries(app_tests PRIVATE project_flags ${ownMain ? 'GTest::gtest' : 'GTest::gtest_main'})`,
-			'include(GoogleTest)',
-			'gtest_discover_tests(app_tests)',
-			'',
-		);
+		const framework = testFrameworkOf(files);
+		const testSources = list([...underTest, ...tests]);
+		if (framework === 'gtest') {
+			lines.push(
+				`# The tests: tests/ and the program's sources without its main, with GoogleTest ${GTEST_VERSION},`,
+				'# the version the browser runs. Downloaded once, when the build is configured.',
+				'include(FetchContent)',
+				'FetchContent_Declare(googletest',
+				`    URL https://github.com/google/googletest/releases/download/v${GTEST_VERSION}/googletest-${GTEST_VERSION}.tar.gz`,
+				`    URL_HASH SHA256=${GTEST_SHA256}`,
+				')',
+				'# On Windows, use the same C runtime as the project; never install GoogleTest.',
+				'set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)',
+				'set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)',
+				'FetchContent_MakeAvailable(googletest)',
+				'',
+				'enable_testing()',
+				`add_executable(app_tests${testSources}\n)`,
+				`target_link_libraries(app_tests PRIVATE project_flags ${ownMain ? 'GTest::gtest' : 'GTest::gtest_main'})`,
+				'include(GoogleTest)',
+				'gtest_discover_tests(app_tests)',
+				'',
+			);
+		} else if (framework === 'doctest') {
+			// doctest is header-only; doctest_with_main is its implementation and
+			// main, the library the browser links unless a test implements doctest.
+			const ownDoctest = ownMain || tests.some((p) => implementsDoctest(files[p] ?? ''));
+			lines.push(
+				`# The tests: tests/ and the program's sources without its main, with doctest ${DOCTEST_VERSION},`,
+				'# the version the browser runs. Downloaded once, when the build is configured.',
+				'include(FetchContent)',
+				'FetchContent_Declare(doctest',
+				'    GIT_REPOSITORY https://github.com/doctest/doctest.git',
+				`    GIT_TAG ${DOCTEST_COMMIT} # v${DOCTEST_VERSION}`,
+				')',
+				'set(DOCTEST_NO_INSTALL ON CACHE BOOL "" FORCE)',
+				'FetchContent_MakeAvailable(doctest)',
+				'',
+				'enable_testing()',
+				`add_executable(app_tests${testSources}\n)`,
+				`target_link_libraries(app_tests PRIVATE project_flags ${ownDoctest ? 'doctest::doctest' : 'doctest::doctest_with_main'})`,
+				'include(${doctest_SOURCE_DIR}/scripts/cmake/doctest.cmake)',
+				'doctest_discover_tests(app_tests)',
+				'',
+			);
+		} else {
+			lines.push(
+				`# The tests: tests/ and the program's sources without its main, with Catch2 ${CATCH2_VERSION},`,
+				'# the version the browser runs. Downloaded once, when the build is configured.',
+				'include(FetchContent)',
+				'FetchContent_Declare(Catch2',
+				'    GIT_REPOSITORY https://github.com/catchorg/Catch2.git',
+				`    GIT_TAG ${CATCH2_COMMIT} # v${CATCH2_VERSION}`,
+				')',
+				'FetchContent_MakeAvailable(Catch2)',
+				'',
+				'enable_testing()',
+				`add_executable(app_tests${testSources}\n)`,
+				`target_link_libraries(app_tests PRIVATE project_flags ${ownMain ? 'Catch2::Catch2' : 'Catch2::Catch2WithMain'})`,
+				'list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)',
+				'include(Catch)',
+				'catch_discover_tests(app_tests)',
+				'',
+			);
+		}
 	}
 	return lines.join('\n');
 }
@@ -405,6 +489,51 @@ export function packageJson(entry: string): string {
 	return JSON.stringify(json, null, 2) + '\n';
 }
 
+// ---- TypeScript: package.json for Node's type stripping
+
+/**
+ * package.json for a TypeScript project run as the browser runs it: Node
+ * 22.18 and later strip the types of a `.ts` file themselves, so `npm start`
+ * is `node main.ts` and `npm test` is `node --test` (which finds
+ * `*.test.ts`), with nothing to install.
+ */
+export function typescriptPackageJson(entry: string): string {
+	const json = {
+		name: 'typescript-project',
+		version: '0.1.0',
+		private: true,
+		type: 'module',
+		main: entry,
+		scripts: { start: `node ${entry}`, test: 'node --test' },
+		engines: { node: '>=22.18' },
+	};
+	return JSON.stringify(json, null, 2) + '\n';
+}
+
+// ---- Web: Vite
+
+/** The Vite the app itself is built with (app/package.json). */
+const VITE_VERSION = '8.3.5';
+/** The TypeScript of the JavaScript pack's language server, for `npm run typecheck`. */
+const TYPESCRIPT_VERSION = '6.0.3';
+
+/**
+ * package.json for a web project: Vite serves index.html at the project's
+ * root as it is (`npm run dev`, with hot module replacement) and builds it
+ * into dist/ (`npm run build`); `tsc` checks the types, which Vite does not.
+ */
+export function vitePackageJson(): string {
+	const json = {
+		name: 'web-project',
+		version: '0.1.0',
+		private: true,
+		type: 'module',
+		scripts: { dev: 'vite', build: 'vite build', preview: 'vite preview', typecheck: 'tsc' },
+		devDependencies: { typescript: TYPESCRIPT_VERSION, vite: VITE_VERSION },
+	};
+	return JSON.stringify(json, null, 2) + '\n';
+}
+
 // ---- Scala: sbt
 
 /** The Scala the browser compiles with (packs/scala/build.sh). */
@@ -458,6 +587,185 @@ export function buildSbt(files: Files): string {
 	].join('\n');
 }
 
+// ---- PHP: Composer and PHPUnit
+
+/** The PHPUnit the browser tests with (packs/php/build.sh). */
+const PHPUNIT_VERSION = '12.5.40';
+
+/**
+ * composer.json for the project where it is: PHPUnit as a development
+ * dependency (the browser's version, or a later 12.x), `composer start`
+ * running the entry and `composer test` running PHPUnit, and a class map of
+ * every .php file outside tests/ and vendor/ as the autoloader, which is
+ * what the browser's Test uses (packs/php/src/autoload.php): the project's
+ * files are not in PSR-4 folders, so a class map is the autoloading that
+ * fits them without moving anything. PHP 8.3 or later, which PHPUnit 12
+ * needs; the browser runs 8.4.
+ */
+export function composerJson(entry: string): string {
+	const json = {
+		name: 'yukibana/php-project',
+		description: 'Written in Yukibana Light.',
+		type: 'project',
+		require: { php: '>=8.3' },
+		'require-dev': { 'phpunit/phpunit': `^${PHPUNIT_VERSION}` },
+		autoload: { classmap: ['./'], 'exclude-from-classmap': ['tests/', 'vendor/'] },
+		scripts: { start: `php ${entry}`, test: 'phpunit' },
+		config: { 'sort-packages': true },
+	};
+	return JSON.stringify(json, null, 4) + '\n';
+}
+
+/**
+ * phpunit.xml: the tests in tests/ (PHPUnit's default *Test.php files) with
+ * Composer's autoloader as the bootstrap, as the browser runs them. A
+ * project that has phpunit.xml.dist already says what it wants, and a
+ * phpunit.xml would take precedence over it, so then it is a copy.
+ */
+export function phpunitXml(files: Files): string {
+	const dist = files['phpunit.xml.dist'] ?? files['phpunit.dist.xml'];
+	if (dist !== undefined) return dist;
+	return [
+		'<?xml version="1.0" encoding="UTF-8"?>',
+		'<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"',
+		'         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"',
+		'         bootstrap="vendor/autoload.php"',
+		'         cacheDirectory=".phpunit.cache"',
+		'         colors="true">',
+		'    <testsuites>',
+		'        <testsuite name="tests">',
+		'            <directory>tests</directory>',
+		'        </testsuite>',
+		'    </testsuites>',
+		'</phpunit>',
+		'',
+	].join('\n');
+}
+
+// ---- Rust: Cargo
+
+/**
+ * A Cargo.toml for a project without one (the sample has its own). The
+ * package is `app`, the crate name the browser's server and runner use
+ * without a manifest, and edition 2021, the newest the browser's rustc
+ * (1.78) knows. Cargo finds src/main.rs, src/lib.rs, src/bin/ and tests/ by
+ * itself; a main.rs at the root, which the browser also runs, is named as
+ * the binary.
+ */
+export function cargoToml(files: Files): string {
+	const lines = ['[package]', 'name = "app"', 'version = "0.1.0"', 'edition = "2021"', ''];
+	if (!('src/main.rs' in files) && 'main.rs' in files) lines.push('[[bin]]', 'name = "app"', 'path = "main.rs"', '');
+	return lines.join('\n');
+}
+
+// ---- Java: Maven
+
+/** JUnit Jupiter, as the browser's Test compiles against (packs/java/build.sh). */
+const JUNIT_VERSION = '5.14.4';
+/** The Java the browser's javac is (OpenJDK 25u), so the release Maven compiles for. */
+const JAVA_RELEASE = '25';
+/** Folders the browser's Java runner treats as tests (packs/java/src/runner.js). */
+const JAVA_TESTS = /^(src\/test\/|tests?\/)/;
+
+/** The class a Java file's main is in: its package, and the file's name. */
+export function javaMainClass(files: Files, entry: string): string {
+	const code = (files[entry] ?? '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+	const pkg = /^\s*package\s+([\w.]+)\s*;/m.exec(code)?.[1];
+	const name = entry.replace(/^.*\//, '').replace(/\.java$/, '');
+	return pkg ? `${pkg}.${name}` : name;
+}
+
+/**
+ * pom.xml for the project where it is. A project in Maven's layout (every
+ * .java file under src/main/java or src/test/java, as the sample is) gets
+ * Maven's defaults; any other one compiles every .java file of the folder
+ * except the test folders the browser knows (src/test/, test/, tests/),
+ * which are the tests. JUnit Jupiter is the version the browser tests with,
+ * Surefire runs it, and `mvn exec:exec` runs the entry's class with `java`
+ * itself: exec:java calls main by reflection from another package, which
+ * fails for the package-private `void main()` of a compact source file (JEP
+ * 512).
+ */
+export function pomXml(files: Files, entry: string): string {
+	const java = Object.keys(files).filter((p) => p.endsWith('.java'));
+	const maven = java.every((p) => p.startsWith('src/main/java/') || p.startsWith('src/test/java/'));
+	const testDir = java.some((p) => p.startsWith('src/test/java/')) ? 'src/test/java' : java.some((p) => p.startsWith('tests/')) ? 'tests' : java.some((p) => p.startsWith('test/')) ? 'test' : 'src/test/java';
+	const build = maven
+		? []
+		: [
+				'    <!-- The sources are in the project folder itself, not in src/main/java. -->',
+				'    <sourceDirectory>${project.basedir}</sourceDirectory>',
+				`    <testSourceDirectory>\${project.basedir}/${testDir}</testSourceDirectory>`,
+			];
+	const excludes = maven
+		? []
+		: [
+				'        <configuration>',
+				'          <excludes>',
+				...['src/test/**', 'test/**', 'tests/**', 'target/**', '.*/**'].map((e) => `            <exclude>${e}</exclude>`),
+				'          </excludes>',
+				'        </configuration>',
+			];
+	return [
+		'<?xml version="1.0" encoding="UTF-8"?>',
+		'<!-- Builds the project where it is, with the layout it had in Yukibana Light:',
+		`     mvn compile exec:exec${java.some((p) => JAVA_TESTS.test(p)) ? ', mvn test' : ''} -->`,
+		'<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"',
+		'         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">',
+		'  <modelVersion>4.0.0</modelVersion>',
+		'  <groupId>yukibana</groupId>',
+		'  <artifactId>java-project</artifactId>',
+		'  <version>0.1.0</version>',
+		'',
+		'  <properties>',
+		`    <maven.compiler.release>${JAVA_RELEASE}</maven.compiler.release>`,
+		'    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>',
+		`    <exec.mainClass>${javaMainClass(files, entry)}</exec.mainClass>`,
+		'  </properties>',
+		'',
+		'  <dependencies>',
+		'    <dependency>',
+		'      <groupId>org.junit.jupiter</groupId>',
+		'      <artifactId>junit-jupiter</artifactId>',
+		`      <version>${JUNIT_VERSION}</version>`,
+		'      <scope>test</scope>',
+		'    </dependency>',
+		'  </dependencies>',
+		'',
+		'  <build>',
+		...build,
+		'    <plugins>',
+		'      <plugin>',
+		'        <artifactId>maven-compiler-plugin</artifactId>',
+		'        <version>3.14.1</version>',
+		...excludes,
+		'      </plugin>',
+		'      <plugin>',
+		'        <artifactId>maven-surefire-plugin</artifactId>',
+		'        <version>3.5.6</version>',
+		'      </plugin>',
+		'      <plugin>',
+		'        <groupId>org.codehaus.mojo</groupId>',
+		'        <artifactId>exec-maven-plugin</artifactId>',
+		'        <version>3.6.4</version>',
+		'        <!-- mvn exec:exec runs the program with the JDK that runs Maven, as `java` would. -->',
+		'        <configuration>',
+		'          <executable>${java.home}/bin/java</executable>',
+		'          <inheritIo>true</inheritIo>',
+		'          <arguments>',
+		'            <argument>-classpath</argument>',
+		'            <classpath/>',
+		'            <argument>${exec.mainClass}</argument>',
+		'          </arguments>',
+		'        </configuration>',
+		'      </plugin>',
+		'    </plugins>',
+		'  </build>',
+		'</project>',
+		'',
+	].join('\n');
+}
+
 // ---- Every language: README.md and .gitignore
 
 /** How to build, run and test with each language's tools, as Markdown sections. */
@@ -468,7 +776,7 @@ function instructions(language: Language, files: Files): string[] {
 			const tests = paths.some((p) => TESTS.test(p) && (CXX.test(p) || C.test(p)));
 			return [
 				'## Build and run\n\nWith CMake 3.16 or later and a C++ compiler:\n\n```sh\ncmake -S . -B build\ncmake --build build\n./build/app\n```',
-				...(tests ? [`## Test\n\nThe tests in \`tests/\` use GoogleTest ${GTEST_VERSION}, which CMake downloads the first time it configures the build:\n\n\`\`\`sh\nctest --test-dir build --output-on-failure\n\`\`\``] : []),
+				...(tests ? [`## Test\n\nThe tests in \`tests/\` use ${{ gtest: `GoogleTest ${GTEST_VERSION}`, doctest: `doctest ${DOCTEST_VERSION}`, catch2: `Catch2 ${CATCH2_VERSION}` }[testFrameworkOf(files)]}, which CMake downloads the first time it configures the build:\n\n\`\`\`sh\nctest --test-dir build --output-on-failure\n\`\`\``] : []),
 				'## Editors\n\nCLion, Visual Studio and VS Code (with CMake Tools) open the folder as a CMake project. clangd reads `build/compile_commands.json`, which CMake writes, and `compile_flags.txt` for files outside the build.',
 			];
 		}
@@ -498,12 +806,51 @@ function instructions(language: Language, files: Files): string[] {
 				'## Editors\n\nVS Code and WebStorm open the folder as it is; there is nothing to install.',
 			];
 		}
+		case 'typescript': {
+			const tests = paths.some((p) => /(^|\/)test\//.test(p) || /(^|\/)([^/]+[.\-_]test|test-[^/]*|test)\.m?[jt]s$/.test(p));
+			return [
+				`## Run\n\nWith Node.js 22.18 or later, which runs TypeScript by stripping its types (nothing to install):\n\n\`\`\`sh\nnode ${language.entry}     # or: npm start\n\`\`\``,
+				...(tests ? ['## Test\n\nThe tests use `node:test`:\n\n```sh\nnode --test               # or: npm test\n```'] : []),
+				'## Editors\n\nVS Code and WebStorm open the folder as it is. Node only strips types, so `tsconfig.json` sets `erasableSyntaxOnly` (no `enum` or `namespace`) and imports name their `.ts` files. For the types of `node:test` and `process` outside Yukibana, `npm install -D @types/node` and add `"types": ["node"]` to `tsconfig.json`.',
+			];
+		}
+		case 'web':
+			return [
+				'## Run\n\nWith Node.js 20.19 or later:\n\n```sh\nnpm install\nnpm run dev                 # a local server that reloads as you edit\nnpm run build               # the site, in dist/\nnpm run typecheck           # tsc: Vite does not check types\n```',
+				'## Editors\n\nVS Code and WebStorm open the folder as it is.',
+			];
 		case 'scala': {
 			const tests = paths.some((p) => p.startsWith('tests/') && /\.(scala|java)$/.test(p));
 			return [
 				`## Build and run\n\nWith sbt and a JDK 17 or later (sbt downloads Scala ${SCALA_VERSION}):\n\n\`\`\`sh\nsbt run\n\`\`\``,
 				...(tests ? [`## Test\n\nThe tests in \`tests/\` use MUnit ${MUNIT_VERSION}:\n\n\`\`\`sh\nsbt test\n\`\`\``] : []),
 				'## Editors\n\nIntelliJ IDEA (with the Scala plugin) opens the folder and imports `build.sbt`; VS Code with Metals offers to import the build when the folder is opened.',
+			];
+		}
+		case 'rust': {
+			const tests = paths.some((p) => /^tests\/[^/]+\.rs$/.test(p)) || Object.entries(files).some(([p, t]) => p.endsWith('.rs') && /#\[test\]/.test(t));
+			return [
+				'## Build and run\n\nWith Rust (rustup from rustup.rs installs cargo):\n\n```sh\ncargo run\n```\n\nThe browser runs the program with Miri on Rust 1.78, so code written there builds with that release or any later one.',
+				...(tests ? ['## Test\n\nThe unit tests (`#[cfg(test)]` modules) and the integration tests in `tests/`:\n\n```sh\ncargo test\n```'] : []),
+				'## Editors\n\nVS Code (with the rust-analyzer extension), RustRover and Zed open the folder and read `Cargo.toml`.',
+			];
+		}
+		case 'php': {
+			const tests = paths.some((p) => p.startsWith('tests/') && p.endsWith('.php'));
+			return [
+				`## Run\n\nWith PHP 8.3 or later:\n\n\`\`\`sh\nphp ${language.entry}\n\`\`\``,
+				...(tests
+					? [`## Test\n\nThe tests in \`tests/\` use PHPUnit ${PHPUNIT_VERSION}, which Composer installs into \`vendor/\`:\n\n\`\`\`sh\ncomposer install\ncomposer test               # or: vendor/bin/phpunit\n\`\`\``]
+					: []),
+				'## Editors\n\nPhpStorm and VS Code (with a PHP extension: Phpactor, Intelephense) open the folder; they read `composer.json` for the autoloading and `phpunit.xml` for the tests.',
+			];
+		}
+		case 'java': {
+			const tests = paths.some((p) => JAVA_TESTS.test(p) && p.endsWith('.java'));
+			return [
+				`## Build and run\n\nWith Maven 3.9 or later and a JDK ${JAVA_RELEASE} or later:\n\n\`\`\`sh\nmvn -q compile exec:exec\n\`\`\`\n\nOr, without Maven: \`java ${language.entry}\` (\`java\` 22 or later compiles the other files the program uses from the same source folder).`,
+				...(tests ? [`## Test\n\nThe tests use JUnit ${JUNIT_VERSION}:\n\n\`\`\`sh\nmvn test\n\`\`\``] : []),
+				'## Editors\n\nIntelliJ IDEA, Eclipse and VS Code (with the Extension Pack for Java) open the folder and import `pom.xml`.',
 			];
 		}
 	}
@@ -532,7 +879,12 @@ const IGNORED: Record<LanguageId, readonly string[]> = {
 	swift: ['.build/', '.swiftpm/', 'xcuserdata/', 'DerivedData/'],
 	python: ['__pycache__/', '*.py[cod]', '.venv/', '.pytest_cache/'],
 	javascript: ['node_modules/'],
+	typescript: ['node_modules/'],
+	web: ['node_modules/', 'dist/'],
 	scala: ['target/', 'project/target/', 'project/project/', '.bsp/', '.bloop/', '.metals/', 'metals.sbt'],
+	php: ['vendor/', '.phpunit.cache/', '.phpunit.result.cache'],
+	rust: ['target/'],
+	java: ['target/', '*.class', '.classpath', '.project', '.settings/', '*.iml'],
 };
 
 /** A .gitignore for the build output of the language's tools. */

@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { LANGUAGES } from '../src/lib/languages.ts';
 import { exportProject } from '../src/lib/export.ts';
 import { zip } from '../src/lib/zip.ts';
+import { chooseTestFramework } from '../src/lib/cpp-tests.ts';
 
 const only = process.argv.slice(2);
 const work = mkdtempSync(join(tmpdir(), 'yukibana-export-'));
@@ -95,15 +96,22 @@ async function download(name, language, files, folders = []) {
 
 const PACK_CACHE = process.env.PACK_CACHE ?? join(homedir(), '.cache', 'yukibana-packs');
 
-async function cpp(name, files) {
+/** The C++ sample with its tests in each framework, as the app's framework choice writes them. */
+const CPP_FRAMEWORKS = { gtest: 'GoogleTest', doctest: 'doctest', catch2: 'Catch2' };
+
+async function cpp(name, files, framework = 'gtest') {
+	const label = CPP_FRAMEWORKS[framework];
+	check(exportProject(sample('cpp'), files).files['CMakeLists.txt'].includes(`with ${label} `), `${name}: CMakeLists.txt fetches ${label}, the framework tests/ includes`);
 	const dir = await download(name, sample('cpp'), files);
 	if (!dir) return;
 	if (!has('cmake') || !(has('c++') || has('g++') || has('clang++'))) return skip(`${name}: cmake or a C++ compiler is missing`);
-	if (step(`${name}: cmake configures (and downloads GoogleTest)`, 'cmake', ['-S', '.', '-B', 'build'], dir).status !== 0) return;
-	step(`${name}: cmake --build`, 'cmake', ['--build', 'build', '-j'], dir);
+	if (step(`${name}: cmake configures (and downloads ${label})`, 'cmake', ['-S', '.', '-B', 'build'], dir).status !== 0) return;
+	// A bounded -j: Catch2 is a hundred translation units.
+	step(`${name}: cmake --build`, 'cmake', ['--build', 'build', '-j', '3'], dir);
 	check(existsSync(join(dir, 'build', 'compile_commands.json')), `${name}: build/compile_commands.json is written for clangd`);
 	step(`${name}: ./build/app prints the distance`, join(dir, 'build', 'app'), [], dir, '5.000000');
-	step(`${name}: ctest runs the GoogleTest tests`, 'ctest', ['--test-dir', 'build', '--output-on-failure'], dir, '100% tests passed');
+	// Each framework's discovery registers the sample's three tests one by one.
+	step(`${name}: ctest runs the ${label} tests, each on its own`, 'ctest', ['--test-dir', 'build', '--output-on-failure'], dir, '100% tests passed, 0 tests failed out of 3');
 }
 
 async function swift(name, files) {
@@ -123,6 +131,27 @@ async function javascript(name, files) {
 	if (!dir) return;
 	step(`${name}: npm start prints the distance`, 'npm', ['start', '--silent'], dir, '(0, 0) to (3, 4): 5');
 	step(`${name}: npm test runs node --test`, 'npm', ['test', '--silent'], dir, 'pass 4');
+}
+
+async function typescript(name, files) {
+	const dir = await download(name, sample('typescript'), files);
+	if (!dir) return;
+	// Node 22.18 and later run .ts files by stripping their types; earlier ones cannot run this project.
+	const [major, minor] = process.versions.node.split('.').map(Number);
+	if (major < 22 || (major === 22 && minor < 18)) return skip(`${name}: node ${process.version} cannot strip types (22.18 or later can)`);
+	step(`${name}: npm start runs main.ts with Node's type stripping`, 'npm', ['start', '--silent'], dir, '(0, 0) to (3, 4): 5');
+	step(`${name}: npm test runs node --test, which finds tests/*.test.ts`, 'npm', ['test', '--silent'], dir, 'pass 4');
+}
+
+async function web(name, files) {
+	const dir = await download(name, sample('web'), files);
+	if (!dir) return;
+	const install = run('npm', ['install', '--no-audit', '--no-fund'], dir);
+	if (install.status !== 0) return skip(`${name}: npm install failed (no registry?): ${tail(install.output)}`);
+	step(`${name}: npm run build (vite build) builds the page`, 'npm', ['run', 'build'], dir, 'built in');
+	const built = existsSync(join(dir, 'dist', 'index.html')) ? readFileSync(join(dir, 'dist', 'index.html'), 'utf8') : '';
+	check(/<script type="module"[^>]*src="\/assets\/[^"]+\.js"/.test(built) && /<link rel="stylesheet"[^>]*href="\/assets\/[^"]+\.css"/.test(built), `${name}: dist/index.html loads the bundled script and stylesheet`, built);
+	step(`${name}: npm run typecheck (tsc) finds no errors`, 'npm', ['run', 'typecheck'], dir);
 }
 
 async function python(name, files) {
@@ -157,9 +186,56 @@ async function scala(name, files, expectTests) {
 	if (expectTests) step(`${name}: sbt test runs the MUnit suite in tests/`, sbt, [...flags, '--batch', 'test'], dir, `Passed: Total ${expectTests}`);
 }
 
+/**
+ * PHP with the machine's php and composer. `composer install` is not run:
+ * without a GitHub token Composer cannot fetch PHPUnit's release zips
+ * through GitHub's API and falls back to cloning every repository with its
+ * whole history (gigabytes). Instead: Composer resolves the dependencies
+ * from Packagist without installing (`update --dry-run`), writes the
+ * autoloader (`dump-autoload`, no download), and the tests run with the
+ * PHPUnit phar the PHP pack uses in the browser, which reads phpunit.xml and
+ * its bootstrap, vendor/autoload.php, as vendor/bin/phpunit would.
+ */
+async function php(name, files, expectTests) {
+	const dir = await download(name, sample('php'), files);
+	if (!dir) return;
+	if (!has('php') || !has('composer')) return skip(`${name}: php or composer is missing`);
+	const env = { COMPOSER_ALLOW_SUPERUSER: '1', COMPOSER_NO_INTERACTION: '1' };
+	if (files['main.php']?.includes('distance')) step(`${name}: php main.php prints the distance`, 'php', ['main.php'], dir, '(0, 0) to (3, 4): 5');
+	step(`${name}: composer validates composer.json`, 'composer', ['validate', '--no-check-publish'], dir, undefined, env);
+	const resolve = run('composer', ['update', '--dry-run', '--no-progress'], dir, env);
+	if (resolve.status !== 0) skip(`${name}: composer could not resolve from Packagist (offline?): ${tail(resolve.output)}`);
+	else check(/phpunit\/phpunit \(12\./.test(resolve.output), `${name}: composer resolves phpunit/phpunit 12 from Packagist`, tail(resolve.output));
+	if (step(`${name}: composer dump-autoload writes the class map`, 'composer', ['dump-autoload'], dir, undefined, env).status !== 0) return;
+	const phar = join(PACK_CACHE, 'php', 'dl', 'phpunit-12.5.40.phar');
+	if (!existsSync(phar)) return skip(`${name}: ${phar} is missing (packs/php/build.sh downloads it)`);
+	step(`${name}: PHPUnit runs tests/ through phpunit.xml and vendor/autoload.php`, 'php', [phar], dir, expectTests);
+}
+
+async function rust(name, files, expect) {
+	const dir = await download(name, sample('rust'), files);
+	if (!dir) return;
+	if (!has('cargo')) return skip(`${name}: cargo is missing`);
+	const env = { CARGO_TARGET_DIR: join(dir, 'target') };
+	step(`${name}: cargo run prints the distance`, 'cargo', ['run', '--quiet'], dir, expect.run, env);
+	if (expect.tests) step(`${name}: cargo test runs the unit and integration tests`, 'cargo', ['test', '--quiet'], dir, expect.tests, env);
+}
+
 const swiftSample = sample('swift').sample;
 const cases = {
-	cpp: () => cpp('cpp', sample('cpp').sample),
+	rust: async () => {
+		// The sample has its own Cargo.toml (package `geometry`).
+		await rust('rust', sample('rust').sample, { run: '(0, 0) to (3, 4): 5', tests: 'test result: ok. 3 passed' });
+		// Without one, the generated manifest names the package `app`, as
+		// the browser's server and runner do.
+		const bare = { 'main.rs': 'mod point;\n\nfn main() {\n    println!("{}", point::norm(3.0, 4.0));\n}\n', 'point.rs': 'pub fn norm(x: f64, y: f64) -> f64 {\n    x.hypot(y)\n}\n' };
+		await rust('rust-bare', bare, { run: '5' });
+	},
+	cpp: async () => {
+		const cppSample = sample('cpp').sample;
+		await cpp('cpp', cppSample);
+		for (const fw of ['doctest', 'catch2']) await cpp(`cpp-${fw}`, { ...cppSample, ...chooseTestFramework(cppSample, fw, cppSample).write }, fw);
+	},
 	swift: async () => {
 		// As the sample is: tests that use the project without importing it.
 		await swift('swift', swiftSample);
@@ -169,7 +245,16 @@ const cases = {
 		await swift('swift-imported', imported);
 	},
 	javascript: () => javascript('javascript', sample('javascript').sample),
+	typescript: () => typescript('typescript', sample('typescript').sample),
+	web: () => web('web', sample('web').sample),
 	python: () => python('python', sample('python').sample),
+	php: async () => {
+		await php('php', sample('php').sample, 'OK (5 tests, 5 assertions)');
+		// A class the tests use without requiring its file: Composer's class map finds it.
+		const money = '<?php\n\nnamespace App;\n\nfinal class Money\n{\n    public function __construct(public readonly int $cents)\n    {\n    }\n}\n';
+		const test = '<?php\n\nuse App\\Money;\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class MoneyTest extends TestCase\n{\n    public function testCents(): void\n    {\n        $this->assertSame(5, (new Money(5))->cents);\n    }\n}\n';
+		await php('php-classmap', { 'main.php': '<?php\necho "hi\\n";\n', 'src/Money.php': money, 'tests/MoneyTest.php': test }, 'OK (1 test, 1 assertion)');
+	},
 	scala: async () => {
 		await scala('scala', sample('scala').sample, 0);
 		const suite = 'class GeometrySuite extends munit.FunSuite:\n  test("norm of (3, 4) is 5") {\n    assertEquals(Point(3, 4).norm, 5.0)\n  }\n';

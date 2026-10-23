@@ -4,8 +4,10 @@ A prototype IDE that runs entirely in the browser: Monaco, a small LSP
 client, and a language server and a compiler per language, each compiled
 to WebAssembly or JavaScript and downloaded only when its language is
 selected. It is a static site with no backend: any web server can host it.
-It is a PWA: the app is cached when it installs, and a language's files the
-first time they are used, so a language used once works offline.
+It is an installable PWA: the app is cached when it installs, and a
+language's files the first time they are used or when Download everything
+asks for them, so a language used once works offline ("Offline and
+installing").
 
 ```text
 app/                  SvelteKit 3 (Svelte 5, Vite 8, adapter-static), Monaco 0.57, dockview
@@ -42,24 +44,79 @@ to go back and forward), references, rename (F2), quick fixes, signature help,
 formatting and semantic highlighting, as far as each language server offers
 them. Run (Ctrl+Enter) compiles and runs the project in a worker, with a
 terminal that can read input. Test (Ctrl+Shift+Enter) runs the project's
-tests in `tests/` (`Tests/` for Swift): pytest, `node:test`, GoogleTest or
-XCTest; Scala has no Test yet. Download saves the project as
+tests in `tests/` (`Tests/` for Swift): pytest, `node:test`, GoogleTest,
+doctest or Catch2 (chosen next to Test), or XCTest; Scala has no Test yet. Download saves the project as
 `<language>-project.zip` for an IDE: its files as they are, at the same
 paths, plus the build files it lacks (CMakeLists.txt, Package.swift,
 pyproject.toml, package.json or build.sbt, set up for the flat layout), a
 README.md with the commands and a .gitignore.
 
+A web project's Run opens a Preview panel with its `index.html` in a
+sandboxed iframe: a stylesheet edit is applied in place, any other edit
+reloads the page, and its console goes to the terminal. JavaScript and
+TypeScript programs run in a module worker with the browser's worker
+globals plus `process`, `node:readline`, `node:test` and `node:assert`, but
+no DOM and no npm packages (packs/javascript/README.md, "Environment").
+
 | Language | Language server | Runs with | Download to edit | More to run |
 | --- | --- | --- | --- | --- |
 | JavaScript | TypeScript 6.0 language service | the browser, as ES modules | 1.1 MB | none |
+| TypeScript | the JavaScript pack's server, `strict` | the same, types stripped as `node main.ts` does | (JavaScript's) | 3 KB (strip.js; TypeScript is the server's file) |
+| Web (HTML, CSS, TypeScript) | the JavaScript pack's server for TypeScript; Monaco's own HTML and CSS (SCSS, Less) services: completion, hover, validation, formatting, colours | a live-reloading Preview panel (sandboxed iframe) | (JavaScript's), plus the CSS worker 0.2 MB and, once an HTML file is open, the HTML worker 0.15 MB | as TypeScript |
 | Python | basedpyright 1.40 | Pyodide 314.0.7 (Python 3.14) | 1.1 MB | 4.5 MB |
 | Scala 3 | the Scala 3.7.4 compiler's interactive API, compiled with Scala.js | the same compiler and the Scala.js linker | 2.6 MB | 3.7 MB |
-| C and C++ | clangd 21 (Emscripten, threads) | clang 21 and wasm-ld, WASI | 7.8 MB | 12.2 MB |
+| C and C++ | clangd 21 (Emscripten, threads) | clang 21 and wasm-ld, WASI | 8.0 MB | 12.2 MB; Test 0.06 to 0.28 MB (the framework's libraries) |
 | Swift | swift-syntax-ls (ours) plus swift-frontend 6.3.3 for types and errors | the same swift-frontend and wasm-ld | 30.2 MB | 8.2 MB |
+| Rust | rust-analyzer's IDE crates (ra_ap_ide 0.0.358) with our LSP layer, std 1.98 sources | Miri 1.78 (rustc's MIR interpreter, not a compiler) | 4.2 MB | 29.8 MB |
+| PHP | Phpactor 2026.10.07 on PHP 8.4 (php-wasm) | PHP 8.4.25's CLI (php-wasm), PHPUnit 12.5 | 7.5 MB | 2 KB (the same php.wasm); Test 0.6 MB |
 
-Sizes are brotli transfer sizes. The app itself is 1.1 MB. Each pack's
-README has the details: what was patched and why, what is measured, and
-what does not work.
+Sizes are brotli transfer sizes. The app itself is 1.2 MB, icons included.
+Each pack's README has the details: what was patched and why, what is
+measured, and what does not work.
+
+## Offline and installing
+
+The app is a PWA that Chromium-based browsers offer to install (the
+manifest has maskable icons and the window colour of each theme). Its
+service worker (`app/src/service-worker/index.ts`) does three things:
+
+* **Precaches the app shell when it installs**: the files the app needs to
+  start, 1.2 MB, and nothing else. Until now it also precached every file of
+  `static/`, which means every pack and its `.br` and `.gz` copies: a first
+  visit downloaded some 400 MB in the background.
+* **Caches everything else on first use**: a pack's files in the `packs`
+  cache, the app's lazy files (Monaco's HTML, CSS and JSON services and
+  their workers, grammars, schemas; 0.5 MB in all) in the build's app
+  cache. Those are fetched only when a model of their language exists:
+  a Python session loads no HTML or CSS code at all.
+* **Adds the COOP/COEP isolation headers** to every response, for hosts that
+  cannot send them (one reload on the first visit).
+
+The cloud button in the top bar opens the Offline dialog: which languages
+are available offline (also marked in the language list), a button per
+language to make it so, and **Download everything**, with its size shown
+before it starts and progress in megabytes while it runs. A build lists
+every file it can serve, with sizes and, for pack files, a content hash, in
+`offline.json`, written by `app/scripts/offline-manifest.mjs` at the end of
+`npm run build`. The page downloads into the same caches the service worker
+serves from, and asks the browser for persistent storage first.
+
+| Download | Transfer | Stored |
+| --- | --- | --- |
+| The app (precached) | 1.2 MB | 4.9 MB |
+| The app's lazy files | 0.5 MB | 2.8 MB |
+| Every pack (Python 5.9, JavaScript 1.1, C++ 19.9, Swift 36.9, Scala 6.0, Rust 32.5, PHP 7.9, Java 4.2) | 114 MB | 534 MB |
+
+A new build installs in the background and the top bar offers "New
+version: reload"; until then the tab keeps the build it runs. Its app cache
+replaces the old one, and pack files stay cached across builds unless their
+hash changed, so an update does not download every language again.
+
+Limits: the dialog's sizes per language include the 0.5 MB of lazy app
+files every language shares. A pack file that a pack fetches under another
+URL (with a query string, say) is not covered by `offline.json`; none does
+today. Safari may evict the caches of a site not added to the home screen
+after weeks without a visit, persistent storage or not.
 
 ## Limits
 
@@ -72,12 +129,27 @@ what does not work.
   checked subset of swift-corelibs-xctest. Foundation is not in the sysroot.
 * **C++**: no threads, a fixed stack. Exceptions work (WebAssembly
   exception handling, so a browser from 2025: Chrome 137, Firefox 131,
-  Safari 18.4). Tests are GoogleTest in `tests/`, without gMock or death
-  tests. Container indexing is checked (libc++ hardening, fast mode); other
+  Safari 18.4). Tests in `tests/` are GoogleTest (without gMock or death
+  tests), doctest or Catch2 v3, whichever they include (one per project;
+  the top bar's choice converts the sample's tests); only that framework's
+  libraries are downloaded. Container indexing is checked (libc++ hardening, fast mode); other
   out-of-bounds accesses are not.
 * **Scala**: not Metals, which cannot run in a browser. The LSP layer is
   ours; what it answers comes from the compiler.
 * **Python**: the standard library only; no packages from PyPI.
+* **PHP**: the real Phpactor, run by PHP in the browser, with its own
+  checks (unknown classes and methods, types) plus PHP's parser for syntax
+  errors; no `php -l` compile errors, no PHPStan or Psalm, no formatting.
+  PHP has the extensions of WordPress Playground's build (no Composer
+  packages; no `readline()`: read input with `fgets(STDIN)`).
+* **Rust**: not the rust-analyzer program but its analysis crates, with a
+  crate graph built from `Cargo.toml` and `src/`; no crates.io
+  dependencies, no proc macros, no formatting, and no `cargo check`, so
+  borrow-check errors appear only on Run. Run interprets the program with
+  Miri (rustc 1.78, edition 2021 at most): compile errors are rustc's, but
+  it is slow, a panic cannot be caught (`catch_unwind`), there are no
+  program arguments, and std APIs newer than 1.78 type check in the editor
+  and fail on Run. Tests run like `cargo test` through our own harness.
 * **All**: one browser tab is one machine. A program that never ends needs
   Stop, and memory is the tab's.
 
@@ -87,6 +159,9 @@ Each pack has `test.mjs`, which drives its server headlessly in Chromium.
 `app/tests/e2e.mjs` drives the built app for every built pack: a server
 starts, an error is reported, completion, hover, definition, Run prints the
 expected output, project switching keeps edits, and Download saves a valid
-zip. `app/tests/export.mjs` downloads each sample as the app does and builds,
-runs and tests it with CMake and CTest, SwiftPM, Node, pytest and sbt,
+zip; for web projects, HTML and CSS completion, CSS validation and colours;
+that the HTML and CSS workers load only when needed; that Chromium finds
+the app installable; and that, once Python is made available offline, a
+reload without a network starts the app and runs an edited program. `app/tests/export.mjs` downloads each sample as the app does and builds,
+runs and tests it with CMake and CTest, SwiftPM, Node, pytest, sbt and Cargo,
 skipping (and saying so) any tool the machine lacks.

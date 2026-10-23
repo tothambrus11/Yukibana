@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
 
 const root = new URL('../build/', import.meta.url).pathname;
-const compressible = /\.(html|js|mjs|css|json|svg|webmanifest|txt|xml|wasm)$/;
+const compressible = /\.(html|js|mjs|css|json|svg|webmanifest|txt|xml|wasm|ttf)$/;
 
 async function* files(dir) {
 	for (const entry of await readdir(dir, { withFileTypes: true })) {

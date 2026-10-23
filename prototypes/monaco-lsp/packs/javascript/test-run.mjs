@@ -116,6 +116,20 @@ function check(name, ok, detail) {
 const plain = (text) => text.replace(/\x1b\[[0-9;:]*[A-Za-z]/g, '');
 const stripped = (out) => ({ ...out, raw: { stdout: out.stdout, stderr: out.stderr }, stdout: plain(out.stdout), stderr: plain(out.stderr) });
 const run = async (files, entry = 'main.js', inputs = []) => stripped(await page.evaluate(([f, e, i]) => window.runProgram('run', f, e, i), [files, entry, inputs]));
+const page_preview = (files, entry = 'index.html') =>
+	page.evaluate(
+		([f, e]) =>
+			new Promise((done) => {
+				const worker = new Worker('/packs/javascript/runner.js', { type: 'module' });
+				worker.onmessage = ({ data: m }) => {
+					if (m.type !== 'page') return;
+					worker.terminate();
+					done(m);
+				};
+				worker.postMessage({ type: 'preview', id: 1, files: f, entry: e });
+			}),
+		[files, entry],
+	);
 const test = async (files) => stripped(await page.evaluate((f) => window.runProgram('test', f, 'main.js'), files));
 
 // The sample project of app/src/lib/languages.ts, with its test file.
@@ -293,6 +307,154 @@ check('test: files under test/ are test files (Node\'s default patterns); consol
 // 5. `node main.js` runs the tests a program defines; so does Run.
 const r3 = await run({ 'main.js': "import { test } from 'node:test';\nimport assert from 'node:assert';\nconsole.log('program');\ntest('inside a program', () => assert.ok(true));\n" });
 check('run: a program that defines node:test tests runs them, as `node main.js` does', r3.code === 0 && /^program\n✔ inside a program/.test(r3.stdout) && /ℹ pass 1/.test(r3.stdout), short(r3.stdout));
+
+// 6. TypeScript: types stripped as `node main.ts` strips them, positions kept.
+const TS_SAMPLE = {
+	'main.ts': `import { Point, distance, type Shape } from './geometry.ts';
+
+const a = new Point(0, 0);
+const b = new Point(3, 4);
+const shapes: Shape[] = [{ kind: 'circle', radius: 1 }];
+console.log(\`\${a} to \${b}: \${distance(a, b)}\`);
+console.log(shapes.length);
+`,
+	'geometry.ts': `export type Shape = { kind: 'circle'; radius: number } | { kind: 'square'; side: number };
+
+/** A point in the plane. */
+export class Point {
+  readonly x: number;
+  readonly y: number;
+  constructor(x: number, y: number) {
+    this.x = x;
+    this.y = y;
+  }
+  norm(): number {
+    return Math.hypot(this.x, this.y);
+  }
+  toString(): string {
+    return \`(\${this.x}, \${this.y})\`;
+  }
+}
+
+export function distance(a: Point, b: Point): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+`,
+	'tests/geometry.test.ts': `import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { Point, distance } from '../geometry.ts';
+
+describe('Point', () => {
+  it('has norm 5 at (3, 4)', () => {
+    const p: Point = new Point(3, 4);
+    assert.equal(p.norm(), 5);
+  });
+  it('is at distance 0 from itself', () => {
+    const p = new Point(7, -3);
+    assert.equal(distance(p, p), 0);
+  });
+});
+`,
+};
+const ts1 = await run(TS_SAMPLE, 'main.ts');
+check('typescript: main.ts runs with its types stripped, importing geometry.ts', ts1.code === 0 && ts1.stdout === '(0, 0) to (3, 4): 5\n1\n' && ts1.stderr === '', `(${ts1.ms} ms; ${ts1.phases.join(', ')}) stdout=${short(ts1.stdout)} stderr=${short(ts1.stderr)}`);
+const ts2 = await run({ 'main.ts': 'const n: number = 1;\ninterface I { a: string }\nfunction f(x: I): never {\n  throw new Error(x.a);\n}\nf({ a: "at line 4" });\n' }, 'main.ts');
+check('typescript: a stack trace points at the .ts line and column (types became whitespace)', ts2.code === 1 && /Error: at line 4\n\s+at f \(main\.ts:4:9\)/.test(ts2.stderr), short(ts2.stderr, 300));
+const ts3 = await run({ 'main.ts': 'enum Colour { Red }\nconsole.log(Colour.Red);\n' }, 'main.ts');
+check('typescript: an enum is refused with the reason node gives (strip-only mode)', ts3.code === 1 && /^main\.ts:1:1: An enum is not supported when types are only stripped.*ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX/.test(ts3.stderr), short(ts3.stderr, 200));
+const ts4 = await test(TS_SAMPLE);
+check('typescript: Test finds tests/*.test.ts and runs them', ts4.code === 0 && /ℹ tests 2\n/.test(ts4.stdout) && /ℹ pass 2\n/.test(ts4.stdout), short(ts4.stdout, 300));
+const ts5 = await test({ ...TS_SAMPLE, 'tests/geometry.test.ts': TS_SAMPLE['tests/geometry.test.ts'].replace('p.norm(), 5)', 'p.norm(), 6)') });
+check('typescript: a failing test is located at its .ts line, and assert quotes nothing wrong', ts5.code === 1 && /test at tests\/geometry\.test\.ts:6:3/.test(ts5.stdout) && /at .*tests\/geometry\.test\.ts:8:12/.test(ts5.stdout), short(ts5.stdout.slice(ts5.stdout.indexOf('✖ failing')), 400));
+
+// 7. What a command-line program uses: process and node:readline.
+const c1 = await run({ 'main.js': "process.stdout.write('no newline|');\nprocess.stdout.write('then one\\n');\nconsole.log(process.argv.length, process.argv[1]);\nprocess.exitCode = 3;\n" }, 'main.js');
+check('cli: process.stdout.write writes without a newline; argv is [node, /workspace/main.js]; exitCode is the status', c1.code === 3 && c1.stdout === 'no newline|then one\n2 /workspace/main.js\n', `code ${c1.code} stdout=${short(c1.stdout)}`);
+const c2 = await run({ 'main.js': "console.log('before');\nsetTimeout(() => console.log('never'), 10);\nprocess.exit(4);\nconsole.log('after');\n" }, 'main.js');
+check('cli: process.exit(4) ends the run at once with status 4; nothing after it runs', c2.code === 4 && c2.stdout === 'before\n' && c2.stderr === '', `code ${c2.code} stdout=${short(c2.stdout)} stderr=${short(c2.stderr)}`);
+const c3 = await run(
+	{
+		'main.ts': `import * as readline from 'node:readline/promises';
+import { stdin as input, stdout as output } from 'node:process';
+
+const rl = readline.createInterface({ input, output });
+const name = await rl.question('Name? ');
+const age = Number(await rl.question('Age? '));
+rl.close();
+console.log(\`\${name} is \${age}\`);
+`,
+	},
+	'main.ts',
+	['Ada\n', '36\n'],
+);
+check('cli: node:readline/promises question() reads two lines (TypeScript, node:process)', c3.code === 0 && c3.stdout === 'Name? Age? Ada is 36\n', `stdout=${short(c3.stdout)} stderr=${short(c3.stderr)}`);
+const c4 = await run(
+	{
+		'main.js': `import { createInterface } from 'node:readline';
+const rl = createInterface({ input: process.stdin });
+let sum = 0;
+for await (const line of rl) sum += Number(line);
+console.log('sum', sum);
+`,
+	},
+	'main.js',
+	['1\n', '2\n', '39\n', null],
+);
+check('cli: for await (const line of rl) reads lines until end of input', c4.code === 0 && c4.stdout === 'sum 42\n', `stdout=${short(c4.stdout)} stderr=${short(c4.stderr)}`);
+const c5 = await run(
+	{
+		'main.js': `import readline from 'readline';
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+const lines = [];
+rl.on('line', (line) => lines.push(line.toUpperCase()));
+rl.on('close', () => console.log(lines.join(',')));
+rl.question('first? ', (a) => console.log('answer', a));
+`,
+	},
+	'main.js',
+	['x\n', 'y\n', 'z\n', null],
+);
+check("cli: question() with a callback, then 'line' events and 'close' at end of input", c5.code === 0 && /^first\? /.test(c5.stdout) && /Y,Z\n$/.test(c5.stdout), `stdout=${short(c5.stdout)} stderr=${short(c5.stderr)}`);
+
+// The environment README.md ("Environment") describes: a module worker's globals, no DOM, no Node beyond what the runner adds.
+const environment = await run({
+	'main.js': `const has = (name) => typeof globalThis[name] !== 'undefined';
+const present = ['fetch', 'WebAssembly', 'crypto', 'TextEncoder', 'TextDecoder', 'structuredClone', 'Intl', 'setTimeout', 'queueMicrotask', 'OffscreenCanvas', 'indexedDB', 'WebSocket', 'URL', 'Blob', 'atob', 'performance', 'SharedArrayBuffer', 'Atomics', 'prompt', 'process'];
+const absent = ['document', 'window', 'localStorage', 'alert', 'Buffer', 'require', 'module', '__dirname', 'global'];
+console.log('missing', present.filter((n) => !has(n)).join() || 'none');
+console.log('present', absent.filter(has).join() || 'none');
+console.log(typeof crypto.randomUUID(), typeof crypto.subtle.digest, crossOriginIsolated);
+const canvas = new OffscreenCanvas(4, 4);
+console.log(canvas.getContext('2d') !== null);
+`,
+});
+check('environment: worker globals (fetch, WebAssembly, crypto, OffscreenCanvas, ...) are there; DOM and Node globals other than process are not', environment.code === 0 && environment.stdout === 'missing none\npresent none\nstring function true\ntrue\n', `stdout=${short(environment.stdout)} stderr=${short(environment.stderr)}`);
+
+// 8. Preview (this pack's `type: 'preview'`): the page as one document.
+const built = await page_preview({
+	'index.html': '<!doctype html>\n<html>\n<head>\n<link rel="stylesheet" href="style.css">\n</head>\n<body><h1 id="t">x</h1>\n<script type="module" src="./main.ts"></script>\n</body>\n</html>\n',
+	'style.css': 'h1 { color: rgb(1, 2, 3); }\n',
+	'main.ts': "import { label } from './label';\ndocument.getElementById('t')!.textContent = label(2);\nconsole.log('hello from the page');\n",
+	'label.ts': 'export const label = (n: number): string => `count ${n}`;\n',
+});
+check(
+	'preview: index.html becomes one document: style.css inlined, main.ts linked with an extensionless import, the bridge first',
+	built.html !== null && built.styles.join() === 'style.css' && /<style data-yukibana-href="style.css">h1 \{ color: rgb\(1, 2, 3\); \}/.test(built.html) && /<script type="module" src="data:text\/javascript;base64,/.test(built.html) && built.html.indexOf('yukibana') < built.html.indexOf('<style'),
+	short(JSON.stringify(built.errors), 200),
+);
+const rendered = await page.evaluate(async (html) => {
+	const frame = document.createElement('iframe');
+	frame.sandbox = 'allow-scripts allow-forms allow-modals';
+	const messages = [];
+	addEventListener('message', (e) => e.source === frame.contentWindow && messages.push(e.data));
+	frame.srcdoc = html;
+	document.body.append(frame);
+	await new Promise((r) => setTimeout(r, 1500));
+	return messages;
+}, built.html ?? '');
+check('preview: in a sandboxed srcdoc iframe under COEP the module runs and its console.log reaches the parent', rendered.some((m) => m.yukibana === 'preview' && m.type === 'stdout' && m.text === 'hello from the page\n'), JSON.stringify(rendered).slice(0, 300));
+const broken = await page_preview({ 'index.html': '<script type="module" src="main.ts"></script>', 'main.ts': "import './missing.ts';\n" });
+check('preview: a missing import is an error and no page', broken.html === null && /cannot find module 'missing\.ts'/.test(broken.errors.join()), JSON.stringify(broken.errors));
 
 check('no page errors', pageErrors.length === 0, JSON.stringify(pageErrors));
 console.log(failures ? `${failures} check(s) failed` : 'all checks passed');

@@ -12,7 +12,8 @@
 // never ends, which the page stops by terminating the worker. The sample runs
 // twice: cold (empty browser cache) and warm (cached downloads and compiled
 // wasm), with timings. C++ exceptions, caught and uncaught, and the
-// sample's GoogleTest tests ({ type: 'test' }), passing and failing.
+// sample's tests ({ type: 'test' }) in GoogleTest, doctest and Catch2,
+// passing and failing, and tests that mix two frameworks.
 
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
@@ -21,6 +22,8 @@ import { fileURLToPath } from 'node:url';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { chromium } from 'playwright-core';
+// The app's sample tests per framework (imports only types, so Node loads it).
+import { chooseTestFramework } from '../../app/src/lib/cpp-tests.ts';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const STATIC = resolve(HERE, '../../app/static');
@@ -459,6 +462,84 @@ try {
     );
     check('a failing test is in red', /\x1b\[0;31m\[  FAILED  \] \x1b\[mBroken\.NormIsWrong/.test(failing.raw), JSON.stringify(failing.raw.slice(-200)));
     console.log(failing.stdout.trimEnd().replace(/^/gm, '    | '));
+
+    // The same tests in doctest and in Catch2, as the app's framework choice
+    // writes them (app/src/lib/cpp-tests.ts), and a failing test in each.
+    // Each run fetches its own framework's archive, and no other.
+    for (const fw of ['doctest', 'catch2']) {
+        const files = { ...SAMPLE, ...chooseTestFramework(SAMPLE, fw, SAMPLE).write };
+        const passed = fw === 'doctest' ? /\[doctest\] test cases: 3 \| 3 passed \| 0 failed/ : /All tests passed \(4 assertions in 3 test cases\)/;
+        const coloured = fw === 'doctest' ? /\x1b\[0;32mSUCCESS!/ : /\x1b\[[0-9;]*m/;
+        const ok = await testRun(files);
+        const archives = Object.keys(ok.loading).filter((k) => k.endsWith('.tar'));
+        check(
+            `${fw}: the sample's tests pass, exit 0, only ${fw}.tar fetched`,
+            ok.code === 0 && passed.test(ok.stdout) && archives.join() === `${fw}.tar`,
+            `code=${ok.code} in ${ok.ms} ms (${fw}.tar ${JSON.stringify(ok.loading[`${fw}.tar`])}; archives: ${archives}); ${timeline(ok)}`
+        );
+        console.log(ok.stdout.trimEnd().replace(/^/gm, '    | '));
+        if (ok.stderr) console.log(ok.stderr);
+        check(`${fw}: the report is in colour (${fw === 'doctest' ? '--force-colors' : '--colour-mode ansi'})`, coloured.test(ok.raw), JSON.stringify(ok.raw.slice(0, 120)));
+        const broken = fw === 'doctest'
+            ? `#include <doctest/doctest.h>
+
+#include <stdexcept>
+
+#include "geometry.h"
+
+TEST_CASE("norm is wrong") {
+    Point p{3, 4};
+    CHECK(p.norm() == doctest::Approx(6.0));
+}
+
+TEST_CASE("throws something else") {
+    CHECK_THROWS_AS(throw std::runtime_error("x"), std::logic_error);
+}
+`
+            : `#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+
+#include <stdexcept>
+
+#include "geometry.h"
+
+TEST_CASE("norm is wrong") {
+    Point p{3, 4};
+    REQUIRE_THAT(p.norm(), Catch::Matchers::WithinULP(6.0, 4));
+}
+
+TEST_CASE("throws something else") {
+    REQUIRE_THROWS_AS(throw std::runtime_error("x"), std::logic_error);
+}
+`;
+        const bad = await testRun({ ...files, 'tests/broken_test.cpp': broken });
+        const where = fw === 'doctest'
+            ? /tests\/broken_test\.cpp:9: ERROR: CHECK\( p\.norm\(\) == doctest::Approx\(6\.0\) \) is NOT correct!/
+            : /tests\/broken_test\.cpp:10: FAILED:/;
+        const counts = fw === 'doctest' ? /test cases: 5 \| 3 passed \| 2 failed/ : /test cases: 5 \| 3 passed \| 2 failed/;
+        check(
+            `${fw}: failing tests are reported with file and line, exit non-zero`,
+            bad.code !== 0 && bad.code !== null && where.test(bad.stdout) && counts.test(bad.stdout) && /std::runtime_error|runtime_error|x/.test(bad.stdout),
+            `code=${bad.code} in ${bad.ms} ms`
+        );
+        console.log(bad.stdout.trimEnd().replace(/^/gm, '    | '));
+        if (bad.stderr) console.log(bad.stderr);
+    }
+    // doctest implemented by the test itself (its own main): the prebuilt
+    // implementation is not linked, so nothing is defined twice.
+    const ownDoctest = await testRun({
+        ...SAMPLE,
+        'tests/geometry_test.cpp': '#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN\n' + chooseTestFramework(SAMPLE, 'doctest', SAMPLE).write['tests/geometry_test.cpp'],
+    });
+    check('doctest with DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN in a test: links once, passes', ownDoctest.code === 0 && /3 passed/.test(ownDoctest.stdout), `code=${ownDoctest.code} ${JSON.stringify(ownDoctest.stderr.slice(0, 300))}`);
+    // Tests that mix frameworks cannot be one program: said before compiling.
+    const mixed = await testRun({ ...SAMPLE, 'tests/other_test.cpp': '#include <catch2/catch_test_macros.hpp>\nTEST_CASE("x") { REQUIRE(true); }\n' });
+    check(
+        'tests that mix GoogleTest and Catch2: a message naming both files, exit 1, nothing compiled',
+        mixed.code === 1 && /mix test frameworks: tests\/geometry_test\.cpp includes <gtest\/\.\.\.> \(GoogleTest\), tests\/other_test\.cpp includes <catch2\/\.\.\.> \(Catch2\)/.test(mixed.stderr) && !mixed.phases.some(([t]) => t.startsWith('Compiling')),
+        JSON.stringify(mixed.stderr.trim())
+    );
+
     const none = await testRun({ 'main.cpp': 'int main() {}\n' });
     check('test mode without tests/: says so, exit 1', none.code === 1 && /No tests to run/.test(none.stderr), JSON.stringify(none.stderr.trim()));
 

@@ -3,7 +3,9 @@
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<meta name="theme-color" content="#1e1e1e" />
+		<!-- The window colour of the installed app, per system theme; theme.svelte.ts follows the toggle. -->
+		<meta name="theme-color" content="#121111" media="(prefers-color-scheme: dark)" />
+		<meta name="theme-color" content="#fbfafa" media="(prefers-color-scheme: light)" />
 		<link rel="manifest" href="%sveltekit.assets%/manifest.webmanifest" />
 		<link rel="icon" href="%sveltekit.assets%/favicon-32.png" type="image/png" sizes="32x32" />
 		<link rel="apple-touch-icon" href="%sveltekit.assets%/apple-touch-icon.png" />

@@ -237,3 +237,20 @@ body {
 	height: 100%;
 	overflow: hidden;
 }
+
+/* The Preview panel (preview.ts): the page on white, as a browser shows it. */
+.dock-preview {
+	display: flex;
+	flex-direction: column;
+}
+.preview-frame {
+	flex: 1;
+	width: 100%;
+	border: 0;
+	background: #fff;
+}
+.preview-empty {
+	margin: 1rem;
+	color: var(--gray-3);
+	font-size: 0.85rem;
+}

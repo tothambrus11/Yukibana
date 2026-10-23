@@ -50,6 +50,23 @@ class SvelteRenderer implements IContentRenderer {
 	}
 }
 
+/** The Preview panel: the workspace's preview puts its iframe here. */
+class PreviewRenderer implements IContentRenderer {
+	readonly element = document.createElement('div');
+
+	constructor(private readonly workspace: Workspace) {
+		this.element.className = 'dock-panel dock-preview';
+	}
+
+	init(): void {
+		this.workspace.preview.mount(this.element);
+	}
+
+	dispose(): void {
+		this.workspace.preview.unmount();
+	}
+}
+
 /** A dockview content renderer holding one Monaco editor on one project file. */
 class EditorRenderer implements IContentRenderer {
 	readonly element = document.createElement('div');
@@ -197,6 +214,8 @@ export function createDock(element: HTMLElement, workspace: Workspace): EditorHo
 					return new SvelteRenderer(Output, workspace);
 				case 'terminal':
 					return new SvelteRenderer(Terminal, workspace);
+				case 'preview':
+					return new PreviewRenderer(workspace);
 				default: {
 					const r = new EditorRenderer(workspace, navigation);
 					editors.set(id, r);
@@ -306,6 +325,25 @@ export function createDock(element: HTMLElement, workspace: Workspace): EditorHo
 		},
 		showTerminal(): void {
 			dock.getPanel('terminal')?.api.setActive();
+		},
+		showPreview(): void {
+			const panel = dock.getPanel('preview');
+			if (panel) {
+				panel.api.setActive();
+				return;
+			}
+			// Above the terminal, so the page and its console are seen together.
+			const terminal = dock.getPanel('terminal');
+			dock.addPanel({
+				id: 'preview',
+				component: 'preview',
+				tabComponent: 'fixed',
+				title: 'Preview',
+				...(terminal ? { position: { referencePanel: terminal, direction: 'above' as const } } : {}),
+			});
+		},
+		hidePreview(): void {
+			dock.getPanel('preview')?.api.close();
 		},
 		setProblemCount(n: number): void {
 			dock.getPanel('problems')?.api.setTitle(n ? `Problems ${n}` : 'Problems');

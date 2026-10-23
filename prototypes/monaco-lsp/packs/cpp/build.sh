@@ -6,7 +6,7 @@
 #   clangd.js       Emscripten's glue (an ES module server.js imports)
 #   clangd.wasm     clangd itself, with threads (Web Workers; needs cross-origin isolation)
 #   sysroot.tar.gz  musl and libc++ headers, clang's freestanding headers,
-#                   GoogleTest's headers
+#                   GoogleTest's, Catch2's and doctest's headers
 #
 # and then, through build-runner.sh, what runs a project (README, "Running"):
 #
@@ -14,6 +14,8 @@
 #   cc.js, cc.wasm       clang 21.1.8 + wasm-ld, one binary, WebAssembly only
 #   wasi-sysroot.tar.gz  wasi-libc (wasi-sdk 30), libc++ with exceptions, compiler-rt
 #   gtest.tar            GoogleTest's libraries, fetched by runner.js for tests
+#   catch2.tar           Catch2's libraries, the same for tests that use Catch2
+#   doctest.tar          doctest's implementation and main, for doctest's tests
 #
 # Idempotent: each step is skipped when its output is in the cache
 # ($PACK_CACHE/cpp, default ~/.cache/yukibana-packs/cpp). Needs a Linux host
@@ -149,10 +151,12 @@ if [ ! -f cxx-headers/include/c++/v1/__config_site ]; then
   rm -rf build-cxx
 fi
 
-# The C++ runtime with exceptions and GoogleTest (build-cxx-runtime.sh),
-# here because the sysroot below takes GoogleTest's headers from it; the
-# libraries go to the runner (pack-runner.sh).
+# The C++ runtime with exceptions and GoogleTest (build-cxx-runtime.sh), and
+# Catch2 and doctest (build-test-frameworks.sh), here because the sysroot
+# below takes the frameworks' headers from them; the libraries go to the
+# runner (pack-runner.sh).
 "$HERE/build-cxx-runtime.sh"
+"$HERE/build-test-frameworks.sh"
 
 step "sysroot"
 # /usr/include: musl; /usr/include/c++/v1: libc++, where clang's Linux driver
@@ -168,6 +172,9 @@ cp -r cxx-headers/include/c++ "$stage/usr/include/"
 # <cxxabi.h> (to demangle type names) when the library is libc++, so
 # libc++abi's two public headers join libc++'s.
 cp -r eh/include/gtest "$stage/usr/include/"
+# Catch2 (with the catch_user_config.hpp its wasm build generated) and
+# doctest, likewise: about 180 KB of the archive between them (README).
+cp -r testfw/include/catch2 testfw/include/doctest "$stage/usr/include/"
 cp "$SRC"/libcxxabi/include/{cxxabi.h,__cxxabi_config.h} "$stage/usr/include/c++/v1/"
 hdr="$SRC/clang/lib/Headers"
 cp "$hdr"/{float.h,inttypes.h,iso646.h,limits.h,stdalign.h,stdarg.h,stdatomic.h,stdbool.h,stdckdint.h} \

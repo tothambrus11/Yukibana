@@ -4,7 +4,7 @@
  * the program's output, what the user typed, and how it ended.
  */
 import { AnsiStream } from './ansi';
-import type { Files, LanguageId } from './languages';
+import type { Files } from './languages';
 
 /**
  * One stretch of terminal text in one style; consecutive text of one kind
@@ -63,11 +63,12 @@ export class Runner {
 	}
 
 	/**
-	 * Starts `entry` of `files` with the runner of `language`, stopping any
-	 * program still running; `mode` 'test' runs the project's tests instead.
-	 * Output from the previous run is cleared.
+	 * Starts `entry` of `files` with the runner of the pack `language` (its
+	 * directory under `packs/`), stopping any program still running; `mode`
+	 * 'test' runs the project's tests instead. Output from the previous run
+	 * is cleared.
 	 */
-	start(language: LanguageId, files: Files, entry: string, mode: 'run' | 'test' = 'run'): void {
+	start(language: string, files: Files, entry: string, mode: 'run' | 'test' = 'run'): void {
 		this.stop(false);
 		this.chunks = [];
 		this.chars = 0;
@@ -121,6 +122,24 @@ export class Runner {
 		if (!this.busy) return;
 		this.typedAhead.push('');
 		this.feed();
+	}
+
+	/**
+	 * Starts showing output that does not come from a runner (a web page in
+	 * the Preview panel): stops any program, clears the terminal and says
+	 * what follows.
+	 */
+	attach(note: string): void {
+		this.stop(false);
+		this.clear();
+		this.state = { kind: 'idle' };
+		this.append('info', note + '\n');
+	}
+
+	/** Shows text from a source that is not a runner, such as a previewed page's console. */
+	print(kind: 'stdout' | 'stderr' | 'info', text: string): void {
+		if (kind === 'info') this.append('info', text);
+		else for (const span of this.ansi[kind].feed(text)) this.append(kind, span.text, span.css);
 	}
 
 	/** Empties the terminal; a running program keeps running. */

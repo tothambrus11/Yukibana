@@ -1,0 +1,13 @@
+{
+    "name": "yukibana-pack-php",
+    "private": true,
+    "description": "Yukibana PHP pack: Phpactor on PHP 8.4 (php-wasm) in a module Web Worker, and a php-wasm runner with PHPUnit. build.sh fetches pinned releases; this file only holds the test dependency.",
+    "type": "module",
+    "scripts": {
+        "build": "./build.sh",
+        "test": "node test.mjs && node test-run.mjs"
+    },
+    "devDependencies": {
+        "playwright-core": "1.56.1"
+    }
+}

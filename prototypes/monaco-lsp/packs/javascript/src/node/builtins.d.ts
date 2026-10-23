@@ -197,3 +197,128 @@ declare module 'assert/strict' {
 	import { strict } from 'node:assert';
 	export = strict;
 }
+
+// ---- process and node:readline (src/node/process.ts): what a command-line
+// program needs, over the terminal. Only these members exist at run time.
+
+interface YukibanaWritable {
+	readonly isTTY: boolean;
+	readonly columns: number;
+	readonly rows: number;
+	readonly fd: number;
+	/** Writes the text (or UTF-8 bytes) as it is, without a newline. */
+	write(chunk: string | Uint8Array, callback?: (error?: Error | null) => void): boolean;
+	write(chunk: string | Uint8Array, encoding?: string, callback?: (error?: Error | null) => void): boolean;
+}
+
+interface YukibanaProcess {
+	/** `['node', '/workspace/<entry>', ...arguments]`, as Node gives it. */
+	readonly argv: string[];
+	readonly argv0: string;
+	readonly execArgv: string[];
+	/** Empty: the program has no environment. */
+	readonly env: Record<string, string | undefined>;
+	/** `'browser'`: not one of Node's platform names, since the program runs in a browser worker. */
+	readonly platform: string;
+	readonly pid: number;
+	/** The exit status when the program ends by itself. */
+	exitCode: number | string | undefined;
+	readonly stdout: YukibanaWritable;
+	readonly stderr: YukibanaWritable;
+	/** Pass it to `readline.createInterface({ input })`; lines are read through readline. */
+	readonly stdin: { readonly isTTY: boolean; readonly fd: number };
+	cwd(): string;
+	nextTick(callback: (...args: any[]) => void, ...args: any[]): void;
+	/** Ends the program now with this status (default `process.exitCode`, else 0). */
+	exit(code?: number | string): never;
+}
+
+declare var process: YukibanaProcess;
+
+declare module 'node:process' {
+	const process: YukibanaProcess;
+	export const argv: YukibanaProcess['argv'];
+	export const env: YukibanaProcess['env'];
+	export const platform: YukibanaProcess['platform'];
+	export const stdout: YukibanaProcess['stdout'];
+	export const stderr: YukibanaProcess['stderr'];
+	export const stdin: YukibanaProcess['stdin'];
+	export const exit: YukibanaProcess['exit'];
+	export const cwd: YukibanaProcess['cwd'];
+	export const nextTick: YukibanaProcess['nextTick'];
+	export default process;
+}
+declare module 'process' {
+	export * from 'node:process';
+	export { default } from 'node:process';
+}
+
+declare module 'node:readline' {
+	interface ReadLineOptions {
+		input?: unknown;
+		output?: { write(text: string): unknown };
+		prompt?: string;
+		terminal?: boolean;
+	}
+	class Interface {
+		/** True once the input has ended or `close()` was called. */
+		readonly closed: boolean;
+		/** Writes `query` to the output, then calls back with the next line. Nothing is called at end of input. */
+		question(query: string, callback: (answer: string) => void): void;
+		question(query: string, options: object, callback: (answer: string) => void): void;
+		setPrompt(prompt: string): void;
+		getPrompt(): string;
+		/** Writes the prompt (`'> '` unless set). */
+		prompt(): void;
+		write(text: string): void;
+		close(): void;
+		pause(): this;
+		resume(): this;
+		/** `'line'` for each line of input, `'close'` at its end. */
+		on(event: 'line', listener: (line: string) => void): this;
+		on(event: 'close', listener: () => void): this;
+		once(event: 'line', listener: (line: string) => void): this;
+		once(event: 'close', listener: () => void): this;
+		off(event: string, listener: (...args: any[]) => void): this;
+		addListener(event: 'line' | 'close', listener: (...args: any[]) => void): this;
+		removeListener(event: string, listener: (...args: any[]) => void): this;
+		/** `for await (const line of rl)`: the lines until the end of input. */
+		[Symbol.asyncIterator](): AsyncIterableIterator<string>;
+	}
+	function createInterface(options: ReadLineOptions): Interface;
+	function createInterface(input: unknown, output?: { write(text: string): unknown }): Interface;
+	export { createInterface, Interface, ReadLineOptions };
+	export * as promises from 'node:readline/promises';
+	const readline: { createInterface: typeof createInterface; Interface: typeof Interface };
+	export default readline;
+}
+declare module 'node:readline/promises' {
+	import type { ReadLineOptions } from 'node:readline';
+	class Interface {
+		readonly closed: boolean;
+		/** Writes `query` to the output and resolves with the next line; at end of input it never resolves. */
+		question(query: string): Promise<string>;
+		setPrompt(prompt: string): void;
+		getPrompt(): string;
+		prompt(): void;
+		write(text: string): void;
+		close(): void;
+		on(event: 'line', listener: (line: string) => void): this;
+		on(event: 'close', listener: () => void): this;
+		once(event: 'line' | 'close', listener: (...args: any[]) => void): this;
+		off(event: string, listener: (...args: any[]) => void): this;
+		[Symbol.asyncIterator](): AsyncIterableIterator<string>;
+	}
+	function createInterface(options: ReadLineOptions): Interface;
+	export { createInterface, Interface };
+	const readline: { createInterface: typeof createInterface; Interface: typeof Interface };
+	export default readline;
+}
+declare module 'readline' {
+	export * from 'node:readline';
+	export { default } from 'node:readline';
+}
+declare module 'readline/promises' {
+	export * from 'node:readline/promises';
+	export { default } from 'node:readline/promises';
+}

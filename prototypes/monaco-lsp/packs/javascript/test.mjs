@@ -351,6 +351,23 @@ check('what the runner lacks is an error: node:test `mock`, an assert function N
 const wsTestSymbols = await request('workspace/symbol', { query: 'SuiteFunction' });
 check('the node:test types stay out of workspace symbols', Array.isArray(wsTestSymbols) && wsTestSymbols.length === 0, wsTestSymbols);
 
+// process and node:readline are typed as the runner provides them.
+const cliFile = `import * as readline from 'node:readline/promises';
+import { createInterface } from 'readline';
+import { stdin as input, stdout as output } from 'node:process';
+const rl = readline.createInterface({ input, output });
+const name: string = await rl.question('Name? ');
+for await (const line of createInterface({ input: process.stdin })) process.stdout.write(line);
+if (process.argv.length > 2) process.exit(1);
+process.exitCode = name.length;
+`;
+await notify('textDocument/didOpen', { textDocument: { uri: W + 'cli.ts', languageId: 'typescript', version: 1, text: cliFile } });
+const cliDiags = await diagnostics(W + 'cli.ts', (d) => d.every((x) => x.severity !== 1));
+check('a .ts CLI using process and node:readline(/promises) has no errors', cliDiags !== undefined && cliDiags.every((x) => x.severity !== 1), cliDiags?.map((x) => `${x.code} ${x.message}`));
+await notify('textDocument/didChange', { textDocument: { uri: W + 'cli.ts', version: 2 }, contentChanges: [{ text: cliFile + 'process.hrtime();\nrl.history;\n' }] });
+const cliMissing = await diagnostics(W + 'cli.ts', (d) => d.filter((x) => x.severity === 1).length >= 2);
+check('what process and readline lack here is an error (process.hrtime, rl.history)', cliMissing?.filter((x) => x.code === 2339).length === 2, cliMissing?.map((x) => `${x.code} ${x.message}`));
+
 // Garbage on the wire is logged, not thrown; a second initialize is refused.
 await page.evaluate(() => window.lsp.worker.postMessage('not json-rpc'));
 let again;
