@@ -331,7 +331,24 @@ try {
     const labels = items.map((i) => (i.filterText ?? i.label).trim());
     check('completion after "p." lists Point\'s members', ['norm', 'x', 'y'].every((m) => labels.includes(m)), `${JSON.stringify(labels.slice(0, 8))} ${Date.now() - t} ms`);
 
-    lsp.notify('textDocument/didChange', { textDocument: { uri: uri('main.cpp'), version: 4 }, contentChanges: [{ text: MAIN_CPP }] });
+    // Completing an identifier twice in a file: the second completion starts
+    // a speculative index query from the first one's, which upstream runs on
+    // a new thread; without threads that was abort() (patched to run it
+    // deferred on the one thread).
+    let version = 4;
+    for (const typed of ['sq', 'squ']) {
+        const text = MAIN_CPP.replace('    return ', `    ${typed}\n    return `);
+        lsp.notify('textDocument/didChange', { textDocument: { uri: uri('main.cpp'), version: version++ }, contentChanges: [{ text }] });
+        const again = await lsp.request('textDocument/completion', {
+            textDocument: { uri: uri('main.cpp') },
+            position: position(text, `    ${typed}\n`, 4 + typed.length),
+            context: { triggerKind: 1 },
+        });
+        const names = (again.result?.items ?? again.result ?? []).map((i) => (i.filterText ?? i.label).trim());
+        check(`completing "${typed}" offers square`, !again.error && names.includes('square'), again.error ? again.error.message.slice(0, 200) : JSON.stringify(names.slice(0, 5)));
+    }
+
+    lsp.notify('textDocument/didChange', { textDocument: { uri: uri('main.cpp'), version: version++ }, contentChanges: [{ text: MAIN_CPP }] });
     t = Date.now();
     const hover = await lsp.request('textDocument/hover', {
         textDocument: { uri: uri('main.cpp') },
@@ -358,7 +375,7 @@ try {
     since = (await lsp.log()).length;
     const main2 = MAIN_CPP.replace('p.norm()', 'p.norm() + p.z');
     lsp.notify('textDocument/didChange', { textDocument: { uri: uri('point.h'), version: 2 }, contentChanges: [{ range: { start: position(POINT_H, 'x, y;', 4), end: position(POINT_H, 'x, y;', 4) }, text: ', z' }] });
-    lsp.notify('textDocument/didChange', { textDocument: { uri: uri('main.cpp'), version: 5 }, contentChanges: [{ text: main2 }] });
+    lsp.notify('textDocument/didChange', { textDocument: { uri: uri('main.cpp'), version: version++ }, contentChanges: [{ text: main2 }] });
     const after = await diagnostics('main.cpp', (d) => d.length === 0, since, 20000);
     check('an incremental edit to point.h reaches main.cpp', after && after.length === 0, show(after));
 
@@ -425,6 +442,9 @@ try {
     );
     const cleanGeometry = await diagnostics('geometry.cpp', () => true);
     check('geometry.cpp is clean', cleanGeometry?.length === 0, show(cleanGeometry));
+    // geometry.h is C++ under flags with -std=c++20 (the driver alone takes a .h for C).
+    const cleanHeader = await diagnostics('geometry.h', () => true);
+    check('geometry.h is parsed as C++ and is clean', cleanHeader?.length === 0, show(cleanHeader));
 
     // Edit compile_flags.txt after clangd has parsed: back to C++17, so the
     // requires-clause is an error now.

@@ -182,3 +182,30 @@
        llvm::SmallString<256> PosixPath;
        if (!File.empty()) {
          assert(llvm::sys::path::is_absolute(File));
+--- a/clang-tools-extra/clangd/support/Threading.h
++++ b/clang-tools-extra/clangd/support/Threading.h
+@@ -12,6 +12,7 @@
+ #include "support/Context.h"
+ #include "llvm/ADT/FunctionExtras.h"
+ #include "llvm/ADT/Twine.h"
++#include "llvm/Config/llvm-config.h"
+ #include <atomic>
+ #include <cassert>
+ #include <condition_variable>
+@@ -126,7 +127,16 @@
+ template <typename T>
+ std::future<T> runAsync(llvm::unique_function<T()> Action) {
+   return std::async(
++#if LLVM_ENABLE_THREADS
+       std::launch::async,
++#else
++      // No thread to start: std::async(async) would throw, and with
++      // exceptions off that is abort() (code completion's speculative index
++      // query, after a first completion in a file). Deferred runs the action
++      // on the caller's thread when the result is asked for, and not at all
++      // when it never is.
++      std::launch::deferred,
++#endif
+       [](llvm::unique_function<T()> &&Action, Context Ctx) {
+         WithContext WithCtx(std::move(Ctx));
+         return Action();

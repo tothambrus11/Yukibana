@@ -43,6 +43,18 @@ const ARGS = [
     '--log=error',
 ];
 
+/** Configuration for the whole file system, below the project's own
+ * .clangd (clangd reads every ancestor's, the nearest winning): headers are
+ * C++. With compile_flags.txt every file gets the same flags, and the driver
+ * takes a .h for a C header, so `-std=c++20` there is "not allowed with 'C'"
+ * and the header's C++ is reported as errors. A C project overrides it in its
+ * own .clangd. */
+const HEADERS_ARE_CXX = `If:
+  PathMatch: .*\\.(h|hh|hpp|hxx|inc)
+CompileFlags:
+  Add: [-xc++-header]
+`;
+
 const post = (msg) => self.postMessage(msg);
 /** LSP MessageType: 1 error, 2 warning, 3 info, 4 log. */
 const logMessage = (type, message) => post({ jsonrpc: '2.0', method: 'window/logMessage', params: { type, message } });
@@ -369,6 +381,7 @@ async function start() {
     FS = clangd.FS;
     const headers = await unpackSysroot(new Uint8Array(await sysrootBytes));
     FS.mkdirTree('/workspace');
+    FS.writeFile('/.clangd', HEADERS_ARE_CXX);
     logMessage(3, `clangd loaded in ${Math.round(performance.now() - started)} ms, ${headers} headers`);
 
     const queued = early;
