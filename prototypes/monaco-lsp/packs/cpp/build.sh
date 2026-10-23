@@ -4,14 +4,16 @@
 #
 #   server.js       the module Worker: transport, file mirroring, loader
 #   clangd.js       Emscripten's glue (an ES module server.js imports)
-#   clangd.wasm     clangd itself, no threads, JSPI for stdin
-#   sysroot.tar.gz  musl and libc++ headers, clang's freestanding headers
+#   clangd.wasm     clangd itself, with threads (Web Workers; needs cross-origin isolation)
+#   sysroot.tar.gz  musl and libc++ headers, clang's freestanding headers,
+#                   GoogleTest's headers
 #
 # and then, through build-runner.sh, what runs a project (README, "Running"):
 #
 #   runner.js            the module Worker the app starts on Run
 #   cc.js, cc.wasm       clang 21.1.8 + wasm-ld, one binary, WebAssembly only
-#   wasi-sysroot.tar.gz  wasi-libc, libc++ (wasi-sdk 30) and compiler-rt
+#   wasi-sysroot.tar.gz  wasi-libc (wasi-sdk 30), libc++ with exceptions, compiler-rt
+#   gtest.tar            GoogleTest's libraries, fetched by runner.js for tests
 #
 # Idempotent: each step is skipped when its output is in the cache
 # ($PACK_CACHE/cpp, default ~/.cache/yukibana-packs/cpp). Needs a Linux host
@@ -68,7 +70,7 @@ if [ "$(cat "$SRC/.patched" 2>/dev/null)" != "$patch_sha" ]; then
   # Only the parts clangd and the libc++ headers are made of (1.9 of 2.4 GB).
   tar xJf "llvm-project-$LLVM_VERSION.src.tar.xz" \
     llvm-project-$LLVM_VERSION.src/{llvm,clang,clang-tools-extra,cmake,third-party,libcxx,libcxxabi,libc,runtimes}
-  # Threads off and stdin by JSPI; see the patch's comments and README.
+  # Input from the embedding Worker, and config files never cached; see the patch.
   patch -d "$SRC" -p1 < "$HERE/patches/clangd-browser.patch"
   echo "$patch_sha" > "$SRC/.patched"
 fi
@@ -101,24 +103,29 @@ fi
 step "clangd for WebAssembly"
 # shellcheck disable=SC1091
 source emsdk/emsdk_env.sh >/dev/null 2>&1
-# No threads: clangd runs with -sync, so it needs neither SharedArrayBuffer
-# nor a cross-origin isolated page. The one blocking call left, reading
-# stdin, suspends through JSPI. STACK_SIZE: clang's parser recurses deeply
-# and Emscripten's default 64 KiB overflows on ordinary code.
-ldflags="-sJSPI -sMODULARIZE -sEXPORT_ES6 -sEXPORT_NAME=createClangd -sENVIRONMENT=worker \
-  -sINVOKE_RUN=0 -sEXIT_RUNTIME=1 -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,callMain \
-  -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB -sMAXIMUM_MEMORY=4GB -sSTACK_SIZE=8MB"
+# Threads are Web Workers sharing one memory, so the page must be cross-origin
+# isolated (SharedArrayBuffer). main() runs on a thread of its own
+# (PROXY_TO_PTHREAD), which leaves the Worker that loaded clangd free to
+# receive the client's messages and hand them to it (clangd_input, in the
+# patch). Stacks: clang's parser recurses deeply, and Emscripten's default
+# 64 KiB overflows on ordinary code.
+ldflags="-pthread -sPROXY_TO_PTHREAD -sPTHREAD_POOL_SIZE=4 -sMODULARIZE -sEXPORT_ES6 \
+  -sEXPORT_NAME=createClangd -sENVIRONMENT=worker -sINVOKE_RUN=0 -sEXIT_RUNTIME=1 -sFORCE_FILESYSTEM=1 \
+  -sEXPORTED_RUNTIME_METHODS=FS,callMain,stringToUTF8,lengthBytesUTF8 -sEXPORTED_FUNCTIONS=_main,_malloc,_free \
+  -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=128MB -sMAXIMUM_MEMORY=2GB \
+  -sSTACK_SIZE=8MB -sDEFAULT_PTHREAD_STACK_SIZE=8MB"
 # Configured on every run: with nothing changed it only rereads the cache,
 # and a changed flag (the linker's above, say) reaches the build instead of
 # being shadowed by the first run's cache.
 $NICE emcmake cmake -S "$SRC/llvm" -B build-wasm -G Ninja \
     -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_EXE_LINKER_FLAGS="$ldflags" \
+    -DCMAKE_C_FLAGS=-pthread -DCMAKE_CXX_FLAGS=-pthread \
     -DCMAKE_EXE_LINKER_FLAGS_MINSIZEREL="-Oz" \
     -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" -DLLVM_TARGETS_TO_BUILD=X86 \
     -DLLVM_HOST_TRIPLE=wasm32-unknown-emscripten -DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-linux-musl \
     -DCLANG_DEFAULT_CXX_STDLIB=libc++ -DLLVM_NATIVE_TOOL_DIR="$CACHE/build-native/bin" \
     -DLLVM_TABLEGEN="$CACHE/build-native/bin/llvm-tblgen" -DCLANG_TABLEGEN="$CACHE/build-native/bin/clang-tblgen" \
-    -DLLVM_ENABLE_THREADS=OFF -DLLVM_ENABLE_PIC=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF \
+    -DLLVM_ENABLE_THREADS=ON -DLLVM_ENABLE_PIC=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF \
     -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_LIBEDIT=OFF -DLLVM_ENABLE_LIBPFM=OFF \
     -DLLVM_ENABLE_BACKTRACES=OFF -DLLVM_ENABLE_CRASH_OVERRIDES=OFF -DLLVM_ENABLE_UNWIND_TABLES=OFF \
     -DLLVM_ENABLE_PLUGINS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF \
@@ -142,6 +149,11 @@ if [ ! -f cxx-headers/include/c++/v1/__config_site ]; then
   rm -rf build-cxx
 fi
 
+# The C++ runtime with exceptions and GoogleTest (build-cxx-runtime.sh),
+# here because the sysroot below takes GoogleTest's headers from it; the
+# libraries go to the runner (pack-runner.sh).
+"$HERE/build-cxx-runtime.sh"
+
 step "sysroot"
 # /usr/include: musl; /usr/include/c++/v1: libc++, where clang's Linux driver
 # looks for it in a sysroot of /; /usr/lib/clang/21/include: clang's own
@@ -151,6 +163,12 @@ stage="$CACHE/sysroot"
 rm -rf "$stage" && mkdir -p "$stage/usr/include" "$stage/usr/lib/clang/21/include"
 make -s -C "musl-$MUSL_VERSION" ARCH=x86_64 prefix=/usr DESTDIR="$stage" install-headers >/dev/null
 cp -r cxx-headers/include/c++ "$stage/usr/include/"
+# GoogleTest: #include <gtest/gtest.h> in a test resolves in the editor, and
+# runner.js takes the same files from here for its WASI sysroot. It includes
+# <cxxabi.h> (to demangle type names) when the library is libc++, so
+# libc++abi's two public headers join libc++'s.
+cp -r eh/include/gtest "$stage/usr/include/"
+cp "$SRC"/libcxxabi/include/{cxxabi.h,__cxxabi_config.h} "$stage/usr/include/c++/v1/"
 hdr="$SRC/clang/lib/Headers"
 cp "$hdr"/{float.h,inttypes.h,iso646.h,limits.h,stdalign.h,stdarg.h,stdatomic.h,stdbool.h,stdckdint.h} \
   "$hdr"/{stdcountof.h,stddef.h,stdint.h,stdnoreturn.h,tgmath.h,varargs.h,unwind.h} \

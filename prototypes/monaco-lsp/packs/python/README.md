@@ -19,12 +19,13 @@ maintained by the project that also maintains the checker.
 | file | raw | gzip | brotli | what |
 |---|---|---|---|---|
 | `server.js` | 2.28 MB | 559 KB | 437 KB | the server, minified ES module |
-| `typeshed-stdlib.tar.gz` | 4.0 MB tar | 608 KB | (is gzip) | typeshed stdlib stubs + docstrings |
-| `LICENSE-*.txt` | 14 KB | | | basedpyright (MIT), typeshed (Apache-2.0); the runner's are listed under Running |
+| `typeshed-stdlib.tar.gz` | 4.4 MB tar | 704 KB | (is gzip) | typeshed stdlib stubs + docstrings, and pytest's stubs (below) |
+| `LICENSE-*.txt` | 15 KB | | | basedpyright (MIT), typeshed (Apache-2.0), pytest (MIT); the runner's are listed under Running |
 
-A first load transfers about **1.05 MB** where the host serves `server.js.br`,
-**1.17 MB** where it serves `.gz`, and 2.9 MB from a host that serves raw
-files only (the stubs archive is gzip either way). For comparison, the npm
+A first load transfers about **1.14 MB** where the host serves `server.js.br`,
+**1.26 MB** where it serves `.gz`, and 3.0 MB from a host that serves raw
+files only (the stubs archive is gzip either way). pytest's stubs are 96 KB
+of that (gzip). For comparison, the npm
 package `browser-basedpyright@1.40.2` is one 18 MB `pyright.worker.js` (3.2 MB
 gzipped), because it inlines all of typeshed, third-party stubs included.
 
@@ -64,6 +65,20 @@ upstream's own rspack, ts-loader (type-checked) and polyfills.
   3.13 on Linux (fetched by `uv`), so a docstring that exists only on Windows
   or only in another Python version is missing. Type information is
   unaffected: it comes from the typeshed stubs themselves.
+* **pytest is known, as if it were part of the standard library.** Test
+  mode (see Testing, under Running) has pytest installed, so `import pytest`
+  in `tests/test_*.py` must resolve. `build.sh` generates stubs of `pytest`
+  and `_pytest` with mypy's `stubgen` 1.18.2 (`--include-docstrings`, so
+  hover shows pytest's own documentation) from the same PyPI wheels the
+  runner installs, and `scripts/make-stubs-tar.py` adds them under `stdlib/`
+  with `pytest: 3.10-` and `_pytest: 3.10-` in typeshed's `VERSIONS`. As
+  third-party stubs (typeshed's `stubs/`) every `import pytest` would carry
+  a `reportMissingModuleSource` warning ("stub file found, source not
+  found"), for a module the browser does run. 72 stub files, 377 KB raw,
+  96 KB gzip in the archive. Consequence: pyright never reports
+  `import pytest` as missing, also in a plain Run, where pytest is not
+  installed (`import pytest` then fails at run time with
+  `ModuleNotFoundError`).
 * **English messages only.** pyright bundles 15 message catalogues (~1.4 MB
   raw). The build swaps the 14 non-English ones for `{}`; pyright already
   falls back to English for a key a catalogue lacks.
@@ -131,12 +146,23 @@ stubs archive is byte-for-byte reproducible.
 ## Test output (2026-10-23, Chromium 141 headless)
 
 ```text
-PASS  initialize answers after the stubs download, with progress notifications  (260 ms, 2 progress messages, last {"label":"typeshed-stdlib.tar.gz","loaded":608122,"total":608122}, server basedpyright 1.40.2)
-PASS  an import of a file the project does not have is reported, as a warning because pyproject.toml says so  (709 ms) ["Import \"helpers\" could not be resolved",...]
+PASS  initialize answers after the stubs download, with progress notifications  (262 ms, 8 progress messages, last {"label":"typeshed-stdlib.tar.gz","loaded":703881,"total":703881}, server basedpyright 1.40.2)
+PASS  an import of a file the project does not have is reported, as a warning because pyproject.toml says so  (716 ms) ["Import \"helpers\" could not be resolved","Type of \"double\" is unknown","Argument type is unknown\n  Argument corresponds to parameter \"x\" in function \"sqrt\""]
 PASS  adding that file resolves the import, and the project has no errors  []
-PASS  assigning a str to an int is an error on that line  "Type \"Literal['five']\" is not assignable to declared type \"int\"..."
-PASS  completion after `p.` offers the members of Point from models.py  ["__doc__","__module__","__init__","norm","x","y",...]
+PASS  assigning a str to an int is an error on that line  "Type \"Literal['five']\" is not assignable to declared type \"int\"\n  \"Literal['five']\" is not assignable to \"int\""
+PASS  completion after `p.` offers the members of Point from models.py  ["__doc__","__module__","__init__","norm","x","y","__dict__","__annotations__","__class__","__new__","__setattr__","__delattr__"]
 PASS  hover on `norm` shows its signature and docstring  "```python\n(method) def norm() -> float\n```\n---\nDistance from the origin."
+PASS  hover on `math.sqrt` shows the stdlib stub and its documentation  "```python\n(function) def sqrt(\n    x: _SupportsFloatOrIndex,\n    /\n) -> float\n```\n---\nReturn the square root of x."
+PASS  go to definition of `Point` lands in models.py on its class line  [{"uri":"file:///workspace/models.py","range":{"start":{"line":0,"character":6},"end":{"line":0,"character":11}}}]
+PASS  deleting that file makes its import unresolved again  ["Import \"helpers\" could not be resolved","Type of \"double\" is unknown","Argument type is unknown\n  Argument corresponds to parameter \"x\" in function \"sqrt\"","Type \"Literal['five']\" is not assignable to declared type \"int\"\n  \"Literal['five']\" is not assignable to \"int\""]
+PASS  a non-Python project file is not analysed as Python
+PASS  a pytest test file in tests/ has no diagnostics at all: pytest and the project module both resolve  []
+PASS  hover on `pytest.approx` shows its signature and pytest's docstring  "```python\n(function) def approx(\n    expected: Unknown,\n    rel: Unknown | None = None,\n    abs: Unknown | None = None,\n    nan_ok: bool = False\n) -> ApproxBase"
+PASS  `with pytest.raises(E) as info` types `info` as ExceptionInfo[E]  "```python\n(variable) info: ExceptionInfo[ZeroDivisionError]\n```"
+PASS  shutdown answers
+PASS  the worker reported no errors  []
+all checks passed
+```python\n(method) def norm() -> float\n```\n---\nDistance from the origin."
 PASS  hover on `math.sqrt` shows the stdlib stub and its documentation  "...def sqrt(\n    x: _SupportsFloatOrIndex,\n    /\n) -> float\n```\n---\nReturn the square root of x."
 PASS  go to definition of `Point` lands in models.py on its class line  [{"uri":"file:///workspace/models.py","range":{"start":{"line":0,"character":6},...}}]
 PASS  deleting that file makes its import unresolved again
@@ -167,7 +193,7 @@ downloads the npm tarball, checks it against the registry's sha512 integrity
 
 | file | raw | gzip | brotli | what |
 |---|---|---|---|---|
-| `runner.js` | 9.9 KB | 4.0 KB | 3.4 KB | the worker (hand-written, not minified) |
+| `runner.js` | 13.5 KB | 5.0 KB | 4.4 KB | the worker (hand-written, not minified) |
 | `pyodide.mjs` | 17.9 KB | 7.2 KB | 6.4 KB | Pyodide's loader |
 | `pyodide.asm.mjs` | 1.25 MB | 261 KB | 207 KB | the Emscripten JS glue |
 | `pyodide.asm.wasm` | 9.60 MB | 3.59 MB | 2.74 MB | CPython 3.14.2 |
@@ -175,6 +201,8 @@ downloads the npm tarball, checks it against the registry's sha512 integrity
 | lock file | not shipped | | | upstream's is 119 KB |
 | `LICENSE-pyodide.txt`, `LICENSE-cpython.txt` | 17 KB, 14 KB | | | Pyodide (MPL-2.0); CPython 3.14.2 (PSF licence), both pinned by sha256 |
 | **total** (one Run, licences excluded) | **20.5 MB** | **6.08 MB** | **4.55 MB** | |
+| `pytest-9.0.2.zip` | 2.18 MB | 541 KB | 413 KB | pytest and its dependencies, fetched by Test only (see Testing) |
+| **total** (one Test) | **22.7 MB** | **6.62 MB** | **4.96 MB** | |
 
 The language server and the runner share no files: basedpyright is
 TypeScript and never needs an interpreter, so pressing Run downloads ~4.5 MB
@@ -231,6 +259,59 @@ code:
    print it. Syntax errors are uncaught exceptions too (CPython compiles at
    import), so they come out the same way, with file, line and caret.
 
+## Testing
+
+`{ type: 'test' }` (the app's **Test** button) runs the project's tests with
+**pytest 9.0.2**, the real one, as `python -m pytest` would in the project
+directory:
+
+* **What is downloaded.** `pytest-9.0.2.zip`, fetched only in test mode
+  (while Pyodide loads, reported as a `loading` message) and unpacked with
+  `pyodide.unpackArchive` into site-packages. It is built by
+  `build-runner.sh` from five PyPI wheels pinned by sha256 in
+  `scripts/pytest-wheels.txt` (pytest 9.0.2, pluggy 1.6.0, iniconfig 2.3.0,
+  packaging 26.1, pygments 2.21.0; exceptiongroup, tomli and colorama are
+  dependencies only before Python 3.11 or on Windows) and cached in
+  `$PACK_CACHE/python/wheels`. `scripts/make-pytest-zip.py` merges them,
+  byte-for-byte, into one stored (uncompressed) zip so brotli compresses
+  across files, minus each `RECORD` and minus most of pygments: pytest
+  imports pygments at module level but uses only the Python and diff lexers
+  and the terminal formatter; the other ~580 lexers, formatters and styles
+  are 90 % of pygments. The zip is reproducible (same wheels, same bytes).
+  Licences travel inside it (each wheel's `dist-info/licenses`).
+* **What runs.** The project is written to `/workspace` as for Run, the
+  cwd is put on `sys.path` (what `-m` does), and `pytest.main(["-p",
+  "no:cacheprovider"])` runs with no path arguments, so pytest's own
+  discovery applies: `testpaths` from `pyproject.toml`/`pytest.ini` when set,
+  else every `test_*.py`/`*_test.py` under the project, `tests/` included.
+  `tests/test_geometry.py` can `from geometry import Point` with no
+  `conftest.py` and no `tests/__init__.py`. Fixtures, `conftest.py`,
+  parametrize, `pytest.raises`, `approx`, `capsys`, assertion rewriting
+  (the `assert 5.0 == 6` + `where` explanation) all work, and so do
+  `unittest.TestCase` classes in those files (pytest collects them; plain
+  `python -m unittest discover` would need `tests/__init__.py`, see below).
+* **The report** is pytest's own terminal report, on stdout. Colours are off
+  (`NO_COLOR`), and stdout is not a tty in test mode, so pytest does not
+  redraw its "collecting ..." line with carriage returns.
+* **Exit status** is pytest's: 0 only when every collected test passed;
+  1 when a test failed, 2 for a collection error (a syntax or import error
+  in a test file), 5 when there were no tests at all.
+* **Cost.** The interpreter's start-up as for Run, plus ~0.4 MB (brotli)
+  the first time; unpacking and importing pytest add about 1-1.5 s, so the
+  sample's six tests report after about 3.4-4 s in the test below (warm
+  cache, 4-core container under load).
+* **Options** come only from the project's configuration (the app passes
+  no arguments): `[tool.pytest.ini_options]` in `pyproject.toml` or a
+  `pytest.ini`, e.g. `addopts = "-v --doctest-modules"` for verbose output
+  and doctests.
+* **Not available:** plugins beyond pytest's built-in ones (no
+  pytest-xdist, -cov, -asyncio...: nothing can be installed), `--pdb`
+  (no interactive stdin in pytest's capture), anything needing threads or
+  subprocesses (see Limits). `python -m unittest discover` itself is not
+  what Test runs: with pytest's collection, `tests/__init__.py` is not
+  needed, and it would be with unittest's (its discovery imports
+  `tests.test_x` as a package module).
+
 ## Limits
 
 * **`crossOriginIsolated` is needed for stdin.** Without it the app passes
@@ -266,14 +347,17 @@ code:
 ## Build and test
 
 ```sh
-./build-runner.sh   # ~50 s on an idle machine, ~2 min under load: almost all of it
+./build-runner.sh   # ~50 s on an idle machine, ~2.5 min under load: almost all of it
                     # brotli quality 11 over the two ~10 MB files
 node test-run.mjs   # Chromium, app/static over http with COOP/COEP
 ```
 
-Caches `$PACK_CACHE/python/pyodide-314.0.7.tgz` (6.5 MB, sha512-pinned) and
-the two licence texts (sha256-pinned), so a build with a warm cache makes no
-network request.
+Caches `$PACK_CACHE/python/pyodide-314.0.7.tgz` (6.5 MB, sha512-pinned),
+the two licence texts and the five pytest wheels (1.7 MB, all sha256-pinned),
+so a build with a warm cache makes no network request. `build.sh` also caches
+pytest's stubs (`pytest-stubs-mypy1.18.2-<hash of the wheel list>`, made with
+a fixed `PYTHONHASHSEED`, since stubgen's member order otherwise varies, so
+the stubs archive stays byte-for-byte reproducible).
 
 Licences: the npm tarball carries none, so the build ships Pyodide's
 `LICENSE` (MPL-2.0) and CPython 3.14.2's `LICENSE` (PSF), fetched from the
@@ -290,15 +374,15 @@ costs.
 
 ```text
 PASS  the page is cross-origin isolated
-PASS  cold: the sample project prints the distance and the norm, exit 0  (2690 ms total, Running at 2677 ms) stdout="Point(x=0, y=0) to Point(x=3, y=4): 5.0\n0.0\n" stderr="" code=0
-      cold downloads: 20.54 MB raw over http; progress: {"python_stdlib.zip":{"loaded":9665005,"total":9665005},"pyodide.asm.wasm":{"loaded":9598218,"total":9598218}}; phases: Loading Python@29ms, Running@2677ms
-PASS  warm: the same run in a new worker, files from the HTTP cache  (2104 ms total, Running at 2083 ms) served 0 bytes
-PASS  warm runs reach Running faster than the cold run  cold 2677 ms, warm 2083/2017/2035 ms (median 2035)
-PASS  input() reads two lines through the SharedArrayBuffer and prints their sum  (2297 ms total, Running at 2234 ms) stdout="First number: Second number: 2 + 40 = 42\n" code=0
+PASS  cold: the sample project prints the distance and the norm, exit 0  (2412 ms total, Running at 2397 ms) stdout="Point(x=0, y=0) to Point(x=3, y=4): 5.0\n0.0\n" stderr="" code=0
+      cold downloads: 20.54 MB raw over http; progress: {"pyodide.asm.wasm":{"loaded":9598218,"total":9598218},"python_stdlib.zip":{"loaded":9665005,"total":9665005}}; phases: Loading Python@20ms, Running@2397ms
+PASS  warm: the same run in a new worker, files from the HTTP cache  (2079 ms total, Running at 2064 ms) served 0 bytes
+PASS  warm runs reach Running faster than the cold run  cold 2397 ms, warm 2064/2003/2040 ms (median 2040)
+PASS  input() reads two lines through the SharedArrayBuffer and prints their sum  (1982 ms total, Running at 1928 ms) stdout="First number: Second number: 2 + 40 = 42\n" code=0
 PASS  the prompt without a newline arrives before the runner asks for input  before first stdin: "First number: "
-PASS  sys.stdin.readline() after print(end="") shows the prompt first; read() runs to Ctrl-D  (2547 ms total, Running at 2471 ms) before stdin "name? ", stdout="name? hello, Ada\nrest: 'more\\n'\n" stderr=""
+PASS  sys.stdin.readline() after print(end="") shows the prompt first; read() runs to Ctrl-D  (2043 ms total, Running at 1971 ms) before stdin "name? ", stdout="name? hello, Ada\nrest: 'more\\n'\n" stderr=""
 PASS  Ctrl-D at input() raises EOFError: traceback on stderr, exit 1  stderr="Traceback (most recent call last):\n  File \"/workspace/main.py\", line 1, in <module>\n    x = input(\"? \")\nEOFError: EOF when reading a line\n"
-PASS  a syntax error in an imported module is reported on stderr with its file and line, exit 1  (2120 ms total, Running at 2102 ms) stderr="Traceback (most recent call last):\n  File \"/workspace/main.py\", line 1, in <module>\n    from helper import f\n  File \"/workspace/helper.py\", line 1\n    def f(x)\n            ^\nSyntaxError: expected ':'\n"
+PASS  a syntax error in an imported module is reported on stderr with its file and line, exit 1  (1878 ms total, Running at 1863 ms) stderr="Traceback (most recent call last):\n  File \"/workspace/main.py\", line 1, in <module>\n    from helper import f\n  File \"/workspace/helper.py\", line 1\n    def f(x)\n            ^\nSyntaxError: expected ':'\n"
 PASS  the traceback starts at the project, not in the runner or runpy
 PASS  a syntax error in the entry itself: stderr, exit 1, nothing runs  stderr="  File \"/workspace/main.py\", line 1\n    print(\"never\"\n         ^\nSyntaxError: '(' was never closed\n"
 PASS  an uncaught exception: output so far, then a traceback through both files, exit 1  stderr="Traceback (most recent call last):\n  File \"/workspace/main.py\", line 3, in <module>\n    geometry.boom()\n    ~~~~~~~~~~~~~^^\n  File \"/workspace/geometry.py\", line 2, in boom\n    return 1 / 0\n           ~~^~~\nZeroDivisionError: division by zero\n"
@@ -308,12 +392,48 @@ PASS  exit statuses wrap to 0-255 as the shell sees them: sys.exit(256) is 0, sy
 PASS  os._exit(7) exits with 7, no runner stack trace on stderr  code=7 stdout="x\n" stderr=""
 PASS  a package in a subdirectory imports; __name__ is __main__; UTF-8 survives  stdout="__main__ 3.14159\ndone\n" stderr="ünïcödé ✓ 雪花\n"
 PASS  stdout and stderr arrive in program order  oeo
-PASS  output is streamed as printed (time.sleep blocks the worker in between)  stdout events at 1896, 2196, 2496 ms, exit at 2797 ms
-PASS  100 000 printed lines all arrive  (2812 ms total, Running at 1821 ms), 100000 stdout messages
-PASS  an infinite loop is stopped by terminating the worker; its output arrived first  (3057 ms total, Running at 2057 ms) stopped=true
+PASS  output is streamed as printed (time.sleep blocks the worker in between)  stdout events at 1768, 2068, 2368 ms, exit at 2669 ms
+PASS  100 000 printed lines all arrive  (2945 ms total, Running at 2064 ms), 100000 stdout messages
+PASS  an infinite loop is stopped by terminating the worker; its output arrived first  (2952 ms total, Running at 1951 ms) stopped=true
 PASS  known limit: a prompt without newline followed by a busy loop stays buffered, as in CPython on a terminal  stdout=""
-PASS  after Stop, the page is responsive and a new run works  (1973 ms total, Running at 1952 ms)
+PASS  after Stop, the page is responsive and a new run works  (2244 ms total, Running at 2234 ms)
 PASS  with stdin null, input() raises EOFError
+PASS  test: the sample tests pass under pytest, exit 0, the report on stdout (no carriage-return redraws)  (3396 ms total, Running at - ms) phases: Loading Python@21ms, Loading Python and pytest@25ms, Testing@2017ms; loading: {"loaded":2184628,"total":2184628}
+      | ============================= test session starts ==============================
+      | platform emscripten -- Python 3.14.2, pytest-9.0.2, pluggy-1.6.0
+      | rootdir: /workspace
+      | collected 6 items
+      | 
+      | tests/test_geometry.py ......                                            [100%]
+      | 
+      | ============================== 6 passed in 0.03s ===============================
+PASS  test: pytest is fetched only in test mode
+PASS  test: a failing assertion exits 1 and the report shows the test, the values and the line  (3473 ms total, Running at - ms)
+      | ============================= test session starts ==============================
+      | platform emscripten -- Python 3.14.2, pytest-9.0.2, pluggy-1.6.0
+      | rootdir: /workspace
+      | collected 6 items
+      | 
+      | tests/test_geometry.py F.....                                            [100%]
+      | 
+      | =================================== FAILURES ===================================
+      | ____________________________ test_norm_of_3_4_is_5 _____________________________
+      | 
+      |     def test_norm_of_3_4_is_5() -> None:
+      | >       assert Point(3, 4).norm() == 6
+      | E       assert 5.0 == 6
+      | E        +  where 5.0 = norm()
+      | E        +    where norm = Point(x=3, y=4).norm
+      | E        +      where Point(x=3, y=4) = Point(3, 4)
+      | 
+      | tests/test_geometry.py:10: AssertionError
+      | =========================== short test summary info ============================
+      | FAILED tests/test_geometry.py::test_norm_of_3_4_is_5 - assert 5.0 == 6
+      | ========================= 1 failed, 5 passed in 0.05s ==========================
+PASS  test: a collection error (an import that fails) exits non-zero and names the file and the error  code=2 "ERRORS ====================================\n___________________ ERROR collecting tests/test_geometry.py ____________________\nImportError while importing test module '/workspace/tests/test_geometry.py'..."
+PASS  test: unittest.TestCase classes are collected too (no tests/__init__.py needed); a failure exits 1  "short test summary info ============================\nFAILED tests/test_unit.py::PointTest::test_wrong - AssertionError: 1.41421356...\n========================= 1 failed, 1 passed in 0.04s ============..."
+PASS  test: a project without tests exits 5 ("no tests ran"), not 0  code=5
+PASS  test: output is captured per test (capsys works) and shown for a failing test  "Captured stdout call -----------------------------\ncaptured line\n=========================== short test summary info ===..."
 PASS  no page errors  []
 all checks passed
 ```

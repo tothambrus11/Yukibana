@@ -5,8 +5,10 @@
 #   runner.js            the module Worker the app starts on Run
 #   cc.js, cc.wasm       clang 21.1.8 and wasm-ld in one Emscripten binary
 #                        (LLVM's multi-call "llvm-driver"; WebAssembly target only)
-#   wasi-sysroot.tar.gz  wasi-libc, libc++, libc++abi (wasm32-wasip1) and
-#                        compiler-rt builtins, from the pinned wasi-sdk release
+#   wasi-sysroot.tar.gz  wasi-libc and compiler-rt builtins from the pinned
+#                        wasi-sdk release; libc++, libc++abi and libunwind
+#                        with C++ exceptions (build-cxx-runtime.sh)
+#   gtest.tar            GoogleTest's libraries, for the runner's test mode
 #
 # clang's freestanding headers are not repeated: runner.js takes them from
 # the language server's sysroot.tar.gz, the same URL, so it is cached once.

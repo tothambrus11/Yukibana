@@ -23,10 +23,10 @@ that holds the project's documents and the bundled `lib.*.d.ts` files.
 
 | file | raw | gzip -9 | brotli 11 |
 |---|---:|---:|---:|
-| `server.js` (adapter) | 18.5 KiB | 6.9 KiB | 6.2 KiB |
+| `server.js` (adapter, with the node:test/node:assert types) | 28.3 KiB | 9.3 KiB | 8.3 KiB |
 | `typescript-6.0.3.js` (minified ESM) | 3520.1 KiB | 1005.5 KiB | 781.0 KiB |
 | `libs-6.0.3.json` (64 lib files) | 2538.8 KiB | 387.0 KiB | 279.3 KiB |
-| **total** | **6077.4 KiB** | **1399.4 KiB** | **1066.5 KiB** |
+| **total** | **6087.2 KiB** | **1401.8 KiB** | **1068.6 KiB** |
 
 `build.sh` writes `.gz` and `.br` siblings for each file. On a local
 connection, `initialize` answers about 220 ms after the worker starts,
@@ -119,6 +119,17 @@ TypeScript, which answers every request with an error.
   file"), which is noise in an editor.
 * `lib` defaults to the bundled set above.
 * `types` defaults to `[]`, because there is no `node_modules/@types`.
+* **`node:test`, `node:assert`, `node:assert/strict`** (and `assert`,
+  `assert/strict`) are typed in every project: `src/node/builtins.d.ts`,
+  embedded in `server.js` by `build.sh` and added as a root file next to
+  the libs (so, like a lib, it never shows up in references, definitions or
+  workspace symbols). It declares what the runner implements (see Testing),
+  with @types/node's signatures, so `import { describe, it } from
+  'node:test'` checks cleanly and `mock` or `assert.partialDeepStrictEqual`
+  are errors, as they would fail at run time. One deliberate difference
+  from @types/node: `t.assert.*` is typed without `asserts` clauses, since
+  TypeScript refuses an assertion call through the unannotated `t` of
+  `test('x', (t) => ...)` (TS2775), which @types/node users hit too.
 
 ## What does not work, and why
 
@@ -183,6 +194,15 @@ The alternative named in the task, `@typescript/vfs`, was not needed: the
 * `tools/libs.mjs`: collects and minifies the lib bundle and checks it.
 * `tools/compress.mjs`: writes the compressed siblings and prints the size
   table.
+* `src/node/`: the runner's `node:test` (`test.ts`), `node:assert`
+  (`assert.ts`, with `inspect.ts` for its messages) and their types for the
+  server (`builtins.d.ts`).
+* `test-run.mjs` (`node test-run.mjs` after `./build.sh`): the runner in
+  Chromium with COOP/COEP: the sample and a program reading two lines with
+  `prompt()`, then test mode: the sample's tests, a failing one, the
+  comparison with `node --test`, a test file that does not load, no test
+  files, an uncaught error during a test, `test/` files and `console.log` in
+  tests, and `node:test` in a plain run.
 * `test.mjs` (`node test.mjs` after `./build.sh`)
   * Serves `app/static` over HTTP and serves the `.br` siblings like the
     app's host would.
@@ -207,11 +227,14 @@ The alternative named in the task, `@typescript/vfs`, was not needed: the
     * a missing-lib error on `tsconfig.json`
     * checking turned on and off by `jsconfig.json` `checkJs`
     * a `.ts` file importing JavaScript
+    * a checked test file using `node:test` and `node:assert(/strict)` with no
+      errors, hover on `describe`, and errors for what the runner lacks
     * a second `initialize` refused, and a non-JSON-RPC message ignored
 
 ## Running
 
-`runner.js` (9 KB brotli) runs the project in its own module worker, as
+`runner.js` (38.7 KiB raw, 16.1 KiB gzip, 14.2 KiB brotli; 8.9 KiB brotli
+before test mode) runs the project in its own module worker, as
 `CONTRACT.md` ("Running a program") describes. Every project file is an ES
 module; each becomes a `blob:` URL whose relative imports (static,
 `export ... from`, and `import()` with a literal string) are rewritten to the
@@ -230,6 +253,69 @@ imported with `with { type: 'json' }`.
   something other than a timer is not tracked.
 * Uncaught errors and rejections print their stack and exit with code 1.
 
+* `node:test`, `node:assert` and `node:assert/strict` (also without the
+  `node:` prefix for assert) import the pack's own implementations (see
+  Testing). A program that defines tests with `node:test` runs them after
+  its own code, with the report and exit status of a test run, as
+  `node main.js` does.
+
 Limits: circular imports between project files cannot be linked this way
 and are reported; bare imports (`'lodash'`) fail, since there are no
 packages; the program runs in a worker, so there is no DOM.
+
+## Testing
+
+`{ type: 'test' }` (the app's **Test** button) does what `node --test`
+does with no arguments, in the browser:
+
+* **Which files.** Node 22's default patterns: `*.test.js`, `*-test.js`,
+  `*_test.js`, `test-*.js`, `test.js` in any directory and every file
+  under a `test/` directory (`.mjs` too), outside `node_modules`, in path
+  order. `tests/geometry.test.js` is one; `tests/helpers.js` is not. No
+  test file at all is exit 1 with a message on stderr (Node would exit 0).
+* **How.** Each file is imported like a program's entry, with its own
+  fresh `blob:` URLs for every project module it reaches, so module state
+  does not leak from one test file to the next (Node runs each file in a
+  process of its own). Globals are shared: it is one worker.
+* **`node:test`** (`src/node/test.ts`, written for this pack): `test`/`it`,
+  `describe`/`suite` and their `.skip`/`.todo`/`.only`; options `skip`,
+  `todo`, `timeout` (`only` and `concurrency` are accepted and, as in Node
+  without `--test-only`, change nothing); `before`/`after`/`beforeEach`/
+  `afterEach` at file level and in suites, outer `beforeEach` first and
+  inner `afterEach` first; async tests and `(t, done)` callbacks; the
+  context `t` with `name`, `fullName`, `signal`, `skip()`, `todo()`,
+  `diagnostic()`, `test()` subtests (awaited or not), `before`/`after`/
+  `beforeEach`/`afterEach` and `t.assert`; top-level `await test(...)`.
+  Not available: `mock`, `snapshot`, `run()`, `t.plan`, `t.mock`; a call
+  throws (and the types make it an error in the editor first).
+* **`node:assert` / `node:assert/strict`** (`src/node/assert.ts`): `ok`,
+  `equal`, `notEqual`, `strictEqual`, `notStrictEqual`, `deepEqual`,
+  `notDeepEqual`, `deepStrictEqual`, `notDeepStrictEqual`, `throws`,
+  `doesNotThrow`, `rejects`, `doesNotReject`, `match`, `doesNotMatch`,
+  `ifError`, `fail`, `AssertionError`, `strict`, and `assert(value)` itself.
+  `node:assert` is legacy mode (`equal` is `==`) and `node:assert/strict`
+  strict mode, as in Node. `throws`/`rejects` take a class, a RegExp, a
+  validation function, an object of expected properties or an error.
+  Messages are Node's, diffs included, and `assert.ok(expr)` quotes the
+  failing expression from the source as Node does. Not available:
+  `partialDeepStrictEqual`, `CallTracker`; deep equality ignores symbol
+  keys and non-index array properties.
+* **The report** is laid out like Node 22's spec reporter: `▶ suite`,
+  `✔`/`✖`/`﹣` lines with durations, `# SKIP`/`# TODO`, `ℹ` diagnostics,
+  the `ℹ tests … duration_ms` summary, then `✖ failing tests:` with
+  `test at file:line:col`, the error and its stack frames in project files
+  only. Counting follows Node: a failing todo is ✖ but counts as todo, a
+  timeout counts as cancelled, a skipped suite is one line.
+* **Exit status** 0 only when no test failed or was cancelled.
+* **Checked against Node.** `test-run.mjs` runs
+  `test-fixtures/behaviour.test.js` (hooks, subtests, skip/todo, timeouts,
+  assertion messages and diffs, legacy vs strict, top-level await) both in
+  the browser and under the local `node --test` (22.22.0), and requires the
+  two reports to agree line for line, durations and Node's internal stack
+  frames aside.
+* **Limits.** Tests run one at a time. An uncaught error or unhandled
+  rejection fails the test running at the time (Node tracks the async
+  context and blames the test that caused it; a worker cannot). A
+  `describe` callback that registers tests after an `await` is not
+  supported. A test that never settles needs Stop, unless it has a
+  `timeout`.

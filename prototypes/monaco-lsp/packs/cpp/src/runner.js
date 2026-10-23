@@ -9,7 +9,11 @@
 //                        libc++'s headers and clang's own from it (same URL,
 //                        so the browser downloads it once for both workers)
 //   wasi-sysroot.tar.gz  wasi-libc's headers, libc++'s __config_site for WASI,
-//                        the static libraries and compiler-rt
+//                        the static libraries (libc++ with exceptions) and
+//                        compiler-rt
+//   gtest.tar            GoogleTest's libraries, fetched only to build tests
+//                        (type 'test') or a program that includes <gtest/...>;
+//                        its headers are in sysroot.tar.gz
 //
 // Each tool call gets a fresh instance of cc.wasm (compiled once): clang and
 // lld keep global state, and a browser cannot fork. Files go from one
@@ -17,17 +21,33 @@
 
 import { createWasi, ProcExit } from './wasi.js';
 
-/* global CC_WASM_SIZE, WASI_SYSROOT_SIZE, SYSROOT_SIZE */
+/* global CC_WASM_SIZE, WASI_SYSROOT_SIZE, SYSROOT_SIZE, GTEST_SIZE */
 const SIZES = {
     'cc.wasm': typeof CC_WASM_SIZE === 'number' ? CC_WASM_SIZE : 0,
     'wasi-sysroot.tar.gz': typeof WASI_SYSROOT_SIZE === 'number' ? WASI_SYSROOT_SIZE : 0,
     'sysroot.tar.gz': typeof SYSROOT_SIZE === 'number' ? SYSROOT_SIZE : 0,
+    'gtest.tar': typeof GTEST_SIZE === 'number' ? GTEST_SIZE : 0,
 };
 
 const TARGET = ['--target=wasm32-wasip1', '--sysroot=/wasi', '-resource-dir=/usr/lib/clang/21'];
+// C++ exceptions, as WebAssembly exception handling in its standard form
+// (exnref, try_table), the form libc++, libc++abi, libunwind and GoogleTest
+// in the sysroot are built with (build-cxx-runtime.sh). Without -mllvm the
+// compiler would emit the legacy instructions.
+const EXCEPTIONS = ['-fwasm-exceptions', '-mllvm', '-wasm-use-legacy-eh=false'];
 const CXX = /\.(cpp|cc|cxx|c\+\+|C)$/;
 const C = /\.c$/;
 const OBJ = '.yukibana/obj/';
+const LIB = '/wasi/lib/wasm32-wasip1';
+/** Where a project keeps its tests (type 'test'); left out of a plain run. */
+const TESTS = /^tests\//;
+const INCLUDES_GTEST = /#\s*include\s*[<"]gtest\//;
+
+/** Whether a source defines main: `int main(` or `auto main(` outside
+ * comments. A heuristic, enough to leave the program's own main out of a
+ * test build and to link GoogleTest's main only when there is none. */
+const definesMain = (text) =>
+    /\b(?:int|auto)\s+main\s*\(/.test(text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, ''));
 
 const post = (msg) => self.postMessage(msg);
 const phase = (text) => post({ type: 'phase', text });
@@ -100,16 +120,29 @@ function load() {
         // From the server's sysroot: libc++'s headers, laid under the WASI
         // sysroot where clang's WASI driver looks for them, and clang's own
         // headers. Not its musl headers: the target is WASI, not Linux.
+        // GoogleTest's headers too: they are a few dozen small files.
         const files = [];
         for (const [path, bytes] of server) {
             if (path.startsWith('/usr/include/c++/v1/'))
                 files.push(['/wasi/include/wasm32-wasip1/c++/v1/' + path.slice('/usr/include/c++/v1/'.length), bytes]);
+            else if (path.startsWith('/usr/include/gtest/')) files.push(['/wasi/include/' + path.slice('/usr/include/'.length), bytes]);
             else if (path.startsWith('/usr/lib/clang/')) files.push([path, bytes]);
         }
         files.push(...wasi); // after: its __config_site replaces the musl one
         return { createCC, module, files };
     })();
     return toolchain;
+}
+
+let gtest = null;
+
+/** Adds GoogleTest's libraries to the toolchain's files (once). */
+function loadGtest() {
+    gtest ??= (async () => {
+        const [{ files }, tar] = await Promise.all([load(), download('gtest.tar')]);
+        files.push(...(await untar(tar)));
+    })();
+    return gtest;
 }
 
 /**
@@ -194,18 +227,38 @@ function flagsFor(files, cxx) {
     });
 }
 
-// ---- running the program
+// ---- running the program, or its tests
 
-async function run({ files, stdin }) {
-    const sources = Object.keys(files)
+/**
+ * type 'run': every .c/.cpp of the project except those under tests/.
+ * type 'test': the project's sources without the program's main (the entry
+ * file, and any other file that defines main) plus tests/**, linked with
+ * GoogleTest and, unless a test file has its own main, gtest_main.
+ */
+async function run({ type, files, entry, stdin }) {
+    const all = Object.keys(files)
         .filter((p) => CXX.test(p) || C.test(p))
         .sort();
-    if (sources.length === 0) {
-        stderr('No .c or .cpp file to compile.\n');
-        return 1;
+    const testing = type === 'test';
+    let sources;
+    if (testing) {
+        const tests = all.filter((p) => TESTS.test(p));
+        if (tests.length === 0) {
+            stderr('No tests to run: put GoogleTest files in tests/, for example tests/geometry_test.cpp.\n');
+            return 1;
+        }
+        sources = [...all.filter((p) => !TESTS.test(p) && p !== entry && !definesMain(files[p])), ...tests];
+    } else {
+        sources = all.filter((p) => !TESTS.test(p));
+        if (sources.length === 0) {
+            stderr('No .c or .cpp file to compile.\n');
+            return 1;
+        }
     }
+    const usesGtest = testing || sources.some((p) => INCLUDES_GTEST.test(files[p]));
+    const cxxProgram = sources.some((p) => CXX.test(p));
     phase('Loading the compiler');
-    await load();
+    await (usesGtest ? Promise.all([load(), loadGtest()]) : load());
 
     const objects = {};
     for (const [i, source] of sources.entries()) {
@@ -216,10 +269,8 @@ async function run({ files, stdin }) {
         const object = `${OBJ}${source}.o`;
         const flags = flagsFor(files, cxx);
         const optimise = flags.some((f) => /^-O/.test(f)) ? [] : ['-O2'];
-        // wasi-sdk's libc++ and libc++abi are built without exceptions (no
-        // __cxa_throw to link against), so C++ is compiled as wasi-sdk
-        // recommends: a `throw` or `try` is a compile error that says so.
-        const noExceptions = cxx ? ['-fno-exceptions'] : [];
+        // A project's -fno-exceptions in compile_flags.txt comes later and wins.
+        const exceptions = cxx ? EXCEPTIONS : [];
         // libc++'s "fast" hardening: vector/string/span/array operator[],
         // front(), back() and the like check their bounds and stop the
         // program (a trap, "unreachable") instead of corrupting memory
@@ -232,7 +283,7 @@ async function run({ files, stdin }) {
             : [];
         const { code, out } = await tool(
             'clang',
-            [...TARGET, ...optimise, ...noExceptions, ...hardening, ...flags, '-fno-color-diagnostics', '-c', source, '-o', object],
+            [...TARGET, ...optimise, ...exceptions, ...hardening, ...flags, '-fno-color-diagnostics', '-c', source, '-o', object],
             files,
             [object]
         );
@@ -241,20 +292,31 @@ async function run({ files, stdin }) {
     }
 
     phase('Linking');
-    const lib = '/wasi/lib/wasm32-wasip1';
+    const lib = LIB;
+    // GoogleTest's main is in an archive, and wasi-libc's __main_void only
+    // refers weakly to __main_argc_argv (main(argc, argv)), which does not
+    // pull an archive member: -u does.
+    const gtestMain = usesGtest && !sources.some((p) => definesMain(files[p]));
     const { code, out } = await tool(
         'wasm-ld',
         [
             '-m', 'wasm32', '-L' + lib, lib + '/crt1-command.o',
             ...Object.keys(objects),
+            ...(cxxProgram ? [lib + '/yukibana-uncaught.o'] : []),
+            ...(gtestMain ? ['-u', '__main_argc_argv', '-lgtest_main'] : []),
+            ...(usesGtest ? ['-lgtest'] : []),
             // libc-printscan-long-double: without it, printing a long double
             // (printf("%Lf"), or cout, through libc++'s num_put) aborts with
             // "Support for formatting long double values is currently disabled".
-            '-lc++', '-lc++abi', '-lc-printscan-long-double', '-lc',
+            // libunwind: the two functions of wasm exception handling.
+            '-lc++', '-lc++abi', '-lunwind', '-lc-printscan-long-double', '-lc',
             '/usr/lib/clang/21/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a',
             // So the runner can flush the program's stdout before it waits
             // for input, as a terminal's C library would (see below).
             '--export-if-defined=fflush', '--export-if-defined=stdout',
+            // The C++ exception tag, to recognise an uncaught exception (see
+            // below); yukibana-uncaught.o exports its own function.
+            '--export-if-defined=__cpp_exception',
             // wasm-ld's default stack is 64 KiB, below the data, so a local
             // `int a[100000]` would overwrite globals without a word. 8 MiB
             // like a Linux main thread, placed first so an overflow runs off
@@ -269,9 +331,14 @@ async function run({ files, stdin }) {
     );
     if (code !== 0 || !out['.yukibana/program.wasm']) return code || 1;
 
-    phase('Running');
+    phase(testing ? 'Running the tests' : 'Running');
     const program = await WebAssembly.compile(out['.yukibana/program.wasm']);
     let instance = null;
+    const flushStdout = () => {
+        const { fflush, stdout, memory } = instance?.exports ?? {};
+        if (typeof fflush !== 'function' || !(stdout instanceof WebAssembly.Global)) return;
+        fflush(new DataView(memory.buffer).getUint32(stdout.value, true));
+    };
     const wasi = createWasi({
         args: ['main'],
         stdin,
@@ -280,11 +347,7 @@ async function run({ files, stdin }) {
         // C's stdio does not flush stdout when it reads stdin (C++'s cin does,
         // through tie()), so printf("name? ") would stay invisible while the
         // program waits. Flush it here, as glibc would.
-        beforeWait() {
-            const { fflush, stdout, memory } = instance?.exports ?? {};
-            if (typeof fflush !== 'function' || !(stdout instanceof WebAssembly.Global)) return;
-            fflush(new DataView(memory.buffer).getUint32(stdout.value, true));
-        },
+        beforeWait: flushStdout,
     });
     instance = await WebAssembly.instantiate(program, wasi.importsFor(program));
     wasi.setMemory(instance.exports.memory);
@@ -293,6 +356,8 @@ async function run({ files, stdin }) {
         return 0;
     } catch (error) {
         if (error instanceof ProcExit) return error.code;
+        if (typeof WebAssembly.Exception === 'function' && error instanceof WebAssembly.Exception)
+            return uncaught(error);
         const message = String(error?.message ?? error);
         // V8 runs wasm on the worker's native stack (about 1 MB), which holds
         // a few thousand nested calls, far fewer than a native process.
@@ -306,10 +371,33 @@ async function run({ files, stdin }) {
     } finally {
         wasi.flush();
     }
+
+    /**
+     * A C++ exception nobody caught leaves _start as a WebAssembly.Exception
+     * (wasm has no search phase that would call std::terminate first). It is
+     * handed back to the program, whose yukibana-uncaught.o rethrows it into
+     * a catch that calls std::terminate, and libc++abi prints, as natively,
+     * "terminating due to uncaught exception of type std::out_of_range:
+     * vector" before abort(). Exit status 134, as for abort().
+     */
+    function uncaught(error) {
+        const { __cpp_exception: tag, __yukibana_uncaught: report } = instance.exports;
+        try {
+            flushStdout();
+            if (!(tag instanceof WebAssembly.Tag) || !error.is(tag) || typeof report !== 'function') throw error;
+            report(error.getArg(tag, 0));
+        } catch (reported) {
+            if (reported instanceof ProcExit) return reported.code;
+            // The trap of abort() after libc++abi's message; or not a C++
+            // exception at all.
+            if (reported === error) stderr('\nThe program crashed: an exception nobody caught\n');
+        }
+        return 134;
+    }
 }
 
 self.onmessage = ({ data }) => {
-    if (data?.type !== 'run') return;
+    if (data?.type !== 'run' && data?.type !== 'test') return;
     run(data)
         .catch((error) => {
             stderr(`${error?.message ?? error}\n`);

@@ -23,9 +23,9 @@ const build = join(here, '..', 'build');
  * whose definition lives in `definitionFile`, and a word to hover.
  */
 const CASES = {
-	python: { output: 'Point(x=0, y=0) to Point(x=3, y=4): 5.0', file: 'main.py', error: '\nundefined_name_xyz\n', access: '\nPoint(1, 2).', member: 'norm', definition: 'distance', definitionFile: 'geometry.py', hover: 'Point' },
-	javascript: { output: '(0, 0) to (3, 4): 5', file: 'main.js', error: '\na.nope();\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'geometry.js', hover: 'Point' },
-	cpp: { output: '5.000000', file: 'main.cpp', error: '\nint broken = undeclared_xyz;\n', access: '\nvoid f(Point p) { p.', member: 'norm', definition: 'distance', definitionFile: 'geometry', hover: 'Point' },
+	python: { output: 'Point(x=0, y=0) to Point(x=3, y=4): 5.0', testOutput: '6 passed', file: 'main.py', error: '\nundefined_name_xyz\n', access: '\nPoint(1, 2).', member: 'norm', definition: 'distance', definitionFile: 'geometry.py', hover: 'Point' },
+	javascript: { output: '(0, 0) to (3, 4): 5', testOutput: 'ℹ pass 4', file: 'main.js', error: '\na.nope();\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'geometry.js', hover: 'Point' },
+	cpp: { output: '5.000000', testOutput: '[  PASSED  ] 3 tests.', file: 'main.cpp', error: '\nint broken = undeclared_xyz;\n', access: '\nvoid f(Point p) { p.', member: 'norm', definition: 'distance', definitionFile: 'geometry', hover: 'Point' },
 	swift: { output: 'to', file: 'main.swift', error: '\nlet x: Int = "no"\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'Geometry.swift', hover: 'Point' },
 	scala: { output: 'to', file: 'Main.scala', error: '\nval broken: Int = "no"\n', access: '\nval q = Point(1, 2)\nval r = q.', member: 'norm', definition: 'distance', definitionFile: 'Geometry.scala', hover: 'Point' },
 };
@@ -132,6 +132,14 @@ async function run(language, c) {
 		check(ended && /code 0/.test((await status.textContent()) ?? '') && shown.includes(c.output), `Run prints "${c.output}" (${(await status.textContent())?.trim()}: ${JSON.stringify(shown.slice(0, 200))})`);
 	}
 
+	if (c.testOutput && existsSync(join(build, 'packs', language, 'runner.js'))) {
+		await page.locator('header button', { hasText: /^Test$/ }).click();
+		const status = page.locator('.terminal .status');
+		const ended = await status.filter({ hasText: /Exited|Stopped/ }).waitFor({ timeout: 240_000 }).then(() => true, () => false);
+		const shown = (await page.locator('.terminal pre').textContent()) ?? '';
+		check(ended && /code 0/.test((await status.textContent()) ?? '') && shown.includes(c.testOutput), `Test runs the sample's tests: "${c.testOutput}" (${(await status.textContent())?.trim()}: ${JSON.stringify(shown.slice(-160))})`);
+	}
+
 	if (language === 'javascript') await settings(page, check);
 	if (language === 'python') await peek(page, check);
 
@@ -208,7 +216,7 @@ async function switching() {
 	await page.selectOption('header select', 'python');
 	const settled = await page.locator('footer .state', { hasText: 'basedpyright' }).waitFor({ timeout: 60_000 }).then(() => true, () => false);
 	const files = (await page.locator('.explorer .row .name').allTextContents()).join(',');
-	check(settled && files === 'geometry.py,main.py', `after four quick switches python runs on the python files (${files})`);
+	check(settled && files === 'tests,test_geometry.py,geometry.py,main.py', `after four quick switches python runs on the python files (${files})`);
 
 	const editor = page.locator('.dv-groupview .monaco-editor').first();
 	await editor.click();

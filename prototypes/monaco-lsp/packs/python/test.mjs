@@ -217,6 +217,34 @@ try {
     );
     check('a non-Python project file is not analysed as Python', readmeDiagnostics.length === 0);
 
+    // A pytest test in tests/: `import pytest` resolves to the stubs shipped
+    // with the stdlib ones, `from models import ...` to the project root.
+    const TEST = [
+        'import pytest',
+        '',
+        'from models import Point',
+        '',
+        '',
+        '@pytest.mark.parametrize(("x", "y"), [(3, 4), (5, 12)])',
+        'def test_norm(x: float, y: float) -> None:',
+        '    assert Point(x, y).norm() == pytest.approx((x * x + y * y) ** 0.5)',
+        '',
+        '',
+        'def test_raises() -> None:',
+        '    with pytest.raises(ZeroDivisionError) as info:',
+        '        _ = 1 / 0',
+        '    assert info.type is ZeroDivisionError',
+        '',
+    ].join('\n');
+    await lsp.notify('textDocument/didOpen', { textDocument: { uri: uri('tests/test_models.py'), languageId: 'python', version: 1, text: TEST } });
+    diags = await diagnostics('tests/test_models.py', () => true);
+    check('a pytest test file in tests/ has no diagnostics at all: pytest and the project module both resolve', diags?.length === 0, JSON.stringify(diags?.map((d) => d.message)));
+    const approx = await lsp.request('textDocument/hover', { textDocument: { uri: uri('tests/test_models.py') }, position: { line: 7, character: 42 } });
+    const approxText = approx.result?.contents?.value ?? JSON.stringify(approx.result);
+    check('hover on `pytest.approx` shows its signature and pytest\'s docstring', /def approx\(/.test(approxText) && /within some tolerance/.test(approxText), JSON.stringify(approxText.slice(0, 160)));
+    const raisesInfo = await lsp.request('textDocument/hover', { textDocument: { uri: uri('tests/test_models.py') }, position: { line: 13, character: 12 } });
+    check('`with pytest.raises(E) as info` types `info` as ExceptionInfo[E]', /ExceptionInfo\[ZeroDivisionError\]/.test(raisesInfo.result?.contents?.value ?? ''), JSON.stringify(raisesInfo.result?.contents?.value));
+
     const shutdown = await lsp.request('shutdown', null);
     check('shutdown answers', shutdown.error === undefined);
     const errors = (await lsp.log()).filter((m) => m.method === 'worker/error' || (m.method === 'window/logMessage' && m.params.type === 1));

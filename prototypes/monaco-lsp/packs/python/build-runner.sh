@@ -2,9 +2,10 @@
 # Builds the Python runner (packs/CONTRACT.md, "Running a program") into
 # ../../app/static/packs/python/: runner.js plus the Pyodide core, taken from
 # the npm package `pyodide` at a pinned version whose tarball is checked
-# against the registry's sha512 integrity. Nothing is compiled: Pyodide's
-# release is CPython already built for wasm32-emscripten. Called by build.sh;
-# can be run on its own. Idempotent; caches the tarball in $PACK_CACHE/python.
+# against the registry's sha512 integrity, and the pytest bundle that test
+# mode fetches. Nothing is compiled: Pyodide's release is CPython already
+# built for wasm32-emscripten, pytest is pure Python. Called by build.sh; can
+# be run on its own. Idempotent; caches the downloads in $PACK_CACHE/python.
 set -euo pipefail
 
 PYODIDE_VERSION=314.0.7   # CPython 3.14.2, Emscripten 5.0.3
@@ -51,18 +52,32 @@ python3 -I "$HERE/scripts/store-zip.py" "$TMP/package/python_stdlib.zip" "$OUT/p
 sed -i '/^\/\/# sourceMappingURL=/d' "$OUT/pyodide.mjs"
 rm -f "$OUT/pyodide-lock.json" "$OUT/pyodide-lock.json".{gz,br}
 
-# 3. runner.js, with the lock file's `info` inlined.
+# 3. The pytest bundle that test mode unpacks into site-packages: pytest and
+#    its dependencies from PyPI wheels, pinned by sha256 in
+#    scripts/pytest-wheels.txt and cached, merged by scripts/make-pytest-zip.py.
+#    Named by pytest's version, so a new one is a new URL for the cache.
+PYTEST_ZIP="pytest-$(sed -n 's/^pytest-\([0-9.]*\)-py3.*/\1/p' "$HERE/scripts/pytest-wheels.txt").zip"
+mapfile -t wheels < <("$HERE/scripts/fetch-wheels.sh" "$CACHE/wheels")
+rm -f "$OUT"/pytest-*.zip "$OUT"/pytest-*.zip.{gz,br}
+python3 -I "$HERE/scripts/make-pytest-zip.py" "$OUT/$PYTEST_ZIP" "${wheels[@]}"
+
+# 4. runner.js, with the lock file's `info` and the bundle's name inlined.
 info="$(node -e "process.stdout.write(JSON.stringify(require('$TMP/package/pyodide-lock.json').info))")"
 node -e '
 const fs = require("fs");
-const [src, out, info] = process.argv.slice(1);
-const text = fs.readFileSync(src, "utf8");
-const marker = "/* LOCK_INFO */ { info: {}, packages: {} }";
-if (!text.includes(marker)) throw new Error("LOCK_INFO marker missing in " + src);
-fs.writeFileSync(out, text.replace(marker, `{ info: ${info}, packages: {} }`));
-' "$HERE/runner/runner.js" "$OUT/runner.js" "$info"
+const [src, out, info, pytestZip] = process.argv.slice(1);
+let text = fs.readFileSync(src, "utf8");
+for (const [marker, value] of [
+    ["/* LOCK_INFO */ { info: {}, packages: {} }", `{ info: ${info}, packages: {} }`],
+    ["/* PYTEST_ZIP */ \"pytest.zip\"", JSON.stringify(pytestZip)],
+]) {
+    if (!text.includes(marker)) throw new Error(`marker ${marker} missing in ${src}`);
+    text = text.replace(marker, value);
+}
+fs.writeFileSync(out, text);
+' "$HERE/runner/runner.js" "$OUT/runner.js" "$info" "$PYTEST_ZIP"
 
-# 4. Licences (cached, so a build with a warm cache makes no request) and
+# 5. Licences (cached, so a build with a warm cache makes no request) and
 #    precompressed siblings.
 licence() { # name url sha256
     local f="$CACHE/$1"
@@ -77,4 +92,4 @@ licence() { # name url sha256
 }
 licence LICENSE-pyodide.txt "https://raw.githubusercontent.com/pyodide/pyodide/$PYODIDE_VERSION/LICENSE" "$PYODIDE_LICENSE_SHA256"
 licence LICENSE-cpython.txt "https://raw.githubusercontent.com/python/cpython/$CPYTHON_TAG/LICENSE" "$CPYTHON_LICENSE_SHA256"
-nice -n 10 node "$HERE/scripts/compress.mjs" "$OUT/runner.js" "$OUT/pyodide.mjs" "$OUT/pyodide.asm.mjs" "$OUT/pyodide.asm.wasm" "$OUT/python_stdlib.zip"
+nice -n 10 node "$HERE/scripts/compress.mjs" "$OUT/runner.js" "$OUT/pyodide.mjs" "$OUT/pyodide.asm.mjs" "$OUT/pyodide.asm.wasm" "$OUT/python_stdlib.zip" "$OUT/$PYTEST_ZIP"

@@ -59,9 +59,11 @@ npx esbuild src/server.ts --bundle --minify --format=esm --target=es2022 --log-l
   --define:__TS_FILE__="\"$TS_FILE\"" --define:__TS_SIZE__="$(size "$OUT/$TS_FILE")" \
   --define:__LIBS_FILE__="\"$LIBS_FILE\"" --define:__LIBS_SIZE__="$(size "$OUT/$LIBS_FILE")" \
   --define:__PACK_VERSION__="\"$PACK_VERSION\"" \
+  --define:__NODE_TYPES__="$(node -p 'JSON.stringify(require("fs").readFileSync("src/node/builtins.d.ts", "utf8"))')" \
   --outfile="$OUT/server.js"
 
-# The program runner: a worker of its own, independent of the server.
+# The program runner: a worker of its own, independent of the server, with
+# its own node:test and node:assert (src/node/).
 npx esbuild src/runner.ts --bundle --minify --format=esm --target=es2022 --log-level=warning \
   --outfile="$OUT/runner.js"
 

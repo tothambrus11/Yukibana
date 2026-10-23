@@ -26,11 +26,19 @@ declare const __TS_SIZE__: number;
 declare const __LIBS_FILE__: string;
 declare const __LIBS_SIZE__: number;
 declare const __PACK_VERSION__: string;
+/** src/node/builtins.d.ts, embedded by build.sh. */
+declare const __NODE_TYPES__: string;
 
 /** Libraries a project gets when its config names none. Must be in the bundle. */
 const DEFAULT_LIBS = ['lib.es2023.d.ts', 'lib.dom.d.ts', 'lib.dom.iterable.d.ts', 'lib.dom.asynciterable.d.ts'];
 /** Where the bundled libs live in the virtual file system; never a project path. */
 const LIB_DIR = '/typescript/lib';
+/**
+ * Types of the `node:test` and `node:assert` modules the runner provides,
+ * a root file of every project (there is no @types/node), kept with the libs
+ * so that results pointing into it are dropped like those into a lib.
+ */
+const NODE_TYPES = `${LIB_DIR}/yukibana-node.d.ts`;
 const SCRIPT_EXT = /\.(?:[cm]?[jt]s|[jt]sx)$/i;
 const CONFIG_NAMES = ['tsconfig.json', 'jsconfig.json'];
 
@@ -179,6 +187,7 @@ async function load(): Promise<void> {
   }
   const bundle = JSON.parse(new TextDecoder().decode(libBytes)) as Record<string, string>;
   for (const [name, text] of Object.entries(bundle)) libs.set(`${LIB_DIR}/${name}`, ts.ScriptSnapshot.fromString(text));
+  libs.set(NODE_TYPES, ts.ScriptSnapshot.fromString(__NODE_TYPES__));
   log(3, `TypeScript ${ts.version} loaded with ${libs.size} lib files in ${Math.round(performance.now() - started)} ms`);
 }
 
@@ -394,7 +403,7 @@ function options(): TS.CompilerOptions {
 }
 
 function scriptFiles(): string[] {
-  return [...docs.keys()].filter((p) => SCRIPT_EXT.test(p));
+  return [...[...docs.keys()].filter((p) => SCRIPT_EXT.test(p)), NODE_TYPES];
 }
 
 let service: TS.LanguageService | undefined;

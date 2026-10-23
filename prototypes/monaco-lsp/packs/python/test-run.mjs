@@ -75,7 +75,7 @@ await page.goto(`${origin}/__test.html`);
 // With `stopAfterMs`, terminate the worker that long after "Running", as the
 // app's Stop button does.
 await page.evaluate(() => {
-    window.runProgram = (files, entry, inputs = [], { stopAfterMs = 0, timeoutMs = 120000 } = {}) =>
+    window.runProgram = (files, entry, inputs = [], { stopAfterMs = 0, timeoutMs = 120000, type = 'run' } = {}) =>
         new Promise((done) => {
             const t0 = performance.now();
             const sab = crossOriginIsolated ? new SharedArrayBuffer(8 + 65536) : null;
@@ -139,7 +139,7 @@ await page.evaluate(() => {
                     finish();
                 }
             };
-            worker.postMessage({ type: 'run', files, entry, stdin: sab });
+            worker.postMessage({ type, files, entry, stdin: sab });
         });
 });
 
@@ -351,6 +351,73 @@ const noSab = await page.evaluate(
         }),
 );
 check('with stdin null, input() raises EOFError', noSab.code === 1 && /EOFError/.test(noSab.err));
+
+// 5. Test mode: pytest over the project (`type: 'test'`).
+const TESTS = `import dataclasses
+import math
+
+import pytest
+
+from geometry import Point, distance
+
+
+def test_norm_of_3_4_is_5() -> None:
+    assert Point(3, 4).norm() == 5
+
+
+def test_distance_is_symmetric() -> None:
+    a, b = Point(1, 2), Point(-2, 6)
+    assert distance(a, b) == distance(b, a)
+
+
+@pytest.mark.parametrize(("x", "y", "expected"), [(0, 0, 0.0), (5, 12, 13.0), (1, 1, math.sqrt(2))])
+def test_norm(x: float, y: float, expected: float) -> None:
+    assert Point(x, y).norm() == pytest.approx(expected)
+
+
+def test_points_are_immutable() -> None:
+    p = Point(0, 0)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(p, "x", 1)
+`;
+const test = (files, opts = {}) => run(files, 'main.py', [], { type: 'test', ...opts });
+const t1 = await test({ ...SAMPLE, 'tests/test_geometry.py': TESTS });
+check(
+    'test: the sample tests pass under pytest, exit 0, the report on stdout (no carriage-return redraws)',
+    t1.code === 0 && /6 passed/.test(t1.stdout) && /tests\/test_geometry\.py \.{6}/.test(t1.stdout) && !/\r/.test(t1.stdout),
+    `${timing(t1)} phases: ${t1.phases.join(', ')}; loading: ${JSON.stringify(t1.loading['pytest-9.0.2.zip'])}\n${t1.stdout.trimEnd().replace(/^/gm, '      | ')}`,
+);
+check('test: pytest is fetched only in test mode', cold.loading['pytest-9.0.2.zip'] === undefined && t1.loading['pytest-9.0.2.zip']?.loaded > 0);
+const failing = TESTS.replace('assert Point(3, 4).norm() == 5', 'assert Point(3, 4).norm() == 6');
+const t2 = await test({ ...SAMPLE, 'tests/test_geometry.py': failing });
+check(
+    'test: a failing assertion exits 1 and the report shows the test, the values and the line',
+    t2.code === 1 && /1 failed, 5 passed/.test(t2.stdout) && /FAILED tests\/test_geometry\.py::test_norm_of_3_4_is_5/.test(t2.stdout) && /assert 5\.0 == 6/.test(t2.stdout) && /tests\/test_geometry\.py:10: AssertionError/.test(t2.stdout),
+    `${timing(t2)}\n${t2.stdout.trimEnd().replace(/^/gm, '      | ')}`,
+);
+const t3 = await test({ ...SAMPLE, 'tests/test_geometry.py': 'from geometry import Nope\n\ndef test_x():\n    pass\n', 'tests/test_ok.py': 'def test_ok():\n    assert True\n' });
+check(
+    'test: a collection error (an import that fails) exits non-zero and names the file and the error',
+    t3.code === 2 && /ERROR collecting tests\/test_geometry\.py/.test(t3.stdout) && /ImportError: cannot import name 'Nope'/.test(t3.stdout),
+    `code=${t3.code} ${short(t3.stdout.slice(t3.stdout.indexOf('ERROR')), 200)}`,
+);
+const t4 = await test({
+    ...SAMPLE,
+    'tests/test_unit.py': 'import unittest\nfrom geometry import Point\n\n\nclass PointTest(unittest.TestCase):\n    def test_norm(self):\n        self.assertEqual(Point(3, 4).norm(), 5.0)\n\n    def test_wrong(self):\n        self.assertEqual(Point(1, 1).norm(), 1.0)\n',
+});
+check(
+    'test: unittest.TestCase classes are collected too (no tests/__init__.py needed); a failure exits 1',
+    t4.code === 1 && /1 failed, 1 passed/.test(t4.stdout) && /FAILED tests\/test_unit\.py::PointTest::test_wrong/.test(t4.stdout),
+    short(t4.stdout.slice(t4.stdout.indexOf('short test summary')), 200),
+);
+const t5 = await test(SAMPLE);
+check('test: a project without tests exits 5 ("no tests ran"), not 0', t5.code === 5 && /no tests ran/.test(t5.stdout), `code=${t5.code}`);
+const t6 = await test({ ...SAMPLE, 'tests/test_print.py': 'def test_print(capsys):\n    print("hello")\n    assert capsys.readouterr().out == "hello\\n"\n\ndef test_output_shown_on_failure():\n    print("captured line")\n    assert False\n' });
+check(
+    'test: output is captured per test (capsys works) and shown for a failing test',
+    t6.code === 1 && /1 failed, 1 passed/.test(t6.stdout) && /Captured stdout call[\s\S]*captured line/.test(t6.stdout),
+    short(t6.stdout.slice(t6.stdout.indexOf('Captured')), 120),
+);
 
 check('no page errors', pageErrors.length === 0, JSON.stringify(pageErrors));
 console.log(failures ? `${failures} check(s) failed` : 'all checks passed');

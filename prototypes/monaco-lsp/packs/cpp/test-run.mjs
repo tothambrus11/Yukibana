@@ -11,7 +11,8 @@
 // and two lines of stdin (C++ and C), a compile error, and a program that
 // never ends, which the page stops by terminating the worker. The sample runs
 // twice: cold (empty browser cache) and warm (cached downloads and compiled
-// wasm), with timings.
+// wasm), with timings. C++ exceptions, caught and uncaught, and the
+// sample's GoogleTest tests ({ type: 'test' }), passing and failing.
 
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
@@ -160,6 +161,74 @@ int main() {
 }
 `,
 };
+// C++ exceptions: thrown and caught, from the program and from libc++, with
+// destructors run during unwinding.
+const EXCEPTIONS = {
+    'main.cpp': `#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+struct Mine : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+struct Guard {
+    ~Guard() { std::cout << "destructor ran\\n"; }
+};
+
+int main() {
+    try {
+        throw Mine("custom");
+    } catch (const std::exception &e) {
+        std::cout << "caught " << e.what() << "\\n";
+    }
+    try {
+        std::stoi("abc");
+    } catch (const std::invalid_argument &) {
+        std::cout << "stoi: invalid_argument\\n";
+    }
+    try {
+        std::vector<int> v(2);
+        v.at(5) = 1;
+    } catch (const std::out_of_range &) {
+        std::cout << "at: out_of_range\\n";
+    }
+    try {
+        Guard g;
+        throw 42;
+    } catch (int x) {
+        std::cout << "int " << x << "\\n";
+    }
+}
+`,
+};
+const UNCAUGHT = {
+    'main.cpp': `#include <iostream>
+#include <stdexcept>
+
+int main() {
+    std::cout << "before\\n";
+    throw std::logic_error("boom");
+}
+`,
+};
+// A failing test next to the sample's passing ones.
+const FAILING_TEST = {
+    'tests/broken_test.cpp': `#include <gtest/gtest.h>
+
+#include "geometry.h"
+
+TEST(Broken, NormIsWrong) {
+    Point p{3, 4};
+    EXPECT_DOUBLE_EQ(p.norm(), 6.0);
+}
+
+TEST(Broken, ThrowsSomethingElse) {
+    EXPECT_THROW(throw std::runtime_error("x"), std::logic_error);
+}
+`,
+};
+
 // Two definitions of main: the linker must name the student's files.
 const DUPLICATE_MAIN = {
     'main.cpp': `int main() { return 0; }
@@ -190,7 +259,7 @@ try {
     // line each, then end of file), optionally terminate it after the program
     // printed `stopAfter`. Resolves with what came back and when.
     await page.evaluate(() => {
-        window.runProject = (files, { inputs = [], stopAfter = null, entry = 'main.cpp', failInstantiate = false } = {}) =>
+        window.runProject = (files, { inputs = [], stopAfter = null, entry = 'main.cpp', failInstantiate = false, type = 'run' } = {}) =>
             new Promise((done) => {
                 const t0 = performance.now();
                 const result = { stdout: '', stderr: '', code: null, phases: [], loading: {}, stdinRequests: 0, stdoutBeforeInput: [], terminated: false };
@@ -262,7 +331,7 @@ try {
                         }, 1000);
                     }
                 };
-                worker.postMessage({ type: 'run', files, entry, stdin: sab });
+                worker.postMessage({ type, files, entry, stdin: sab });
             });
     });
 
@@ -338,6 +407,46 @@ try {
         oob.code === 134 && oob.stdout === 'before\n' && /The program crashed: unreachable .*index out of range/.test(oob.stderr),
         `code=${oob.code} ${JSON.stringify(oob.stderr.trim())}`
     );
+
+    // C++ exceptions (WebAssembly exception handling).
+    const caught = await run(EXCEPTIONS);
+    check(
+        'C++ exceptions: thrown and caught (own type, std::stoi, vector::at), destructors run while unwinding',
+        caught.code === 0 && caught.stdout === 'caught custom\nstoi: invalid_argument\nat: out_of_range\ndestructor ran\nint 42\n',
+        `${JSON.stringify(caught.stdout)} code=${caught.code} ${JSON.stringify(caught.stderr.trim())}`
+    );
+    const thrown = await run(UNCAUGHT);
+    check(
+        'uncaught C++ exception: terminate message with type and what(), exit 134',
+        thrown.code === 134 && thrown.stdout === 'before\n' &&
+            /terminating due to uncaught exception of type std::logic_error: boom/.test(thrown.stderr),
+        `code=${thrown.code} ${JSON.stringify(thrown.stderr.trim())}`
+    );
+
+    // The sample's tests (tests/geometry_test.cpp, GoogleTest), and a
+    // failing one beside them.
+    bytesSent = 0;
+    const tests = await run(SAMPLE, { type: 'test' });
+    check(
+        "sample's GoogleTest tests: all pass, exit 0, main.cpp left out",
+        tests.code === 0 && /\[  PASSED  \] 3 tests\./.test(tests.stdout) && !tests.phases.some(([t]) => t.includes('main.cpp')),
+        `code=${tests.code} in ${tests.ms} ms, ${(bytesSent / 1e3).toFixed(0)} kB transferred (gtest.tar ${JSON.stringify(tests.loading['gtest.tar'])}); ${timeline(tests)}`
+    );
+    console.log(tests.stdout.trimEnd().replace(/^/gm, '    | '));
+    if (tests.stderr) console.log(tests.stderr);
+    const failing = await run({ ...SAMPLE, ...FAILING_TEST }, { type: 'test' });
+    check(
+        'a failing test: reported on stdout with file and line, exit non-zero',
+        failing.code !== 0 && failing.code !== null &&
+            /tests\/broken_test\.cpp:7: Failure/.test(failing.stdout) &&
+            /\[  FAILED  \] Broken\.NormIsWrong/.test(failing.stdout) &&
+            /\[  FAILED  \] Broken\.ThrowsSomethingElse/.test(failing.stdout) &&
+            /\[  PASSED  \] 3 tests\./.test(failing.stdout),
+        `code=${failing.code} in ${failing.ms} ms`
+    );
+    console.log(failing.stdout.trimEnd().replace(/^/gm, '    | '));
+    const none = await run({ 'main.cpp': 'int main() {}\n' }, { type: 'test' });
+    check('test mode without tests/: says so, exit 1', none.code === 1 && /No tests to run/.test(none.stderr), JSON.stringify(none.stderr.trim()));
 
     // A link error names the sources, not internal object files.
     const dup = await run(DUPLICATE_MAIN);

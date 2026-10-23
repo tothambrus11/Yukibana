@@ -6,8 +6,11 @@
 // worker starts, so the download overlaps the app sending `run`.
 //
 // Protocol (one object per postMessage):
-//   in:  { type: 'run', files, entry, stdin: SharedArrayBuffer | null }
+//   in:  { type: 'run' | 'test', files, entry, stdin: SharedArrayBuffer | null }
 //   out: loading / phase / stdout / stderr / stdin / exit (exit is last)
+//
+// `test` runs pytest over the project instead of the entry, with pytest
+// fetched only then (PYTEST_ZIP).
 
 import { loadPyodide, version } from './pyodide.mjs';
 
@@ -16,6 +19,11 @@ import { loadPyodide, version } from './pyodide.mjs';
 // inlines that and an empty package list: nothing is fetched for it, and
 // nothing can be fetched from a CDN by `loadPackage`.
 const LOCK = /* LOCK_INFO */ { info: {}, packages: {} };
+
+// pytest, pluggy, iniconfig, packaging and the part of pygments pytest
+// imports, as one stored zip of their wheels' files (scripts/make-pytest-zip.py),
+// named by pytest's version; the build writes the name in.
+const PYTEST_ZIP = /* PYTEST_ZIP */ "pytest.zip";
 
 const BASE = new URL('./', import.meta.url).href;
 const WORKDIR = '/workspace';
@@ -82,11 +90,14 @@ ready.finally(() => {
 // Pyodide calls write() with a view into wasm memory: decode it at once.
 // `stream: true` keeps a UTF-8 sequence split across two writes intact.
 // isatty makes Python line-buffer the text layer, as in a terminal; the
-// driver also flushes before every read of stdin and at exit.
-function writer(type) {
+// driver also flushes before every read of stdin and at exit. Tests run with
+// isatty false: pytest on a terminal redraws its "collecting ..." line with
+// carriage returns, which the app's output panel would show as garbage (the
+// driver line-buffers stdout itself either way).
+function writer(type, isatty = true) {
     const decoder = new TextDecoder();
     return {
-        isatty: true,
+        isatty,
         write(bytes) {
             const text = decoder.decode(bytes, { stream: true });
             if (text) post({ type, text });
@@ -202,6 +213,46 @@ def _yukibana_run(workdir, entry):
                 pass
     return code
 
+def _yukibana_test(workdir, site):
+    # Runs pytest as "python -m pytest" does in the project directory.
+    #
+    # The cwd is the project and is on sys.path (what -m adds), so tests in
+    # tests/ import the project's modules ("from geometry import Point").
+    # No path arguments: pytest's own discovery from the rootdir, which
+    # honours testpaths in pyproject.toml/pytest.ini and otherwise collects
+    # every test_*.py / *_test.py, tests/ included, and unittest.TestCase
+    # classes in them. The cache plugin is off: .pytest_cache would vanish
+    # with the worker. Colours are off through NO_COLOR (set at startup): the
+    # app's output panel is not a terminal. Returns pytest's exit status (0
+    # only when every collected test passed; 1 failures, 2 collection
+    # errors, 5 no tests).
+    import io, os, sys, traceback
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+    sys.stdin = sys.__stdin__ = io.TextIOWrapper(io.BufferedReader(_YukibanaStdin()), encoding="utf-8", errors="replace")
+    os.chdir(workdir)
+    sys.path.insert(0, workdir)
+    sys.argv = ["pytest"]
+    code = 0
+    try:
+        if site not in sys.path:
+            sys.path.append(site)
+        import pytest
+        code = int(pytest.main(["-p", "no:cacheprovider"]))
+    except SystemExit as e:
+        c = e.code
+        code = 0 if c is None else c & 0xFF if isinstance(c, int) else 1
+    except BaseException:
+        traceback.print_exc()
+        code = 1
+    finally:
+        for s in (sys.stdout, sys.stderr):
+            try:
+                s.flush()
+            except Exception:
+                pass
+    return code
+
 `;
 
 function writeFiles(pyodide, files) {
@@ -216,22 +267,52 @@ function writeFiles(pyodide, files) {
     }
 }
 
+/**
+ * Fetches the pytest bundle, reporting it as a `loading` message (the fetch
+ * wrapper above is gone by now), while Pyodide itself loads.
+ */
+async function fetchPytest() {
+    const url = new URL(PYTEST_ZIP, BASE);
+    const res = await realFetch.call(globalThis, url);
+    if (!res.ok || !res.body) throw new Error(`could not fetch ${url}: HTTP ${res.status}`);
+    const total = res.headers.get('content-encoding') ? 0 : Number(res.headers.get('content-length') ?? 0);
+    countBytes(res.clone().body, PYTEST_ZIP, total);
+    return res.arrayBuffer();
+}
+
+/** Unpacks the pytest bundle into site-packages; returns that directory. */
+function installPytest(pyodide, bytes) {
+    const site = pyodide.runPython('import sysconfig; sysconfig.get_paths()["purelib"]');
+    pyodide.unpackArchive(bytes, 'zip', { extractDir: site });
+    return site;
+}
+
 let started = false;
 self.onmessage = async ({ data: msg }) => {
-    if (msg?.type !== 'run' || started) return;
+    if ((msg?.type !== 'run' && msg?.type !== 'test') || started) return;
     started = true;
+    const testing = msg.type === 'test';
     let code = 1;
     try {
-        const pyodide = await ready;
-        pyodide.setStdout(writer('stdout'));
-        pyodide.setStderr(writer('stderr'));
+        if (testing) post({ type: 'phase', text: 'Loading Python and pytest' });
+        const [pyodide, pytestZip] = await Promise.all([ready, testing ? fetchPytest() : null]);
+        pyodide.setStdout(writer('stdout', !testing));
+        pyodide.setStderr(writer('stderr', !testing));
         pyodide.setStdin(reader(msg.stdin ?? null));
         writeFiles(pyodide, msg.files ?? {});
         pyodide.runPython(DRIVER);
-        post({ type: 'phase', text: 'Running' });
-        const run = pyodide.globals.get('_yukibana_run');
-        code = run(WORKDIR, msg.entry ?? 'main.py');
-        run.destroy();
+        if (testing) {
+            const site = installPytest(pyodide, pytestZip);
+            post({ type: 'phase', text: 'Testing' });
+            const test = pyodide.globals.get('_yukibana_test');
+            code = test(WORKDIR, site);
+            test.destroy();
+        } else {
+            post({ type: 'phase', text: 'Running' });
+            const run = pyodide.globals.get('_yukibana_run');
+            code = run(WORKDIR, msg.entry ?? 'main.py');
+            run.destroy();
+        }
     } catch (err) {
         if (err?.name === 'Exit' && Number.isInteger(err.status)) {
             // os._exit(n): Emscripten's exit() unwinds as an `Exit` error

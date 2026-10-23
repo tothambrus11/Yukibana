@@ -46,6 +46,7 @@ export const LANGUAGES: readonly Language[] = [
 		entry: 'main.py',
 		extension: '.py',
 		runs: true,
+		tests: true,
 		sample: {
 			'main.py': `from geometry import Point, distance
 
@@ -80,6 +81,33 @@ def distance(a: Point, b: Point) -> float:
     """Euclidean distance between two points."""
     return math.hypot(a.x - b.x, a.y - b.y)
 `,
+			'tests/test_geometry.py': `import dataclasses
+import math
+
+import pytest
+
+from geometry import Point, distance
+
+
+def test_norm_of_3_4_is_5() -> None:
+    assert Point(3, 4).norm() == 5
+
+
+def test_distance_is_symmetric() -> None:
+    a, b = Point(1, 2), Point(-2, 6)
+    assert distance(a, b) == distance(b, a)
+
+
+@pytest.mark.parametrize(("x", "y", "expected"), [(0, 0, 0.0), (5, 12, 13.0), (1, 1, math.sqrt(2))])
+def test_norm(x: float, y: float, expected: float) -> None:
+    assert Point(x, y).norm() == pytest.approx(expected)
+
+
+def test_points_are_immutable() -> None:
+    p = Point(0, 0)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(p, "x", 1)
+`,
 		},
 	},
 	{
@@ -90,6 +118,7 @@ def distance(a: Point, b: Point) -> float:
 		entry: 'main.js',
 		extension: '.js',
 		runs: true,
+		tests: true,
 		sample: {
 			'main.js': `// @ts-check
 import { Point, distance } from './geometry.js';
@@ -131,6 +160,34 @@ export function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 `,
+			'tests/geometry.test.js': `// @ts-check
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { Point, distance } from '../geometry.js';
+
+describe('Point', () => {
+  it('has norm 5 at (3, 4)', () => {
+    assert.equal(new Point(3, 4).norm(), 5);
+  });
+
+  it('prints as a pair', () => {
+    assert.equal(String(new Point(1, 2)), '(1, 2)');
+  });
+});
+
+describe('distance', () => {
+  it('is symmetric', () => {
+    const a = new Point(1, 2);
+    const b = new Point(-2, 6);
+    assert.equal(distance(a, b), distance(b, a));
+  });
+
+  it('is 0 from a point to itself', () => {
+    const p = new Point(7, -3);
+    assert.equal(distance(p, p), 0);
+  });
+});
+`,
 			'jsconfig.json': `{
   "compilerOptions": {
     "target": "es2023",
@@ -150,6 +207,7 @@ export function distance(a, b) {
 		entry: 'main.cpp',
 		extension: '.cpp',
 		runs: true,
+		tests: true,
 		sample: {
 			'main.cpp': `#include <cstdio>
 #include <vector>
@@ -187,9 +245,31 @@ double distance(const Point &a, const Point &b) {
     return std::hypot(a.x - b.x, a.y - b.y);
 }
 `,
+			'tests/geometry_test.cpp': `#include <gtest/gtest.h>
+
+#include "geometry.h"
+
+TEST(Geometry, NormOfThreeFourIsFive) {
+    Point p{3, 4};
+    EXPECT_DOUBLE_EQ(p.norm(), 5.0);
+}
+
+TEST(Geometry, DistanceIsSymmetric) {
+    Point a{1, 2};
+    Point b{-2, 6};
+    EXPECT_DOUBLE_EQ(distance(a, b), distance(b, a));
+    EXPECT_DOUBLE_EQ(distance(a, b), 5.0);
+}
+
+TEST(Geometry, DistanceToItselfIsZero) {
+    Point a{1.5, -2.5};
+    EXPECT_EQ(distance(a, a), 0.0);
+}
+`,
 			'compile_flags.txt': `-std=c++20
 -Wall
 -Wextra
+-I.
 `,
 		},
 	},

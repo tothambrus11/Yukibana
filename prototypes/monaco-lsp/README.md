@@ -41,15 +41,17 @@ diagnostics, completion, hover, go to definition (Alt+Left and Alt+Right
 to go back and forward), references, rename (F2), quick fixes, signature help,
 formatting and semantic highlighting, as far as each language server offers
 them. Run (Ctrl+Enter) compiles and runs the project in a worker, with a
-terminal that can read input.
+terminal that can read input. Test (Ctrl+Shift+Enter) runs the project's
+tests in `tests/` (`Tests/` for Swift): pytest, `node:test`, GoogleTest or
+XCTest; Scala has no Test yet.
 
 | Language | Language server | Runs with | Download to edit | More to run |
 | --- | --- | --- | --- | --- |
 | JavaScript | TypeScript 6.0 language service | the browser, as ES modules | 1.1 MB | none |
 | Python | basedpyright 1.40 | Pyodide 314.0.7 (Python 3.14) | 1.1 MB | 4.5 MB |
 | Scala 3 | the Scala 3.7.4 compiler's interactive API, compiled with Scala.js | the same compiler and the Scala.js linker | 2.6 MB | 3.7 MB |
-| C and C++ | clangd 21 (Emscripten, no threads) | clang 21 and wasm-ld, WASI | 7.8 MB | 12.2 MB |
-| Swift | swift-syntax-ls (ours) plus swift-frontend 6.3.3 for type errors | the same swift-frontend and wasm-ld | 30.2 MB | 8.2 MB |
+| C and C++ | clangd 21 (Emscripten, threads) | clang 21 and wasm-ld, WASI | 7.8 MB | 12.2 MB |
+| Swift | swift-syntax-ls (ours) plus swift-frontend 6.3.3 for types and errors | the same swift-frontend and wasm-ld | 30.2 MB | 8.2 MB |
 
 Sizes are brotli transfer sizes. The app itself is 1.1 MB. Each pack's
 README has the details: what was patched and why, what is measured, and
@@ -59,11 +61,15 @@ what does not work.
 
 * **Swift**: not SourceKit-LSP, which cannot run here. Diagnostics are the
   real compiler's (including the mandatory SIL passes: missing return, use
-  before initialisation) and its fix-its are quick fixes; completion, hover
-  and definition are syntactic guesses. No macros, so no swift-testing, and
-  Foundation is not in the sysroot.
-* **C++**: no exceptions (`-fno-exceptions`), no threads, a fixed stack.
-  Container indexing is checked (libc++ hardening, fast mode); other
+  before initialisation) and its fix-its are quick fixes; hover,
+  definition, references, inlay hints and member completion come from the
+  compiler's typed AST and a standard library index, with swift-syntax as
+  the fallback. No macros, so no swift-testing: tests use our XCTest, a
+  checked subset of swift-corelibs-xctest. Foundation is not in the sysroot.
+* **C++**: no threads, a fixed stack. Exceptions work (WebAssembly
+  exception handling, so a browser from 2025: Chrome 137, Firefox 131,
+  Safari 18.4). Tests are GoogleTest in `tests/`, without gMock or death
+  tests. Container indexing is checked (libc++ hardening, fast mode); other
   out-of-bounds accesses are not.
 * **Scala**: not Metals, which cannot run in a browser. The LSP layer is
   ours; what it answers comes from the compiler.

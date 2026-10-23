@@ -313,6 +313,44 @@ await notify('textDocument/didOpen', { textDocument: { uri: W + 'util.ts', langu
 const tsDiags = await diagnostics(W + 'util.ts', (d) => d.some((x) => x.code === 2322));
 check('a .ts file is type-checked against the JS it imports', tsDiags?.some((x) => x.code === 2322), tsDiags);
 
+// node:test and node:assert, as the runner provides them, have types (src/node/builtins.d.ts).
+const testFile = `// @ts-check
+import { describe, it, test, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import legacy, { deepEqual } from 'node:assert';
+import { add, Vec } from '../math.js';
+
+describe('Vec', () => {
+  /** @type {Vec} */
+  let v = new Vec(0, 0);
+  beforeEach(() => {
+    v = new Vec(3, 4);
+  });
+  it('has length 5', () => {
+    assert.equal(v.length(), 5);
+  });
+});
+
+test('add', async (t) => {
+  await t.test('adds', () => assert.deepEqual(add(1, 2), 3));
+  legacy.equal(add(1, 1), 2);
+  deepEqual([1], [1]);
+  assert.throws(() => add(Number('x'), 1), TypeError);
+  await assert.rejects(Promise.reject(new Error('no')), /no/);
+  t.assert.ok(true);
+});
+`;
+await notify('textDocument/didOpen', { textDocument: { uri: W + 'tests/math.test.js', languageId: 'javascript', version: 1, text: testFile } });
+const nodeTestDiags = await diagnostics(W + 'tests/math.test.js', (d) => d.every((x) => x.severity !== 1));
+check('a checked test file importing node:test and node:assert(/strict) has no errors', nodeTestDiags !== undefined && nodeTestDiags.every((x) => x.severity !== 1), nodeTestDiags);
+const describeHover = await request('textDocument/hover', { textDocument: { uri: W + 'tests/math.test.js' }, position: { line: 6, character: 2 } });
+check('hover on `describe` shows its signature and docs', /describe\(name\?: string, fn\?: SuiteFn\): Promise<void>/.test(describeHover?.contents?.value ?? '') && /Group tests/.test(describeHover?.contents?.value ?? ''), describeHover?.contents?.value);
+await notify('textDocument/didChange', { textDocument: { uri: W + 'tests/math.test.js', version: 2 }, contentChanges: [{ text: testFile.replace("import { describe, it, test, beforeEach } from 'node:test';", "import { describe, it, test, beforeEach, mock } from 'node:test';\nassert.nope(1);") }] });
+const missing = await diagnostics(W + 'tests/math.test.js', (d) => d.some((x) => x.severity === 1));
+check('what the runner lacks is an error: node:test `mock`, an assert function Node does not have', missing?.some((x) => (x.code === 2305 || x.code === 2614) && /no exported member .mock./.test(x.message)) && missing?.some((x) => x.code === 2339 && /nope/.test(x.message)), missing?.map((x) => `${x.code} ${x.message}`));
+const wsTestSymbols = await request('workspace/symbol', { query: 'SuiteFunction' });
+check('the node:test types stay out of workspace symbols', Array.isArray(wsTestSymbols) && wsTestSymbols.length === 0, wsTestSymbols);
+
 // Garbage on the wire is logged, not thrown; a second initialize is refused.
 await page.evaluate(() => window.lsp.worker.postMessage('not json-rpc'));
 let again;

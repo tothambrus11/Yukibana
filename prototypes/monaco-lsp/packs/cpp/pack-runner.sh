@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The second half of the runner build (build-runner.sh calls it after the
 # LLVM step; it can also run on its own once cc.wasm exists in the cache):
-# the WASI sysroot, runner.js, and the files' .gz/.br siblings, all into
-# ../../app/static/packs/cpp/.
+# the WASI sysroot, GoogleTest's libraries (gtest.tar), runner.js, and the
+# files' .gz/.br siblings, all into ../../app/static/packs/cpp/.
 set -euo pipefail
 
 # wasi-sdk 30 is the newest release whose libc++ is LLVM 21 (21.1.4), the
@@ -27,6 +27,11 @@ fetch() { # url sha256 file
   fi
 }
 
+# libc++/libc++abi with exceptions, libunwind, GoogleTest (cached after the
+# first run; build.sh has normally run it already).
+"$HERE/build-cxx-runtime.sh"
+EH="$CACHE/eh"
+
 step "WASI sysroot (wasi-sdk $WASI_SDK_VERSION)"
 rel="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-$WASI_SDK_VERSION"
 fetch "$rel/wasi-sysroot-$WASI_SDK_VERSION.0.tar.gz" $WASI_SYSROOT_SHA256 sysroot-$WASI_SDK_VERSION.tgz
@@ -43,7 +48,9 @@ src="x/wasi-sysroot-$WASI_SDK_VERSION.0"
 #       and cxxabi.h, which that one has no use for); runner.js lays this
 #       tree over that one. The rest is byte-identical apart from __config's
 #       version number (21.1.4 here, 21.1.8 there), checked below.
-#   /wasi/lib/wasm32-wasip1              crt1, libc, libc++, libc++abi, ...
+#   /wasi/lib/wasm32-wasip1              crt1, libc, ... from wasi-sdk; libc++,
+#       libc++abi, libunwind and yukibana-uncaught.o with exceptions, from
+#       build-cxx-runtime.sh
 #   /usr/lib/clang/21/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a
 #       compiler-rt, where -resource-dir=/usr/lib/clang/21 finds it
 mkdir -p stage/wasi/include stage/wasi/lib/wasm32-wasip1 stage/usr/lib/clang/21/lib/wasm32-unknown-wasip1
@@ -69,6 +76,13 @@ find "$cxx" -type d -empty -delete
 for f in "$src"/lib/wasm32-wasip1/*.a "$src"/lib/wasm32-wasip1/crt1*.o; do
   "$CACHE/emsdk/upstream/bin/llvm-strip" --strip-debug -o "stage/wasi/lib/wasm32-wasip1/$(basename "$f")" "$f"
 done
+# C++ exceptions: wasi-sdk's libc++ and libc++abi are built without them
+# (no __cxa_throw), so they are replaced by the same libraries built with
+# WebAssembly exception handling (build-cxx-runtime.sh; same configuration
+# and __config_site otherwise, checked there).
+for f in libc++.a libc++abi.a libc++experimental.a libunwind.a yukibana-uncaught.o; do
+  cp "$EH/lib/$f" stage/wasi/lib/wasm32-wasip1/
+done
 "$CACHE/emsdk/upstream/bin/llvm-strip" --strip-debug \
   -o stage/usr/lib/clang/21/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a \
   "x/libclang_rt-$WASI_SDK_VERSION.0/wasm32-unknown-wasip1/libclang_rt.builtins.a"
@@ -81,6 +95,16 @@ tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C
   | gzip -9n > "$OUT/wasi-sysroot.tar.gz"
 rm -rf x stage
 
+step "GoogleTest libraries (gtest.tar)"
+# Fetched by runner.js only to build tests (or a program that includes
+# <gtest/...>). The headers are in sysroot.tar.gz (build.sh), which both
+# workers download anyway. Plain tar: its .br/.gz siblings are what travels.
+mkdir -p stage/wasi/lib/wasm32-wasip1
+cp "$EH/lib/libgtest.a" "$EH/lib/libgtest_main.a" stage/wasi/lib/wasm32-wasip1/
+tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C stage -c wasi > "$OUT/gtest.tar"
+cp "$EH/LICENSE-googletest.txt" "$OUT/LICENSE-googletest.txt"
+rm -rf stage
+
 step "runner"
 if [ -f "$B/bin/llvm.wasm" ]; then
   cp "$B/bin/llvm.wasm" "$OUT/cc.wasm"
@@ -90,8 +114,9 @@ fi
 "$HERE/node_modules/.bin/esbuild" "$HERE/src/runner.js" --bundle --outfile="$OUT/runner.js" --format=esm --minify \
   --target=es2022 --external:./cc.js --define:CC_WASM_SIZE="$(stat -c %s "$OUT/cc.wasm" 2>/dev/null || echo 0)" \
   --define:WASI_SYSROOT_SIZE="$(stat -c %s "$OUT/wasi-sysroot.tar.gz")" \
+  --define:GTEST_SIZE="$(stat -c %s "$OUT/gtest.tar")" \
   --define:SYSROOT_SIZE="$(stat -c %s "$OUT/sysroot.tar.gz")" --log-level=warning
-files=("$OUT/runner.js")
+files=("$OUT/runner.js" "$OUT/gtest.tar")
 [ -f "$OUT/cc.wasm" ] && files+=("$OUT/cc.js" "$OUT/cc.wasm")
 node "$HERE/compress.mjs" "${files[@]}"
-ls -la "$OUT"/runner.js "$OUT"/cc.* "$OUT"/wasi-sysroot.tar.gz 2>/dev/null || true
+ls -la "$OUT"/runner.js "$OUT"/cc.* "$OUT"/wasi-sysroot.tar.gz "$OUT"/gtest.tar* 2>/dev/null || true
