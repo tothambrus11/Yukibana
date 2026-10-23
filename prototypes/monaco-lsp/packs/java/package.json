@@ -1,0 +1,13 @@
+{
+    "name": "yukibana-pack-java",
+    "private": true,
+    "description": "Yukibana Java pack: javac and TeaVM compiled to WebAssembly GC (teavm-javac), in module Web Workers. The build uses Gradle (see build.sh); this file only holds the tests' dependency.",
+    "type": "module",
+    "scripts": {
+        "build": "./build.sh",
+        "test": "node test.mjs && node test-run.mjs"
+    },
+    "devDependencies": {
+        "playwright-core": "1.56.1"
+    }
+}

@@ -45,10 +45,12 @@ formatting and semantic highlighting, as far as each language server offers
 them. Run (Ctrl+Enter) compiles and runs the project in a worker, with a
 terminal that can read input. Test (Ctrl+Shift+Enter) runs the project's
 tests in `tests/` (`Tests/` for Swift): pytest, `node:test`, GoogleTest,
-doctest or Catch2 (chosen next to Test), or XCTest; Scala has no Test yet. Download saves the project as
+doctest or Catch2 (chosen next to Test), XCTest, or JUnit Jupiter (Java, in
+`src/test/java/`); Scala has no Test yet, and Kotlin neither Run nor Test. Download saves the project as
 `<language>-project.zip` for an IDE: its files as they are, at the same
 paths, plus the build files it lacks (CMakeLists.txt, Package.swift,
-pyproject.toml, package.json or build.sbt, set up for the flat layout), a
+pyproject.toml, package.json, build.sbt, pom.xml (Java) or
+build.gradle.kts (Kotlin), set up for the flat layout), a
 README.md with the commands and a .gitignore.
 
 A web project's Run opens a Preview panel with its `index.html` in a
@@ -69,6 +71,8 @@ no DOM and no npm packages (packs/javascript/README.md, "Environment").
 | Swift | swift-syntax-ls (ours) plus swift-frontend 6.3.3 for types and errors | the same swift-frontend and wasm-ld | 30.2 MB | 8.2 MB |
 | Rust | rust-analyzer's IDE crates (ra_ap_ide 0.0.358) with our LSP layer, std 1.98 sources | Miri 1.78 (rustc's MIR interpreter, not a compiler) | 4.2 MB | 29.8 MB |
 | PHP | Phpactor 2026.10.07 on PHP 8.4 (php-wasm) | PHP 8.4.25's CLI (php-wasm), PHPUnit 12.5 | 7.5 MB | 2 KB (the same php.wasm); Test 0.6 MB |
+| Java | javac (OpenJDK 25u) compiled to WebAssembly GC by TeaVM 0.16.0 (teavm-javac), with our language service on its trees | the same javac, then TeaVM linking the program to WebAssembly GC in the browser; JUnit Jupiter 5.14 | 2.0 MB | 2.3 MB (TeaVM's class library) |
+| Kotlin | ours, syntax only, on tree-sitter-kotlin 1.1.0 (web-tree-sitter 0.25) | none: no Kotlin compiler runs in a browser | 0.26 MB | none |
 
 Sizes are brotli transfer sizes. The app itself is 1.2 MB, icons included.
 Each pack's README has the details: what was patched and why, what is
@@ -105,7 +109,7 @@ serves from, and asks the browser for persistent storage first.
 | --- | --- | --- |
 | The app (precached) | 1.2 MB | 4.9 MB |
 | The app's lazy files | 0.5 MB | 2.8 MB |
-| Every pack (Python 5.9, JavaScript 1.1, C++ 19.9, Swift 36.9, Scala 6.0, Rust 32.5, PHP 7.9, Java 4.2) | 114 MB | 534 MB |
+| Every pack (Python 5.9, JavaScript 1.1, C++ 19.9, Swift 36.9, Scala 6.0, Rust 32.5, PHP 7.9, Java 4.4, Kotlin 0.3) | 114 MB | 534 MB |
 
 A new build installs in the background and the top bar offers "New
 version: reload"; until then the tab keeps the build it runs. Its app cache
@@ -150,6 +154,17 @@ after weeks without a visit, persistent storage or not.
   it is slow, a panic cannot be caught (`catch_unwind`), there are no
   program arguments, and std APIs newer than 1.78 type check in the editor
   and fail on Run. Tests run like `cargo test` through our own harness.
+* **Java**: the real javac (Java 25 language level) for diagnostics and
+  every editor feature, but programs link against TeaVM's class library,
+  a subset of the JDK's: no files, networking, threads or reflection.
+  Traces have no stack frames, and an array index out of bounds ends the
+  run instead of being catchable. Tests are JUnit Jupiter's `@Test` with
+  lifecycle methods and assertions; parameterized, repeated and dynamic
+  tests are skipped. Run takes 2 s or more (TeaVM links each time).
+* **Kotlin**: syntax only. kotlinc runs only on a JVM, so there are no
+  type errors, no library members in completion, no Run and no Test;
+  completion, hover and definition cover the project's own declarations.
+  Download's Gradle build runs and tests it with the real compiler.
 * **All**: one browser tab is one machine. A program that never ends needs
   Stop, and memory is the tab's.
 

@@ -34,7 +34,9 @@ const CASES = {
 	scala: { output: 'to', file: 'Main.scala', error: '\nval broken: Int = "no"\n', access: '\nval q = Point(1, 2)\nval r = q.', member: 'norm', definition: 'distance', definitionFile: 'Geometry.scala', hover: 'Point' },
 	rust: { output: '(0, 0) to (3, 4): 5', testOutput: 'test result: ok. 3 passed', file: 'main.rs', error: '\nfn broken() -> i32 { "no" }\n', access: '\nfn f(p: Point) -> f64 { p.', member: 'norm', definition: 'distance', definitionFile: 'point.rs', hover: 'Point' },
 	php: { output: '(0, 0) to (3, 4): 5', testOutput: 'OK (5 tests, 5 assertions)', file: 'main.php', error: '\n$b->nope();\n', access: '\n$b->', member: 'norm', definition: 'distance', definitionFile: 'geometry.php', hover: 'Point' },
-	java: { output: 'Point[x=0.0, y=0.0] to Point[x=3.0, y=4.0]: 5.0', testOutput: '3 tests successful', file: 'Main.java', error: '\nint broken = "no";\n', access: '\nclass Probe { double f(Point p) { return p.', member: 'norm', definition: 'distance', definitionFile: 'Geometry.java', hover: 'Point' },
+	java: { output: 'Point[x=0.0, y=0.0] to Point[x=3.0, y=4.0]: 5.0', testOutput: '3 tests successful', file: 'Main.java', error: '\nclass Broken { int n = "no"; }\n', access: '\nclass Probe { double f(Point p) { return p.', member: 'norm', definition: 'Point', definitionFile: 'Point.java', hover: 'Point' },
+	// Syntax only, and no runner (packs/kotlin/README.md): the error is a syntax error.
+	kotlin: { file: 'Main.kt', error: '\nfun broken() { val = 1 }\n', access: '\nval q = Point(1.0, 2.0)\nval r = q.', member: 'norm', definition: 'Point', definitionFile: 'Geometry.kt', hover: 'Point' },
 };
 
 const only = process.argv.slice(2);

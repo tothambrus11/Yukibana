@@ -52,6 +52,10 @@ const BUILD: Record<LanguageId, BuildFiles> = {
 	php: { paths: ['composer.json', 'phpunit.xml'], generate: (p) => ({ 'composer.json': composerJson(p.language.entry), 'phpunit.xml': phpunitXml(p.files) }) },
 	rust: { paths: ['Cargo.toml'], generate: (p) => ({ 'Cargo.toml': cargoToml(p.files) }) },
 	java: { paths: ['pom.xml'], generate: (p) => ({ 'pom.xml': pomXml(p.files, p.language.entry) }) },
+	kotlin: {
+		paths: ['build.gradle.kts', 'settings.gradle.kts'],
+		generate: (p) => ({ 'build.gradle.kts': buildGradleKts(p.files, p.language.entry), 'settings.gradle.kts': 'rootProject.name = "kotlin-project"\n' }),
+	},
 };
 
 /**
@@ -766,6 +770,83 @@ export function pomXml(files: Files, entry: string): string {
 	].join('\n');
 }
 
+// ---- Kotlin: Gradle
+
+/** The Kotlin Gradle plugin, and so the Kotlin, the download builds with. */
+const KOTLIN_VERSION = '2.4.21';
+/** Folders treated as tests, as Java's are. */
+const KOTLIN_TESTS = /^(src\/test\/|tests?\/)/;
+
+/** The JVM class a Kotlin file's top-level `main` is in: its package, and FileNameKt. */
+export function kotlinMainClass(files: Files, entry: string): string {
+	const code = (files[entry] ?? '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+	const pkg = /^\s*package\s+([\w.]+)/m.exec(code)?.[1];
+	const base = entry.replace(/^.*\//, '').replace(/\.kts?$/, '');
+	const name = `${base.charAt(0).toUpperCase()}${base.slice(1)}Kt`;
+	return pkg ? `${pkg}.${name}` : name;
+}
+
+/**
+ * build.gradle.kts for the project where it is: Kotlin/JVM with the
+ * application plugin (`gradle run`, stdin connected) and kotlin.test on
+ * JUnit 5 (`gradle test`). A project in Gradle's layout (every .kt file
+ * under src/main/kotlin or src/test/kotlin, as the sample is) gets Gradle's
+ * defaults; any other one compiles the .kt files of the folder except the
+ * test folders (src/test/, test/, tests/), which are the tests. No JVM
+ * toolchain is named, so the JDK that runs Gradle compiles and runs it
+ * instead of Gradle downloading another.
+ */
+export function buildGradleKts(files: Files, entry: string): string {
+	const kt = Object.keys(files).filter((p) => /\.kts?$/.test(p) && !/(^|\/)(build|settings)\.gradle\.kts$/.test(p));
+	const gradle = kt.every((p) => p.startsWith('src/main/kotlin/') || p.startsWith('src/test/kotlin/'));
+	const testDir = kt.some((p) => p.startsWith('src/test/kotlin/')) ? 'src/test/kotlin' : kt.some((p) => p.startsWith('tests/')) ? 'tests' : kt.some((p) => p.startsWith('test/')) ? 'test' : 'src/test/kotlin';
+	const layout = gradle
+		? []
+		: [
+				'// The sources are in the project folder itself, not in src/main/kotlin.',
+				'sourceSets {',
+				'    main {',
+				'        kotlin.setSrcDirs(listOf("."))',
+				'        kotlin.exclude("src/test/**", "test/**", "tests/**", "build/**", ".gradle/**", "*.gradle.kts")',
+				'    }',
+				'    test {',
+				`        kotlin.setSrcDirs(listOf(${JSON.stringify(testDir)}))`,
+				'    }',
+				'}',
+				'',
+			];
+	return [
+		'// Builds the project where it is, with the layout it had in Yukibana Light:',
+		`//   gradle run${kt.some((p) => KOTLIN_TESTS.test(p)) ? ', gradle test' : ''}`,
+		'plugins {',
+		`    kotlin("jvm") version ${JSON.stringify(KOTLIN_VERSION)}`,
+		'    application',
+		'}',
+		'',
+		'repositories {',
+		'    mavenCentral()',
+		'}',
+		'',
+		'dependencies {',
+		'    testImplementation(kotlin("test"))',
+		'}',
+		'',
+		...layout,
+		'application {',
+		`    mainClass = ${JSON.stringify(kotlinMainClass(files, entry))}`,
+		'}',
+		'',
+		'tasks.named<JavaExec>("run") {',
+		'    standardInput = System.`in`',
+		'}',
+		'',
+		'tasks.test {',
+		'    useJUnitPlatform()',
+		'}',
+		'',
+	].join('\n');
+}
+
 // ---- Every language: README.md and .gitignore
 
 /** How to build, run and test with each language's tools, as Markdown sections. */
@@ -845,6 +926,14 @@ function instructions(language: Language, files: Files): string[] {
 				'## Editors\n\nPhpStorm and VS Code (with a PHP extension: Phpactor, Intelephense) open the folder; they read `composer.json` for the autoloading and `phpunit.xml` for the tests.',
 			];
 		}
+		case 'kotlin': {
+			const tests = paths.some((p) => KOTLIN_TESTS.test(p) && p.endsWith('.kt'));
+			return [
+				`## Build and run\n\nWith Gradle 8.14 or later and a JDK 17 or later (Gradle downloads Kotlin ${KOTLIN_VERSION}):\n\n\`\`\`sh\ngradle run -q --console=plain\n\`\`\`\n\n\`gradle wrapper\` adds \`./gradlew\`, which pins Gradle for everyone who builds the project.`,
+				...(tests ? ['## Test\n\nThe tests use kotlin.test on JUnit 5:\n\n```sh\ngradle test\n```'] : []),
+				'## Editors\n\nIntelliJ IDEA opens the folder and imports `build.gradle.kts`; so do Android Studio and, with the Kotlin extension, VS Code.',
+			];
+		}
 		case 'java': {
 			const tests = paths.some((p) => JAVA_TESTS.test(p) && p.endsWith('.java'));
 			return [
@@ -885,6 +974,7 @@ const IGNORED: Record<LanguageId, readonly string[]> = {
 	php: ['vendor/', '.phpunit.cache/', '.phpunit.result.cache'],
 	rust: ['target/'],
 	java: ['target/', '*.class', '.classpath', '.project', '.settings/', '*.iml'],
+	kotlin: ['build/', '.gradle/', '.kotlin/', '*.class', '*.iml'],
 };
 
 /** A .gitignore for the build output of the language's tools. */

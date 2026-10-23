@@ -5,7 +5,7 @@
  */
 
 /** Identifies a language, and with it a pack and a saved project. */
-export type LanguageId = 'python' | 'javascript' | 'typescript' | 'web' | 'cpp' | 'swift' | 'scala' | 'rust' | 'php' | 'java';
+export type LanguageId = 'python' | 'javascript' | 'typescript' | 'web' | 'cpp' | 'swift' | 'scala' | 'rust' | 'php' | 'java' | 'kotlin';
 
 /** Project files by path relative to the workspace root, `/`-separated. */
 export type Files = Record<string, string>;
@@ -845,6 +845,65 @@ class GeometryTest {
     void distanceToItselfIsZero() {
         var p = new Point(1.5, -2.5);
         assertEquals(0.0, Geometry.distance(p, p));
+    }
+}
+`,
+		},
+	},
+	{
+		// Gradle's layout (the downloaded build.gradle.kts builds it as it
+		// is): the program in src/main/kotlin, kotlin.test tests in
+		// src/test/kotlin. The browser reads Kotlin's syntax only: no
+		// compiler runs Kotlin there (packs/kotlin/README.md).
+		id: 'kotlin',
+		label: 'Kotlin',
+		monacoLanguages: ['kotlin'],
+		settings: {},
+		entry: 'src/main/kotlin/Main.kt',
+		extension: '.kt',
+		runs: false,
+		cannotRun:
+			'Kotlin cannot run in the browser: its compiler runs only on a JVM. The editor knows Kotlin\'s syntax (errors, completion, hover, go to definition); Download the project to run it with Gradle.',
+		sample: {
+			'src/main/kotlin/Main.kt': `fun main() {
+    val a = Point(0.0, 0.0)
+    val b = Point(3.0, 4.0)
+    println("$a to $b: \${distance(a, b)}")
+    println(b.norm())
+}
+`,
+			'src/main/kotlin/Geometry.kt': `import kotlin.math.hypot
+
+/** A point in the plane. */
+data class Point(val x: Double, val y: Double) {
+    /** Distance from the origin. */
+    fun norm(): Double = hypot(x, y)
+}
+
+/** Euclidean distance between two points. */
+fun distance(a: Point, b: Point): Double = hypot(a.x - b.x, a.y - b.y)
+`,
+			'src/test/kotlin/GeometryTest.kt': `import kotlin.test.Test
+import kotlin.test.assertEquals
+
+class GeometryTest {
+    @Test
+    fun normOfThreeFourIsFive() {
+        assertEquals(5.0, Point(3.0, 4.0).norm())
+    }
+
+    @Test
+    fun distanceIsSymmetric() {
+        val a = Point(1.0, 2.0)
+        val b = Point(-2.0, 6.0)
+        assertEquals(distance(a, b), distance(b, a))
+        assertEquals(5.0, distance(a, b))
+    }
+
+    @Test
+    fun distanceToItselfIsZero() {
+        val p = Point(1.5, -2.5)
+        assertEquals(0.0, distance(p, p))
     }
 }
 `,
