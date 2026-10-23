@@ -380,12 +380,24 @@ def test_points_are_immutable() -> None:
     with pytest.raises(dataclasses.FrozenInstanceError):
         setattr(p, "x", 1)
 `;
-const test = (files, opts = {}) => run(files, 'main.py', [], { type: 'test', ...opts });
+// pytest runs with --color=yes: the checks read its report with the escape
+// sequences removed, as the app's terminal shows it (src/lib/ansi.ts); `raw`
+// keeps them.
+const plain = (text) => text.replace(/\x1b\[[0-9;:]*[A-Za-z]/g, '');
+const test = async (files, opts = {}) => {
+    const out = await run(files, 'main.py', [], { type: 'test', ...opts });
+    return { ...out, raw: out.stdout, stdout: plain(out.stdout) };
+};
 const t1 = await test({ ...SAMPLE, 'tests/test_geometry.py': TESTS });
 check(
     'test: the sample tests pass under pytest, exit 0, the report on stdout (no carriage-return redraws)',
     t1.code === 0 && /6 passed/.test(t1.stdout) && /tests\/test_geometry\.py \.{6}/.test(t1.stdout) && !/\r/.test(t1.stdout),
     `${timing(t1)} phases: ${t1.phases.join(', ')}; loading: ${JSON.stringify(t1.loading['pytest-9.0.2.zip'])}\n${t1.stdout.trimEnd().replace(/^/gm, '      | ')}`,
+);
+check(
+    'test: the report is in colour, as pytest prints it on a terminal: the summary in bold green, no other escape sequences',
+    /\x1b\[32m\x1b\[1m6 passed/.test(t1.raw) && !/\x1b\[[0-9;]*[A-Za-ln-z]/.test(t1.raw),
+    JSON.stringify(t1.raw.slice(-120)),
 );
 check('test: pytest is fetched only in test mode', cold.loading['pytest-9.0.2.zip'] === undefined && t1.loading['pytest-9.0.2.zip']?.loaded > 0);
 const failing = TESTS.replace('assert Point(3, 4).norm() == 5', 'assert Point(3, 4).norm() == 6');
@@ -394,6 +406,11 @@ check(
     'test: a failing assertion exits 1 and the report shows the test, the values and the line',
     t2.code === 1 && /1 failed, 5 passed/.test(t2.stdout) && /FAILED tests\/test_geometry\.py::test_norm_of_3_4_is_5/.test(t2.stdout) && /assert 5\.0 == 6/.test(t2.stdout) && /tests\/test_geometry\.py:10: AssertionError/.test(t2.stdout),
     `${timing(t2)}\n${t2.stdout.trimEnd().replace(/^/gm, '      | ')}`,
+);
+check(
+    'test: a failure is in red, and the failing source line is highlighted by pygments',
+    /\x1b\[31m\x1b\[1m1 failed/.test(t2.raw) && /\x1b\[1m\x1b\[31mE       assert 5\.0 == 6/.test(t2.raw) && /\x1b\[94massert\x1b\[39;49;00m/.test(t2.raw),
+    JSON.stringify(t2.raw.slice(Math.max(0, t2.raw.indexOf('E       assert') - 200), t2.raw.indexOf('E       assert') + 60)),
 );
 const t3 = await test({ ...SAMPLE, 'tests/test_geometry.py': 'from geometry import Nope\n\ndef test_x():\n    pass\n', 'tests/test_ok.py': 'def test_ok():\n    assert True\n' });
 check(

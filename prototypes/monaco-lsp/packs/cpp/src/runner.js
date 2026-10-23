@@ -341,6 +341,12 @@ async function run({ type, files, entry, stdin }) {
     };
     const wasi = createWasi({
         args: ['main'],
+        // GoogleTest colours its report only on a terminal it recognises;
+        // the app's terminal renders ANSI colours, so it is told to, as
+        // --gtest_color=yes would (the environment also reaches a test file
+        // with its own main, whatever it does with argv). Nothing else is in
+        // the environment.
+        env: usesGtest ? { GTEST_COLOR: 'yes' } : {},
         stdin,
         write: (fd, text) => post({ type: fd === 1 ? 'stdout' : 'stderr', text }),
         requestInput: () => post({ type: 'stdin' }),

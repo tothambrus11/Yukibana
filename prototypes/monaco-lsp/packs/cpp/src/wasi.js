@@ -28,12 +28,13 @@ export class ProcExit extends Error {
 /**
  * @param {object} io
  * @param {string[]} io.args              argv, argv[0] included
+ * @param {Record<string, string>} [io.env]  the environment, getenv() sees it (empty by default)
  * @param {(fd: 1 | 2, text: string) => void} io.write   decoded output, as it is written
  * @param {SharedArrayBuffer | null} io.stdin             the contract's stdin buffer
  * @param {() => void} io.requestInput    posts { type: 'stdin' }
  * @param {() => void} io.beforeWait      flushes the program's stdout first
  */
-export function createWasi({ args, write, stdin, requestInput, beforeWait }) {
+export function createWasi({ args, env = {}, write, stdin, requestInput, beforeWait }) {
     /** @type {WebAssembly.Memory | null} */
     let memory = null;
     const view = () => new DataView(memory.buffer);
@@ -41,6 +42,7 @@ export function createWasi({ args, write, stdin, requestInput, beforeWait }) {
     const encoder = new TextEncoder();
     const decoders = { 1: new TextDecoder(), 2: new TextDecoder() };
     const argBytes = args.map((a) => encoder.encode(a + '\0'));
+    const envBytes = Object.entries(env).map(([k, v]) => encoder.encode(`${k}=${v}\0`));
 
     const state = stdin ? new Int32Array(stdin, 0, 2) : null;
     const data = stdin ? new Uint8Array(stdin, 8) : null;
@@ -95,8 +97,8 @@ export function createWasi({ args, write, stdin, requestInput, beforeWait }) {
     const imports = {
         args_sizes_get: (c, s) => sizes(argBytes, c, s),
         args_get: (p, b) => fill(argBytes, p, b),
-        environ_sizes_get: (c, s) => sizes([], c, s),
-        environ_get: () => SUCCESS,
+        environ_sizes_get: (c, s) => sizes(envBytes, c, s),
+        environ_get: (p, b) => fill(envBytes, p, b),
 
         clock_res_get(clock, out) {
             view().setBigUint64(out, 1000n, true);

@@ -305,14 +305,19 @@ does with no arguments, in the browser:
   the `ℹ tests … duration_ms` summary, then `✖ failing tests:` with
   `test at file:line:col`, the error and its stack frames in project files
   only. Counting follows Node: a failing todo is ✖ but counts as todo, a
-  timeout counts as cancelled, a skipped suite is one line.
+  timeout counts as cancelled, a skipped suite is one line. It is in
+  colour, with the escapes Node's reporter prints when stdout is a TTY
+  (green ✔, red ✖, grey skips and durations, blue `ℹ`), and `node:assert`
+  colours its diffs (`+` green, `-` red) as Node does on a colour stderr:
+  the app's terminal renders ANSI colours.
 * **Exit status** 0 only when no test failed or was cancelled.
 * **Checked against Node.** `test-run.mjs` runs
   `test-fixtures/behaviour.test.js` (hooks, subtests, skip/todo, timeouts,
   assertion messages and diffs, legacy vs strict, top-level await) both in
-  the browser and under the local `node --test` (22.22.0), and requires the
-  two reports to agree line for line, durations and Node's internal stack
-  frames aside.
+  the browser and under the local `node --test` (22.22.0, with
+  `FORCE_COLOR=1`), and requires the two reports to agree line for line,
+  escape sequences included, durations and Node's internal stack frames
+  aside.
 * **Limits.** Tests run one at a time. An uncaught error or unhandled
   rejection fails the test running at the time (Node tracks the async
   context and blames the test that caused it; a worker cannot). A

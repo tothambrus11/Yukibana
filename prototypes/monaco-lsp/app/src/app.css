@@ -27,6 +27,30 @@
 	--orange-high: oklch(80% 0.12 84);
 	--blue-high: oklch(75% 0.1 274);
 	--header-bg: oklch(18% 0.002 var(--hue-base) / 0.8);
+	/*
+	 * The terminal's 16 ANSI colours (SGR 30–37, 90–97 and their
+	 * backgrounds; see lib/ansi.ts), tuned per theme so each reads on the
+	 * terminal's background: 0–7 normal, 8–15 bright. "Black" and "white"
+	 * are the dim and bright ends of the text greys, never the background.
+	 */
+	--ansi-0: oklch(48% 0.009 var(--hue-base));
+	--ansi-1: oklch(70% 0.15 22);
+	--ansi-2: oklch(74% 0.14 148);
+	--ansi-3: oklch(82% 0.13 88);
+	--ansi-4: oklch(70% 0.12 258);
+	--ansi-5: oklch(72% 0.13 330);
+	--ansi-6: oklch(76% 0.1 205);
+	--ansi-7: oklch(84% 0.008 var(--hue-base));
+	--ansi-8: oklch(62% 0.01 var(--hue-base));
+	--ansi-9: oklch(76% 0.15 22);
+	--ansi-10: oklch(82% 0.15 148);
+	--ansi-11: oklch(88% 0.13 95);
+	--ansi-12: oklch(78% 0.11 258);
+	--ansi-13: oklch(80% 0.12 330);
+	--ansi-14: oklch(84% 0.09 205);
+	--ansi-15: oklch(97% 0.004 var(--hue-base));
+	--ansi-default-fg: var(--white);
+	--ansi-default-bg: var(--black);
 	color-scheme: dark;
 }
 
@@ -49,6 +73,22 @@
 	--orange-high: oklch(55% 0.13 70);
 	--blue-high: oklch(45% 0.12 274);
 	--header-bg: oklch(98% 0.002 var(--hue-base) / 0.7);
+	--ansi-0: oklch(25% 0.01 var(--hue-base));
+	--ansi-1: oklch(52% 0.18 22);
+	--ansi-2: oklch(52% 0.14 148);
+	--ansi-3: oklch(58% 0.13 75);
+	--ansi-4: oklch(50% 0.15 260);
+	--ansi-5: oklch(52% 0.18 330);
+	--ansi-6: oklch(54% 0.1 210);
+	--ansi-7: oklch(62% 0.01 var(--hue-base));
+	--ansi-8: oklch(58% 0.01 var(--hue-base));
+	--ansi-9: oklch(58% 0.2 22);
+	--ansi-10: oklch(58% 0.15 148);
+	--ansi-11: oklch(64% 0.13 85);
+	--ansi-12: oklch(56% 0.16 260);
+	--ansi-13: oklch(58% 0.18 330);
+	--ansi-14: oklch(58% 0.1 205);
+	--ansi-15: oklch(72% 0.008 var(--hue-base));
 	color-scheme: light;
 }
 

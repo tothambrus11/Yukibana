@@ -140,6 +140,11 @@ async function run(language, c) {
 		const ended = await status.filter({ hasText: /Exited|Stopped/ }).waitFor({ timeout: 240_000 }).then(() => true, () => false);
 		const shown = (await page.locator('.terminal pre').textContent()) ?? '';
 		check(ended && /code 0/.test((await status.textContent()) ?? '') && shown.includes(c.testOutput), `Test runs the sample's tests: "${c.testOutput}" (${(await status.textContent())?.trim()}: ${JSON.stringify(shown.slice(-160))})`);
+		// The test tools print ANSI colours (all but Swift's XCTest, which has
+		// none): the terminal shows them as styled spans, and its text, what
+		// a copy yields, has no escape sequences left.
+		const colours = await page.locator('.terminal pre span[style*="color"]').count();
+		check(!shown.includes('\x1b') && (language === 'swift' ? colours === 0 : colours > 0), `the test report's colours are rendered, its text is plain (${colours} coloured spans)`);
 	}
 
 	if (language === 'javascript') await settings(page, check);

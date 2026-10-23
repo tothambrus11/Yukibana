@@ -73,7 +73,17 @@ function raise(message: Message, generated: () => string, actual: unknown, expec
 	throw error;
 }
 
-/** Lines of `a` (actual, `+`) against `b` (expected, `-`), as Node's diff marks them. */
+/**
+ * Node colours a diff in an assertion's message when stderr is a colour
+ * terminal, which the app's terminal is: `+` green, `-` red, and SGR 39 (the
+ * default colour) before every line. So does this, with the same escapes
+ * in the same places (packs/javascript/test-run.mjs compares the two).
+ */
+const GREEN = '\x1b[32m';
+const RED = '\x1b[31m';
+const DEFAULT = '\x1b[39m';
+
+/** Lines of `a` (actual, `+`) against `b` (expected, `-`), as Node's diff marks and colours them. */
 function lineDiff(a: string, b: string): string {
 	const x = a.split('\n');
 	const y = b.split('\n');
@@ -90,10 +100,10 @@ function lineDiff(a: string, b: string): string {
 	let j = 0;
 	while (i < n || j < m) {
 		if (i < n && j < m && x[i] === y[j]) {
-			out.push(`  ${x[i++]}`);
+			out.push(`${DEFAULT}  ${x[i++]}`);
 			j++;
-		} else if (j >= m || (i < n && lcs[i + 1]![j]! >= lcs[i]![j + 1]!)) out.push(`+ ${x[i++]}`);
-		else out.push(`- ${y[j++]}`);
+		} else if (j >= m || (i < n && lcs[i + 1]![j]! >= lcs[i]![j + 1]!)) out.push(`${GREEN}+${DEFAULT} ${x[i++]}`);
+		else out.push(`${RED}-${DEFAULT} ${y[j++]}`);
 	}
 	return out.join('\n');
 }
@@ -103,7 +113,7 @@ function comparison(header: string, sign: string, actual: unknown, expected: unk
 	const a = inspect(actual);
 	const e = inspect(expected);
 	if (!a.includes('\n') && !e.includes('\n') && a.length + e.length < 80) return `${header}\n\n${a} ${sign} ${e}\n`;
-	return `${header}\n+ actual - expected\n\n${lineDiff(a, e)}\n`;
+	return `${header}\n${GREEN}+ actual${DEFAULT} ${RED}- expected${DEFAULT}\n\n${lineDiff(a, e)}\n`;
 }
 
 // --- equality ---------------------------------------------------------------

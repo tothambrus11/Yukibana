@@ -3,13 +3,21 @@
  * packs/CONTRACT.md, "Running a program") and keeps what the terminal shows:
  * the program's output, what the user typed, and how it ended.
  */
+import { AnsiStream } from './ansi';
 import type { Files, LanguageId } from './languages';
 
-/** One stretch of terminal text; consecutive output of one kind is merged. */
+/**
+ * One stretch of terminal text in one style; consecutive text of one kind
+ * and style is merged. `text` is plain: the program's escape sequences are
+ * already taken out (see ansi.ts), so the terminal's text, and what is
+ * copied from it, is what the program printed without them.
+ */
 export interface Chunk {
 	id: number;
 	kind: 'stdout' | 'stderr' | 'stdin' | 'info';
 	text: string;
+	/** Inline CSS for the program's colours (SGR escapes), '' for the stream's own style. */
+	style: string;
 }
 
 export type RunState =
@@ -42,6 +50,12 @@ export class Runner {
 	private chars = 0;
 	/** Lines typed before the program asked for them, oldest first. */
 	private typedAhead: string[] = [];
+	/**
+	 * The terminal state of each output stream. Two, not one as on a real
+	 * terminal: stdout and stderr arrive as separate messages here, and a
+	 * colour left on in one must not leak into the other.
+	 */
+	private ansi = { stdout: new AnsiStream(), stderr: new AnsiStream() };
 
 	/** True while a program is loading or running. */
 	get busy(): boolean {
@@ -58,6 +72,7 @@ export class Runner {
 		this.chunks = [];
 		this.chars = 0;
 		this.typedAhead = [];
+		this.ansi = { stdout: new AnsiStream(), stderr: new AnsiStream() };
 		this.started = performance.now();
 		this.state = { kind: 'running', phase: 'Starting', waiting: false };
 		this.stdin = crossOriginIsolated ? new SharedArrayBuffer(8 + STDIN_BYTES) : null;
@@ -125,7 +140,7 @@ export class Runner {
 			case 'stdout':
 			case 'stderr':
 				if (this.state.kind === 'loading') this.state = { kind: 'running', phase: 'Running', waiting: false };
-				this.append(m.type, m.text);
+				for (const span of this.ansi[m.type].feed(m.text)) this.append(m.type, span.text, span.css);
 				break;
 			case 'stdin':
 				if (this.state.kind === 'running') this.state = { ...this.state, waiting: true };
@@ -164,11 +179,11 @@ export class Runner {
 		this.state = { kind: 'ended', code, seconds: (performance.now() - this.started) / 1000 };
 	}
 
-	private append(kind: Chunk['kind'], text: string): void {
+	private append(kind: Chunk['kind'], text: string, style = ''): void {
 		if (!text) return;
 		const last = this.chunks.at(-1);
-		if (last && last.kind === kind) last.text += text;
-		else this.chunks.push({ id: this.nextId++, kind, text });
+		if (last && last.kind === kind && last.style === style) last.text += text;
+		else this.chunks.push({ id: this.nextId++, kind, text, style });
 		this.chars += text.length;
 		while (this.chars > MAX_CHARS) {
 			const first = this.chunks[0];

@@ -3,7 +3,9 @@
  * `type: 'test'`): `test`/`it`, `describe`/`suite`, their `skip`/`todo`/`only`
  * variants, `before`/`after`/`beforeEach`/`afterEach`, subtests with
  * `t.test`, async tests and `(t, done)` callbacks, `timeout`, and a report in
- * the shape of Node 22's spec reporter (`node --test` on a terminal).
+ * the shape of Node 22's spec reporter (`node --test` on a terminal), in its
+ * colours: the app's terminal is a colour terminal (it reads ANSI escapes),
+ * so the report is what Node prints when stdout is a TTY.
  *
  * How it runs, and how that matches Node: each test file is a module the
  * runner imports (`startFile` before, `finishFile` after). A top-level
@@ -302,7 +304,31 @@ async function hooksUp(node: Node, kind: 'afterEach', context: TestContext): Pro
 }
 
 const pad = (depth: number) => '  '.repeat(depth);
-const duration = (ms: number) => `(${Number(ms.toFixed(6))}ms)`;
+
+/**
+ * The spec reporter's colours (Node's internal/util/colors). Node ends a
+ * coloured stretch with "white", which is SGR 39, the default foreground,
+ * not white; the escapes sit exactly where Node puts them (after a test's
+ * indentation, before a diagnostic's), which test-run.mjs checks against
+ * `node --test` with colours forced.
+ */
+const RED = '\x1b[31m';
+const GREEN = '\x1b[32m';
+const BLUE = '\x1b[34m';
+const GRAY = '\x1b[90m';
+const DEFAULT = '\x1b[39m';
+
+/** ` (1.5ms)` in grey, as Node prints a duration after a test's name. */
+const duration = (ms: number) => ` ${GRAY}(${Number(ms.toFixed(6))}ms)${DEFAULT}`;
+
+/** A test's line: `✔ name (1ms)` in green, `✖` in red, `﹣ … # SKIP` in grey. */
+function line(node: Node, failed: boolean): string {
+	const status = node.status;
+	const color = failed ? RED : status === 'skip' ? GRAY : GREEN;
+	const mark = failed ? '✖' : status === 'skip' ? '﹣' : '✔';
+	const directive = status === 'skip' ? ` # ${node.skip === true ? 'SKIP' : node.skip}` : node.todo ? ` # ${node.todo === true ? 'TODO' : node.todo}` : '';
+	return `${color}${mark} ${node.name}${duration(node.ms)}${directive}${DEFAULT}`;
+}
 
 /** Prints `▶ name` for a test that has subtests, once, before its first subtest's line. */
 function header(node: Node | null): void {
@@ -427,10 +453,8 @@ function report(node: Node, ms: number, error: unknown): void {
 	const failed = error !== undefined && status !== 'skip';
 	if (failed && !(error as { quiet?: boolean } | undefined)?.quiet) failures.push(node);
 	header(node.parent);
-	const mark = failed ? '✖' : status === 'skip' ? '﹣' : '✔';
-	const directive = status === 'skip' ? ` # ${node.skip === true ? 'SKIP' : node.skip}` : node.todo ? ` # ${node.todo === true ? 'TODO' : node.todo}` : '';
-	write(`${pad(node.depth)}${mark} ${node.name} ${duration(ms)}${directive}`);
-	for (const d of node.diagnostics) write(`${pad(node.depth)}ℹ ${d}`);
+	write(`${pad(node.depth)}${line(node, failed)}`);
+	for (const d of node.diagnostics) write(`${BLUE}${pad(node.depth)}ℹ ${d}${DEFAULT}`);
 	node.finish();
 }
 
@@ -446,7 +470,8 @@ function errorText(error: unknown, depth: number): string {
 		// An assertion's message ends with a newline, which leaves the blank line Node shows before the stack.
 		text = frames.length ? `${head}\n${frames.join('\n')}` : head;
 	} else if (error instanceof Timeout) {
-		text = inspect(String(error));
+		// util.inspect's colour for a string.
+		text = `${GREEN}${inspect(String(error))}${DEFAULT}`;
 	} else {
 		text = `Error: ${inspect(error)}`;
 	}
@@ -508,22 +533,21 @@ export async function finishFile(error?: unknown): Promise<void> {
 export function summary(ms: number): number {
 	write(
 		[
-			`ℹ tests ${stats.tests}`,
-			`ℹ suites ${stats.suites}`,
-			`ℹ pass ${stats.pass}`,
-			`ℹ fail ${stats.fail}`,
-			`ℹ cancelled ${stats.cancelled}`,
-			`ℹ skipped ${stats.skipped}`,
-			`ℹ todo ${stats.todo}`,
-			`ℹ duration_ms ${ms.toFixed(3)}`,
-		].join('\n'),
+			`tests ${stats.tests}`,
+			`suites ${stats.suites}`,
+			`pass ${stats.pass}`,
+			`fail ${stats.fail}`,
+			`cancelled ${stats.cancelled}`,
+			`skipped ${stats.skipped}`,
+			`todo ${stats.todo}`,
+			`duration_ms ${ms.toFixed(3)}`,
+		]
+			.map((l) => `${BLUE}ℹ ${l}${DEFAULT}`)
+			.join('\n'),
 	);
 	if (failures.length) {
-		write('\n✖ failing tests:\n');
-		for (const node of failures) {
-			const directive = node.todo ? ` # ${node.todo === true ? 'TODO' : node.todo}` : '';
-			write(`test at ${node.location ?? node.name}\n✖ ${node.name} ${duration(node.ms)}${directive}\n${errorText(node.error, 1)}\n`);
-		}
+		write(`\n${RED}✖ failing tests:${DEFAULT}\n`);
+		for (const node of failures) write(`test at ${node.location ?? node.name}\n${line(node, true)}\n${errorText(node.error, 1)}\n`);
 	}
 	return stats.fail > 0 || stats.cancelled > 0 ? 1 : 0;
 }

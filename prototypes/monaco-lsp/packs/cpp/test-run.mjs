@@ -425,8 +425,16 @@ try {
 
     // The sample's tests (tests/geometry_test.cpp, GoogleTest), and a
     // failing one beside them.
+    // GoogleTest prints in colour (GTEST_COLOR=yes): the checks read the
+    // report with the escapes removed, as the app's terminal shows it
+    // (app/src/lib/ansi.ts); `raw` keeps them.
+    const plain = (text) => text.replace(/\x1b\[[0-9;:]*[A-Za-z]/g, '');
+    const testRun = async (files) => {
+        const r = await run(files, { type: 'test' });
+        return { ...r, raw: r.stdout, stdout: plain(r.stdout) };
+    };
     bytesSent = 0;
-    const tests = await run(SAMPLE, { type: 'test' });
+    const tests = await testRun(SAMPLE);
     check(
         "sample's GoogleTest tests: all pass, exit 0, main.cpp left out",
         tests.code === 0 && /\[  PASSED  \] 3 tests\./.test(tests.stdout) && !tests.phases.some(([t]) => t.includes('main.cpp')),
@@ -434,7 +442,12 @@ try {
     );
     console.log(tests.stdout.trimEnd().replace(/^/gm, '    | '));
     if (tests.stderr) console.log(tests.stderr);
-    const failing = await run({ ...SAMPLE, ...FAILING_TEST }, { type: 'test' });
+    check(
+        "GoogleTest's report is in its terminal colours: green [ RUN ]/[ OK ]/[ PASSED ], nothing else escaped",
+        /\x1b\[0;32m\[ RUN      \] \x1b\[m/.test(tests.raw) && /\x1b\[0;32m\[  PASSED  \] \x1b\[m3 tests\./.test(tests.raw) && !/\x1b\[[0-9;]*[A-Za-ln-z]/.test(tests.raw),
+        JSON.stringify(tests.raw.slice(0, 120))
+    );
+    const failing = await testRun({ ...SAMPLE, ...FAILING_TEST });
     check(
         'a failing test: reported on stdout with file and line, exit non-zero',
         failing.code !== 0 && failing.code !== null &&
@@ -444,8 +457,9 @@ try {
             /\[  PASSED  \] 3 tests\./.test(failing.stdout),
         `code=${failing.code} in ${failing.ms} ms`
     );
+    check('a failing test is in red', /\x1b\[0;31m\[  FAILED  \] \x1b\[mBroken\.NormIsWrong/.test(failing.raw), JSON.stringify(failing.raw.slice(-200)));
     console.log(failing.stdout.trimEnd().replace(/^/gm, '    | '));
-    const none = await run({ 'main.cpp': 'int main() {}\n' }, { type: 'test' });
+    const none = await testRun({ 'main.cpp': 'int main() {}\n' });
     check('test mode without tests/: says so, exit 1', none.code === 1 && /No tests to run/.test(none.stderr), JSON.stringify(none.stderr.trim()));
 
     // A link error names the sources, not internal object files.

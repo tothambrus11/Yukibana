@@ -290,9 +290,12 @@ directory:
   (the `assert 5.0 == 6` + `where` explanation) all work, and so do
   `unittest.TestCase` classes in those files (pytest collects them; plain
   `python -m unittest discover` would need `tests/__init__.py`, see below).
-* **The report** is pytest's own terminal report, on stdout. Colours are off
-  (`NO_COLOR`), and stdout is not a tty in test mode, so pytest does not
-  redraw its "collecting ..." line with carriage returns.
+* **The report** is pytest's own terminal report, on stdout, in its
+  terminal colours (`--color=yes`, with the failing source highlighted by
+  pygments), which the app's terminal renders. stdout is not a tty in test
+  mode, so pytest does not redraw its "collecting ..." line with carriage
+  returns. The interpreter's own tracebacks (Run, and a crash outside
+  pytest) stay uncoloured (`PYTHON_COLORS=0`, `NO_COLOR`).
 * **Exit status** is pytest's: 0 only when every collected test passed;
   1 when a test failed, 2 for a collection error (a syntax or import error
   in a test file), 5 when there were no tests at all.

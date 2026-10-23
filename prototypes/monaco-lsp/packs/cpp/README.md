@@ -332,8 +332,10 @@ project except the entry file and any other file that defines `main`, plus
 everything under `tests/`, and links them with `-lgtest` and, unless a test
 file defines its own `main`, `-u __main_argc_argv -lgtest_main` (wasi-libc
 refers to `main(argc, argv)` only weakly, which would not pull it from the
-archive). GoogleTest's report is the program's stdout; the exit status is 0
-only when every test passed. `gtest.tar` is fetched the first time tests are
+archive). GoogleTest's report is the program's stdout, in its terminal
+colours (`GTEST_COLOR=yes` in the program's environment, as
+`--gtest_color=yes` would; the app's terminal renders ANSI colours); the
+exit status is 0 only when every test passed. `gtest.tar` is fetched the first time tests are
 built (or a Run compiles a file that includes `<gtest/...>`), never for a
 plain Run. Including `<gtest/gtest.h>` makes a test file slow to compile:
 about 3.5 s for the sample's three tests, against 0.4 s for `geometry.cpp`.

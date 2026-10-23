@@ -78,7 +78,9 @@ const ready = loadPyodide({
     indexURL: BASE,
     lockFileContents: LOCK,
     packageBaseUrl: BASE,
-    // No ANSI colours in tracebacks: the output panel is not a terminal.
+    // No ANSI colours in the interpreter's own tracebacks and REPL-ish
+    // output: the terminal would show them, but a traceback is read best as
+    // the plain red of stderr. (pytest is asked for colours explicitly.)
     env: { HOME: '/home/pyodide', PYTHON_COLORS: '0', NO_COLOR: '1' },
 });
 ready.finally(() => {
@@ -92,8 +94,9 @@ ready.finally(() => {
 // isatty makes Python line-buffer the text layer, as in a terminal; the
 // driver also flushes before every read of stdin and at exit. Tests run with
 // isatty false: pytest on a terminal redraws its "collecting ..." line with
-// carriage returns, which the app's output panel would show as garbage (the
-// driver line-buffers stdout itself either way).
+// carriage returns, which the app's terminal would show as garbage (the
+// driver line-buffers stdout itself either way). Its colours do not depend
+// on isatty: `--color=yes` (see DRIVER).
 function writer(type, isatty = true) {
     const decoder = new TextDecoder();
     return {
@@ -222,8 +225,10 @@ def _yukibana_test(workdir, site):
     # honours testpaths in pyproject.toml/pytest.ini and otherwise collects
     # every test_*.py / *_test.py, tests/ included, and unittest.TestCase
     # classes in them. The cache plugin is off: .pytest_cache would vanish
-    # with the worker. Colours are off through NO_COLOR (set at startup): the
-    # app's output panel is not a terminal. Returns pytest's exit status (0
+    # with the worker. --color=yes: the app's terminal reads ANSI colours, so
+    # the report is coloured (and its code highlighted, by the part of
+    # pygments the bundle keeps) as on a real terminal; it overrides the
+    # NO_COLOR set at startup for the interpreter. Returns pytest's exit status (0
     # only when every collected test passed; 1 failures, 2 collection
     # errors, 5 no tests).
     import io, os, sys, traceback
@@ -238,7 +243,7 @@ def _yukibana_test(workdir, site):
         if site not in sys.path:
             sys.path.append(site)
         import pytest
-        code = int(pytest.main(["-p", "no:cacheprovider"]))
+        code = int(pytest.main(["-p", "no:cacheprovider", "--color=yes"]))
     except SystemExit as e:
         c = e.code
         code = 0 if c is None else c & 0xFF if isinstance(c, int) else 1

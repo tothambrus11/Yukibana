@@ -8,7 +8,10 @@
 //
 // Test mode (`type: 'test'`) is checked against the real thing: the same
 // test files run under this Node's own `node --test`, and the two reports
-// must agree line for line (durations aside).
+// must agree line for line (durations aside), colours included: the runner
+// prints what Node prints on a terminal, and Node is run with FORCE_COLOR.
+// The other checks read the output with its escape sequences removed, as
+// the app's terminal shows it (`raw` keeps them).
 
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -109,8 +112,11 @@ function check(name, ok, detail) {
 	if (!ok) failures++;
 	console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  ${detail}` : ''}`);
 }
-const run = (files, entry = 'main.js', inputs = []) => page.evaluate(([f, e, i]) => window.runProgram('run', f, e, i), [files, entry, inputs]);
-const test = (files) => page.evaluate((f) => window.runProgram('test', f, 'main.js'), files);
+// CSI sequences (all the reporter prints); the app's own reader is app/src/lib/ansi.ts.
+const plain = (text) => text.replace(/\x1b\[[0-9;:]*[A-Za-z]/g, '');
+const stripped = (out) => ({ ...out, raw: { stdout: out.stdout, stderr: out.stderr }, stdout: plain(out.stdout), stderr: plain(out.stderr) });
+const run = async (files, entry = 'main.js', inputs = []) => stripped(await page.evaluate(([f, e, i]) => window.runProgram('run', f, e, i), [files, entry, inputs]));
+const test = async (files) => stripped(await page.evaluate((f) => window.runProgram('test', f, 'main.js'), files));
 
 // The sample project of app/src/lib/languages.ts, with its test file.
 const SAMPLE = {
@@ -230,28 +236,30 @@ for (const [path, text] of Object.entries(BEHAVIOUR)) {
 	await mkdir(dirname(join(dir, path)), { recursive: true });
 	await writeFile(join(dir, path), text);
 }
-const node = spawnSync(process.execPath, ['--test', '--test-reporter=spec'], { cwd: dir, encoding: 'utf8' });
+const { NO_COLOR, NODE_DISABLE_COLORS, ...env } = process.env;
+const node = spawnSync(process.execPath, ['--test', '--test-reporter=spec'], { cwd: dir, encoding: 'utf8', env: { ...env, FORCE_COLOR: '1' } });
 await rm(dir, { recursive: true, force: true });
 // Durations differ; Node's error details (stacks into node:internal, the
 // error's own properties) are not reproduced, so the failing-tests list is
-// compared by its `test at` and `✖` lines only.
+// compared by its `test at` and `✖` lines only. Escapes are compared as
+// they are, so each colour must start and end where Node's does.
 const comparable = (report) =>
 	report
-		.replace(/ \([\d.]+ms\)/g, '')
+		.replace(/\([\d.]+ms\)/g, '(ms)')
 		.replace(/duration_ms [\d.]+/, 'duration_ms')
 		.split('\n')
 		.filter((line, i, all) => {
-			const failing = all.indexOf('✖ failing tests:');
-			return failing < 0 || i <= failing || /^(test at |✖ )/.test(line);
+			const failing = all.findIndex((l) => plain(l) === '✖ failing tests:');
+			return failing < 0 || i <= failing || /^(test at |✖ )/.test(plain(line));
 		})
 		.join('\n')
 		.trim();
-const ours = comparable(t3.stdout);
+const ours = comparable(t3.raw.stdout);
 const theirs = comparable(node.stdout);
 const diff = ours.split('\n').map((l, i) => (l === theirs.split('\n')[i] ? null : `line ${i + 1}: ours ${JSON.stringify(l)} node ${JSON.stringify(theirs.split('\n')[i])}`)).filter(Boolean);
 check(
-	`test: the report matches \`node --test\` (Node ${process.version}) line for line: hooks, subtests, skip/todo, timeouts, assertion messages`,
-	ours === theirs && t3.code === (node.status ?? -1),
+	`test: the report matches \`node --test\` (Node ${process.version}) on a colour terminal line for line, escapes included: hooks, subtests, skip/todo, timeouts, assertion messages`,
+	ours === theirs && /\x1b\[32m✔ /.test(ours) && /\x1b\[31m✖ /.test(ours) && /\x1b\[34mℹ tests/.test(ours) && t3.code === (node.status ?? -1),
 	`exit ${t3.code} vs node ${node.status}; ${ours.split('\n').length} lines${diff.length ? `\n${diff.slice(0, 12).join('\n')}` : ''}`,
 );
 console.log(block(t3.stdout.slice(0, t3.stdout.indexOf('ℹ tests'))));

@@ -1,6 +1,7 @@
 <!--
-  The program's terminal: what it printed (errors in red), what was typed,
-  and an input line. Enter sends the line; Ctrl+D ends the input.
+  The program's terminal: what it printed (errors in red, and the colours
+  the program asked for with ANSI escapes, see ansi.ts), what was typed, and
+  an input line. Enter sends the line; Ctrl+D ends the input.
 -->
 <script lang="ts">
 	import type { Workspace } from '../workspace.svelte';
@@ -58,7 +59,7 @@
 		{#if runner.chunks.length === 0 && runner.state.kind === 'idle'}
 			<p class="empty">Press <strong>Run</strong> (Ctrl+Enter) to run the project. Its output appears here.</p>
 		{/if}
-		<pre>{#each runner.chunks as chunk (chunk.id)}<span class={chunk.kind}>{chunk.text}</span>{/each}</pre>
+		<pre>{#each runner.chunks as chunk (chunk.id)}<span class={chunk.kind} style={chunk.style || undefined}>{chunk.text}</span>{/each}</pre>
 	</div>
 	{#if runner.busy}
 		<label class="input" class:waiting>
