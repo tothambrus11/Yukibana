@@ -452,8 +452,14 @@ when the type checker is ready.
   of function types, of `some`/`any` existentials beyond their protocol's
   index entry, and of library types outside the index (Regex, Task, ...)
   fall back to swift-syntax-ls's guess.
-* Implicit member completion (`let d: Direction = .`) is swift-syntax-ls's
-  (every enum case in the project).
+* Implicit member completion (`let d: Direction = .`, `return .sad()`,
+  `f(.)`) knows the contextual type only from the compiler's error for a
+  probe member (`type 'Int' has no member '__yukibana_implicit_member'`).
+  Where the compiler cannot infer one (overloads it cannot pick between,
+  `cannot infer contextual base`), it is swift-syntax-ls's guess (every
+  enum case in the project). Members are filtered by their declared type
+  being the contextual type or `Self`, so a static member reached through
+  a chain (`.init().other`) is not offered.
 * Generic substitution for display is textual (`Element` -> `Int`); a
   method's own generic parameters stay as declared (`map<T>`), and some
   nested associated types print unsimplified (`[Int].Element`).

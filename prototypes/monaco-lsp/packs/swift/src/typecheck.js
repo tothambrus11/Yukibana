@@ -26,7 +26,7 @@
 //                    output: the frontend's stderr; dia: its serialized
 //                    diagnostics (src/dia.js), the only report of fix-its,
 //                    one buffer per file for -dump-ast (one per primary file)
-//        { type: 'probe', id, ast, ms }
+//        { type: 'probe', id, ast, output, ms }   output: the frontend's stderr
 //        { type: 'failed', message }                it cannot run at all
 //
 // A running frontend cannot be interrupted (the worker's thread is inside
@@ -128,8 +128,8 @@ async function sil({ id, files }) {
 async function probe({ id, files }) {
     const project = await prepare(files);
     const t0 = performance.now();
-    const r = project.sources.length ? await frontendRun(project, astArgs(project.sources, project.moduleName), project.sources.length) : { ast: '' };
-    post({ type: 'probe', id, ast: parseDump(r.ast, files, `${WORK}/`), ms: Math.round(performance.now() - t0) });
+    const r = project.sources.length ? await frontendRun(project, astArgs(project.sources, project.moduleName), project.sources.length) : { ast: '', output: '' };
+    post({ type: 'probe', id, ast: parseDump(r.ast, files, `${WORK}/`), output: r.output, ms: Math.round(performance.now() - t0) });
 }
 
 async function drain() {

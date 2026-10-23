@@ -477,9 +477,13 @@ function conforms(ast, std, typeText, proto) {
     if (p.tuple || p.fn) return false;
     if (!p.name) return true;
     if (p.name === proto) return true;
-    if (ast?.typeDecls(p.name).length) return projectConformances(ast, std, p.name).has(proto);
+    // A library type the project extends (`extension Int: P`) conforms both
+    // ways; it once lost its library conformances here, and with them
+    // `Int.max` (`where Self: FixedWidthInteger`).
+    const own = ast?.typeDecls(p.name).length ?? 0;
+    if (own && projectConformances(ast, std, p.name).has(proto)) return true;
     const set = std?.conformances(p.name);
-    return set ? set.has(proto) : true;
+    return set ? set.has(proto) : !own;
 }
 
 /**
@@ -591,7 +595,8 @@ function libraryMembers(ast, std, p, push) {
     const extensionsOf = [];
     if (name) {
         const env = p.viaProtocol ? {} : associated(p);
-        const self = p.viaProtocol ? null : p.text;
+        // Self is the instance type, also among a metatype's (static) members: `Int.max` is an Int.
+        const self = p.viaProtocol ? null : p.meta ? p.text.replace(/\.(Type|Protocol)$/, '').replace(/^\((.*)\)$/, '$1') : p.text;
         for (const row of std.membersOf(name)) {
             if (STATIC.has(row[1]) !== p.meta || row[1] === 's') continue;
             if (self && !applies(ast, std, row, self, env)) continue;
@@ -787,6 +792,76 @@ export function memberContext(text, i) {
     const base = expressionBefore(text, end);
     if (!base) return null;
     return { dot, start: base[0], last: base[1], end, unwrap };
+}
+
+/** The member name an implicit-member probe asks for: one no type declares. */
+export const IMPLICIT_PROBE = '__yukibana_implicit_member';
+
+/**
+ * Implicit member completion at UTF-16 index `i`: the cursor is in or after
+ * the name of `.name` with no base before the dot (`return .sa`,
+ * `case .`, `f(x: .`). Returns { start, end }, the UTF-16 range of the
+ * name (empty right after the dot); null for anything else, including a
+ * member access (memberContext) and the dots of `...` and `..<`.
+ */
+export function implicitContext(text, i) {
+    let start = i;
+    while (start > 0 && isIdentifier(text[start - 1])) start--;
+    if (text[start - 1] !== '.') return null;
+    const before = text[start - 2] ?? '';
+    if (before !== '' && (isIdentifier(before) || '.)]}?!"'.includes(before))) return null;
+    let end = i;
+    while (end < text.length && isIdentifier(text[end])) end++;
+    return { start, end };
+}
+
+/**
+ * What the compiler's errors say about an implicit-member probe (see
+ * IMPLICIT_PROBE): { type, instance } where `type` is the type the member
+ * was looked up in, and `instance` is true when the dot continues an
+ * expression on an earlier line (`value of type 'T' has no member`) rather
+ * than starting an implicit member expression (`type 'T' has no member`).
+ * Null when no such error was reported (no contextual type, or the probe
+ * never reached type checking).
+ */
+export function implicitBaseOf(output) {
+    const name = IMPLICIT_PROBE;
+    const m = new RegExp(`error: (value of )?type '(.+?)' has no member '${name}'`).exec(output ?? '');
+    return m ? { type: m[2], instance: !!m[1] } : null;
+}
+
+/**
+ * The completion items of an implicit member expression whose contextual
+ * type is `typeText`: the type's enum cases, initialisers, and the static
+ * properties and functions whose type or result is the type itself (or
+ * `Self`), as Swift only accepts those there. When the type is an
+ * Optional, the wrapped type's are offered too, as Swift looks them up
+ * there as well. If nothing fits, every static member is offered rather
+ * than nothing.
+ */
+export function implicitMembers(ast, std, typeText) {
+    const p = parseType(typeText);
+    const types = [p.text];
+    if (p.name === 'Optional' && p.args[0]) types.push(parseType(p.args[0]).text);
+    const all = [];
+    const seen = new Set();
+    for (const t of types) {
+        for (const item of membersOf(ast, std, `${t}.Type`).items) {
+            const key = `${item.label}|${item.labelDetails?.detail ?? ''}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            all.push({ item, self: t });
+        }
+    }
+    const fits = ({ item, self }) => {
+        if (item.kind === 20 || item.label === 'init') return true;
+        const result = item.labelDetails?.description?.trim();
+        if (!result) return false;
+        const r = parseType(result).text;
+        return r === 'Self' || r === self || types.includes(r);
+    };
+    const fitting = all.filter(fits);
+    return (fitting.length ? fitting : all).map(({ item }) => item);
 }
 
 /**

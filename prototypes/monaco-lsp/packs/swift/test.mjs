@@ -399,6 +399,51 @@ for p in ps { print(p.norm()) }
     const unwrapped = items.find((i) => i.label === 'isMultiple');
     check('compiler: after `xs.first.` (Int?) Optional\'s members, and Int\'s as `?.member` edits',
         has(got, ['map', 'flatMap', 'isMultiple']) && /^\?\.isMultiple/.test(unwrapped?.textEdit?.newText ?? ''), `${got.length} items in ${ms} ms, ${JSON.stringify(unwrapped?.textEdit)}`);
+
+    // Implicit member expressions: `.member` with no base, completed from
+    // the contextual type the compiler names (the user's case first: an
+    // `if` expression as a function's implicit result).
+    /** Completion at the `|` in PROBE + `typed`, cursor there, the rest after it: [labels, items, ms]. */
+    async function completeAt(typed) {
+        const text = PROBE + typed.replace('|', '');
+        setMain(text);
+        const t0 = Date.now();
+        const r = await lsp.request('textDocument/completion', { textDocument: { uri: uri('main.swift') }, position: endOf(PROBE + typed.slice(0, typed.indexOf('|'))) });
+        const ms = Date.now() - t0;
+        latencies.push(ms);
+        const items = r.result?.items ?? [];
+        return [items.map((i) => i.label), items, ms];
+    }
+    const IMPLICIT = `extension Int {
+    static func sad() -> Int { 1 }
+}
+enum Mood { case happy, grumpy(level: Int)
+    static var usual: Mood { .happy }
+    static func describe(_ m: Mood) -> String { "" }
+}
+func feel(_ m: Mood) {}
+`;
+    [got, , ms] = await completeAt(`${IMPLICIT}func assss() -> Int {
+    if true {
+        .s|
+    } else {
+        .sad()
+    }
+}
+`);
+    check('compiler: implicit member `.s` in an if expression returning Int offers `sad` and Int\'s static members of type Int',
+        has(got, ['sad', 'max', 'min', 'zero', 'init', 'random'], ['describe', 'isMultiple', 'happy', ...POINT]), `${got.length} items in ${ms} ms: ${[...new Set(got)].join(', ')}`);
+    [got, , ms] = await completeAt(`${IMPLICIT}let m: Mood = .|
+`);
+    check('compiler: implicit member after `let m: Mood = .` offers the cases and `usual`, not `describe`',
+        has(got, ['happy', 'grumpy', 'usual'], ['describe', 'sad']), `${got.length} items in ${ms} ms: ${got.join(', ')}`);
+    [got, , ms] = await completeAt(`${IMPLICIT}func check() { feel(.|) }
+`);
+    check('compiler: implicit member in an argument `feel(.)` offers Mood\'s cases', has(got, ['happy', 'grumpy', 'usual'], ['sad']), `${got.length} items in ${ms} ms: ${got.join(', ')}`);
+    [got, , ms] = await completeAt(`${IMPLICIT}let chained = xs
+    .|
+`);
+    check('compiler: a dot starting a line after an expression continues it (instance members of [Int])', has(got, ['map', 'count'], ['happy']), `${got.length} items in ${ms} ms`);
     const resolved = await lsp.request('completionItem/resolve', reduceItem ?? {});
     check('compiler: completionItem/resolve adds the stdlib doc comment', /Returns the result of combining/.test(resolved.result?.documentation?.value ?? ''),
         (resolved.result?.documentation?.value ?? '').slice(0, 60));

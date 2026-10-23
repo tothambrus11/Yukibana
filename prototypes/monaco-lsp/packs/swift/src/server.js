@@ -16,7 +16,8 @@
 
 import { readDiagnostics } from './dia.js';
 import {
-    Ast, callContext, libraryGlobals, libraryHover, librarySignatures, libraryTypeHover, memberContext, membersOf, parseType, stdlib, wordAt,
+    Ast, IMPLICIT_PROBE, callContext, implicitBaseOf, implicitContext, implicitMembers, libraryGlobals, libraryHover, librarySignatures, libraryTypeHover, memberContext, membersOf, parseType,
+    stdlib, wordAt,
 } from './semantic.js';
 
 const NAME = 'swift-syntax-ls + swift-frontend 6.3.3 type checker';
@@ -472,10 +473,12 @@ const PROBE_TIMEOUT = 4000;
 
 /**
  * Types the project with one file's text replaced (`text` for `doc`), and
- * returns its Ast, or null if the type checker is not loaded yet, failed,
- * took longer than PROBE_TIMEOUT, or the request was cancelled. This is how
- * completion learns the type of the expression before a dot that was
- * typed after the last check.
+ * returns { ast, doc, output }: its Ast, the variant Doc it describes and
+ * the frontend's stderr (its diagnostics as text). Null if the type checker
+ * is not loaded yet, failed, took longer than PROBE_TIMEOUT, or the request
+ * was cancelled. This is how completion learns the type of the expression
+ * before a dot that was typed after the last check, and the contextual type
+ * of an implicit member expression (`.member` with no base).
  */
 async function probe(doc, text, requestId) {
     if (!checker || !checkerReady || checkerDown) return null;
@@ -500,7 +503,7 @@ async function probe(doc, text, requestId) {
     });
     if (!answer?.ast) return null;
     log(4, `swift-frontend probe: typed in ${answer.ms} ms (${Math.round(performance.now() - t0)} ms with waiting)`);
-    return { ast: new Ast(answer.ast, docsNow, uriOf), doc: variant };
+    return { ast: new Ast(answer.ast, docsNow, uriOf), doc: variant, output: answer.output ?? '' };
 }
 
 /**
@@ -779,6 +782,40 @@ async function compilerMembers(doc, i, ctx, requestId) {
     return items;
 }
 
+/**
+ * Completion of an implicit member expression, `.member` with no base
+ * (`return .sad()`, `let c: Color = .red`, `f(.init(x: 1))`): the static
+ * members, enum cases and initialisers of the contextual type.
+ *
+ * The AST cannot say what the contextual type is, because a `.partial` that
+ * names nothing does not type-check, and without it there is no expression
+ * to have a type. The compiler says it in words instead: the probe replaces
+ * the partial name with IMPLICIT_PROBE, which no type has, and the error
+ * names the type the member was looked up in (`type 'Int' has no member
+ * ...`). The same probe tells a member on the line before apart, since
+ * Swift reads `xs.map { ... }⏎.filter` as a chain: then the error is
+ * `value of type '[Int]' has no member ...`, and that type's instance
+ * members are offered. Undefined when the compiler names no type (no
+ * contextual type: `cannot infer contextual base ...`).
+ */
+async function compilerImplicitMembers(doc, i, ctx, requestId) {
+    const std = await library();
+    const text = doc.text.slice(0, ctx.start) + IMPLICIT_PROBE + doc.text.slice(ctx.end);
+    const t0 = performance.now();
+    const p = await probe(doc, text, requestId);
+    const found = p && implicitBaseOf(p.output);
+    if (!found) return undefined;
+    const items = found.instance ? membersOf(p.ast, std, found.type).items : implicitMembers(p.ast, std, found.type);
+    if (!items.length) return undefined;
+    log(4, `completion: ${items.length} ${found.instance ? 'members of' : 'implicit members of'} ${found.type} (probe, ${Math.round(performance.now() - t0)} ms)`);
+    for (const item of items) {
+        if (item.data?.k !== 'project') continue;
+        const loc = nameLocation(p.ast, `${item.data.f}:${item.data.l}:${item.data.c}`);
+        item.data = loc ? { k: 'project', uri: loc.uri, position: loc.range.start } : undefined;
+    }
+    return items;
+}
+
 /** Signature help for a standard-library function or method, when swift-syntax-ls has none. */
 async function librarySignatureHelp(doc, i) {
     const ctx = callContext(doc.text, i);
@@ -879,6 +916,11 @@ const handlers = {
         const member = memberContext(doc.text, i);
         if (member) {
             const items = await compilerMembers(doc, i, member, requestId);
+            if (items) return { isIncomplete: false, items };
+        }
+        const implicit = !member && implicitContext(doc.text, i);
+        if (implicit) {
+            const items = await compilerImplicitMembers(doc, i, implicit, requestId);
             if (items) return { isIncomplete: false, items };
         }
         const r = (await call('complete', doc.uri, off));
