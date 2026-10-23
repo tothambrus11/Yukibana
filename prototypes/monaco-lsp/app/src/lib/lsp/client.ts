@@ -89,7 +89,16 @@ export class LanguageClient {
 	 */
 	async start(models: () => Iterable<monaco.editor.ITextModel>): Promise<void> {
 		this.options.events.state({ kind: 'starting' });
-		const result = await this.connection.request<lsp.InitializeResult>('initialize', this.initializeParams());
+		let result: lsp.InitializeResult;
+		try {
+			result = await this.connection.request<lsp.InitializeResult>('initialize', this.initializeParams());
+		} catch (e) {
+			// A server that refused `initialize` is still running, so nothing
+			// else would end it: without this the status stays "Starting".
+			const error = e instanceof Error ? e : new Error(String(e));
+			this.connection.dispose(new Error(`initialize failed: ${error.message}`));
+			throw error;
+		}
 		this.options.events.loading(null);
 		this.capabilities = result.capabilities;
 		const sync = result.capabilities.textDocumentSync;
@@ -335,20 +344,30 @@ export class LanguageClient {
 	 * Sends a request on behalf of a Monaco provider. A cancelled request,
 	 * or one for a model the server does not own, answers `null`; any other
 	 * failure is written to the output panel and also answers `null`, since
-	 * Monaco has no way to show a provider's error.
+	 * Monaco has no way to show most providers' errors.
 	 */
 	private async ask<R>(model: monaco.editor.ITextModel, method: string, params: unknown, token: monaco.CancellationToken): Promise<R | null> {
-		if (!this.owns(model)) return null;
+		try {
+			return await this.askOrThrow<R>(model, method, params, token);
+		} catch (e) {
+			if (!this.stopping) this.options.events.log('error', `${method}: ${e instanceof Error ? e.message : String(e)}`);
+			return null;
+		}
+	}
+
+	/**
+	 * As `ask`, but a failure other than cancellation is thrown rather than
+	 * logged: for the providers that can show it (a refused rename says why).
+	 */
+	private async askOrThrow<R>(model: monaco.editor.ITextModel, method: string, params: unknown, token: monaco.CancellationToken): Promise<R | null> {
+		if (!this.owns(model) || token.isCancellationRequested) return null;
 		const controller = new AbortController();
-		if (token.isCancellationRequested) return null;
 		const sub = token.onCancellationRequested(() => controller.abort());
 		try {
 			return await this.connection.request<R>(method, params, controller.signal);
 		} catch (e) {
-			if (!(e instanceof ResponseError && e.code === REQUEST_CANCELLED) && !this.stopping) {
-				this.options.events.log('error', `${method}: ${e instanceof Error ? e.message : String(e)}`);
-			}
-			return null;
+			if (e instanceof ResponseError && e.code === REQUEST_CANCELLED) return null;
+			throw e;
 		} finally {
 			sub.dispose();
 		}
@@ -526,9 +545,9 @@ export class LanguageClient {
 							// A server refuses a rename with an error whose message says why; show it.
 							let r: lsp.PrepareRenameResult | null;
 							try {
-								r = await this.ask<lsp.PrepareRenameResult>(model, 'textDocument/prepareRename', at(model, position), token);
+								r = await this.askOrThrow<lsp.PrepareRenameResult>(model, 'textDocument/prepareRename', at(model, position), token);
 							} catch (e) {
-								if (e instanceof ResponseError && e.code !== REQUEST_CANCELLED) return { range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column), text: '', rejectReason: e.message };
+								if (e instanceof ResponseError) return { range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column), text: '', rejectReason: e.message };
 								throw e;
 							}
 							if (!r) return { range: new monaco.Range(1, 1, 1, 1), text: '', rejectReason: 'This element cannot be renamed.' };

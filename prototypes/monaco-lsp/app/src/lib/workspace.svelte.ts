@@ -155,8 +155,7 @@ export class Workspace {
 			this.write('warning', `There is no ${language.entry} to run.`);
 			return;
 		}
-		const files: Record<string, string> = {};
-		for (const [path, model] of this.models) files[path] = model.getValue();
+		const files = this.currentFiles();
 		this.host?.showTerminal();
 		this.runner.start(packOf(language), files, entry, mode);
 	}
@@ -169,8 +168,7 @@ export class Workspace {
 	 */
 	async download(): Promise<void> {
 		const language = languageOf(this.language);
-		const files: Record<string, string> = {};
-		for (const [path, model] of this.models) files[path] = model.getValue();
+		const files = this.currentFiles();
 		const exported = exportProject(language, files);
 		const paths = Object.keys(exported.files).sort();
 		const empty = this.allFolders().filter((f) => !paths.some((p) => p.startsWith(f + '/')) && !this.folders.some((g) => g.startsWith(f + '/')));
@@ -344,7 +342,7 @@ export class Workspace {
 	private addModel(path: string, text: string, created: boolean): void {
 		const model = monaco.editor.createModel(text, undefined, uriOf(path));
 		model.onDidChangeContent(() => {
-			this.scheduleSave();
+			this.scheduleSave(path);
 			this.preview.changed(path);
 		});
 		this.models.set(path, model);
@@ -417,7 +415,7 @@ export class Workspace {
 		});
 		this.client = client;
 		this.write('info', `Starting the ${language.label} language server`);
-				client.start(() => this.models.values()).catch(async (e: unknown) => {
+		client.start(() => this.models.values()).catch(async (e: unknown) => {
 			if (this.client !== client) return;
 			this.write('error', `${language.label} language server: ${e instanceof Error ? e.message : String(e)}`);
 			// A worker that fails to load says nothing about why; a missing pack is the usual reason.
@@ -455,16 +453,20 @@ export class Workspace {
 		this.testFramework = detected.mixed ? 'mixed' : detected.framework;
 	}
 
-	private scheduleSave(): void {
-		this.refreshTestFramework();
+	/**
+	 * Saves shortly. `edited` is the file whose text changed, if that is all
+	 * that did: the test framework is then looked at again only when it is
+	 * under tests/, not on every keystroke in any file.
+	 */
+	private scheduleSave(edited?: string): void {
+		if (edited === undefined || edited.startsWith(TESTS_DIR)) this.refreshTestFramework();
 		clearTimeout(this.saveTimer);
 		this.saveTimer = setTimeout(() => this.saveNow(), SAVE_DELAY_MS);
 	}
 
 	private saveNow(): void {
 		clearTimeout(this.saveTimer);
-		const files: Record<string, string> = {};
-		for (const [path, model] of this.models) files[path] = model.getValue();
+		const files = this.currentFiles();
 		saveProject(this.language, { files, folders: this.folders, open: this.open.filter((p) => p in files), active: this.active }, (m) => this.write('error', m));
 	}
 }

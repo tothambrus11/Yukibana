@@ -208,9 +208,17 @@ export class AnsiStream {
 			emit(text.slice(at, esc));
 			const end = sequenceEnd(text, esc);
 			if (end === null) {
-				// Unfinished: keep it for the next piece, unless it is too long to be real.
-				if (text.length - esc <= MAX_SEQUENCE) this.#pending = text.slice(esc);
-				break;
+				// Unfinished: keep it for the next piece, unless it is too long to be
+				// real. Then the introducer is dropped, with a CSI's parameter bytes,
+				// and what follows is text: dropping the whole rest once swallowed a
+				// program's output after a stray `ESC ]`.
+				if (text.length - esc <= MAX_SEQUENCE) {
+					this.#pending = text.slice(esc);
+					break;
+				}
+				at = esc + 2;
+				if (text[esc + 1] === '[') while (at < text.length && text.charCodeAt(at) >= 0x20 && text.charCodeAt(at) <= 0x3f) at++;
+				continue;
 			}
 			if (text[esc + 1] === '[' && text[end - 1] === 'm') {
 				const params = text.slice(esc + 2, end - 1);

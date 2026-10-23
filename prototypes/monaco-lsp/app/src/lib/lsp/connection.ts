@@ -96,6 +96,8 @@ export class Connection {
 	 */
 	request<R>(method: string, params: unknown, signal?: AbortSignal): Promise<R> {
 		if (this.closed) return Promise.reject(this.closed);
+		// Already aborted: its 'abort' event has fired and will not again.
+		if (signal?.aborted) return Promise.reject(new ResponseError(REQUEST_CANCELLED, 'cancelled'));
 		const id = this.nextId++;
 		return new Promise<R>((resolve, reject) => {
 			const settle = () => signal?.removeEventListener('abort', abort);
@@ -119,9 +121,13 @@ export class Connection {
 		if (!this.closed) this.post({ jsonrpc: '2.0', method, ...(params !== undefined && { params }) });
 	}
 
-	/** Terminates the worker and fails every pending request. Idempotent. */
-	dispose(): void {
-		this.close(null);
+	/**
+	 * Terminates the worker and fails every pending request. Idempotent.
+	 * With an `error`, the close is a failure (`onClose` gets it): for a
+	 * worker that is alive but unusable, such as one whose `initialize` failed.
+	 */
+	dispose(error: Error | null = null): void {
+		this.close(error);
 	}
 
 	private post(message: RequestMessage | ResponseMessage): void {

@@ -132,6 +132,8 @@ export class Runner {
 	attach(note: string): void {
 		this.stop(false);
 		this.clear();
+		// A colour or half-read escape left by the last program must not tint the page's console.
+		this.ansi = { stdout: new AnsiStream(), stderr: new AnsiStream() };
 		this.state = { kind: 'idle' };
 		this.append('info', note + '\n');
 	}

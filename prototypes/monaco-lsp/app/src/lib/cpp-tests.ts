@@ -40,7 +40,8 @@ const INCLUDES: Record<TestFramework, RegExp> = {
 /** C and C++ files, sources and headers. */
 const C_FAMILY = /\.(c|cc|cpp|cxx|c\+\+|C|h|hh|hpp|hxx|h\+\+|inl|ipp)$/;
 
-function withoutComments(text: string): string {
+/** `text` with its C/C++ comments removed, for the include and define checks (string literals are not parsed). */
+export function withoutComments(text: string): string {
 	return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 }
 

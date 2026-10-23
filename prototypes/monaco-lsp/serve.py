@@ -37,6 +37,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def send_head(self):
         path = self.translate_path(self.path)
         if os.path.isdir(path):
+            # A folder without its slash gets SimpleHTTPRequestHandler's
+            # redirect: served in place, its page would resolve relative URLs
+            # against the parent folder.
+            if not urllib.parse.urlsplit(self.path).path.endswith("/"):
+                return super().send_head()
             path = os.path.join(path, "index.html")
         accepted = {
             part.split(";")[0].strip()

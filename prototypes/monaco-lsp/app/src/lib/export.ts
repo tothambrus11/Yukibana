@@ -13,6 +13,8 @@
  * Imports only types, so `node` can load this file directly (tests/export.mjs).
  */
 import type { Files, Language, LanguageId } from './languages';
+// With its extension: tests/export.mjs runs this file under Node's type stripping.
+import { detectTestFramework, withoutComments, TEST_FRAMEWORKS, type TestFramework } from './cpp-tests.ts';
 
 /** What a download contains. */
 export interface ExportedProject {
@@ -105,7 +107,6 @@ const CATCH2_COMMIT = '08092139210881f01a34e60c5f2fd6afa0ea4024';
 const DOCTEST_VERSION = '2.5.3';
 const DOCTEST_COMMIT = '2d0a9359a60c51affe2a9bebb1be1dca47868151';
 
-const withoutComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
 /**
  * Whether a source defines main: `int main(` or `auto main(` outside
@@ -123,19 +124,17 @@ function implementsDoctest(text: string): boolean {
 	return /^[ \t]*#[ \t]*define[ \t]+DOCTEST_CONFIG_IMPLEMENT/m.test(withoutComments(text));
 }
 
-type TestFramework = 'gtest' | 'doctest' | 'catch2';
-
 /**
- * The test framework tests/ includes (<gtest/...>, <doctest/...>,
- * <catch2/...>), as the runner and app/src/lib/cpp-tests.ts tell it; the
- * first in that order when several are (the browser refuses to build those
- * tests; the CMakeLists links one and the compiler names what is missing).
- * GoogleTest when none is, as before there was a choice.
+ * The test framework tests/ includes, as the runner and the app's picker
+ * tell it (cpp-tests.ts detectTestFramework: C/C++ files only). When
+ * several are, the first in TEST_FRAMEWORKS' order (the browser refuses to
+ * build those tests; the CMakeLists links one and the compiler names what
+ * is missing). GoogleTest when none is, as before there was a choice.
  */
 function testFrameworkOf(files: Files): TestFramework {
-	const code = Object.keys(files).filter((p) => TESTS.test(p)).map((p) => withoutComments(files[p] ?? '')).join('\n');
-	for (const id of ['gtest', 'doctest', 'catch2'] as const) if (new RegExp(`^[ \\t]*#[ \\t]*include[ \\t]*[<"]${id}/`, 'm').test(code)) return id;
-	return 'gtest';
+	const found = detectTestFramework(files);
+	if (!found.mixed) return found.framework ?? 'gtest';
+	return TEST_FRAMEWORKS.map((f) => f.id).find((id) => id in found.files) ?? 'gtest';
 }
 
 /** What compile_flags.txt says, sorted into what CMake has a word for. */

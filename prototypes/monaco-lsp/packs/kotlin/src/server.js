@@ -172,7 +172,8 @@ function topLevelEquals(text) {
     for (let i = 0; i < text.length; i++) {
         const c = text[i];
         if (c === '(' || c === '<' || c === '[') depth++;
-        else if (c === ')' || c === '>' || c === ']') depth--;
+        // The `>` of `->` closes nothing: counting it once lost the `=` of `val f: (Int) -> Int = ...`.
+        else if (c === ')' || c === ']' || (c === '>' && text[i - 1] !== '-')) depth--;
         else if (c === '=' && depth === 0 && text[i + 1] !== '=' && text[i - 1] !== '!' && text[i - 1] !== '<' && text[i - 1] !== '>') return i;
     }
     return -1;

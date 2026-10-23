@@ -68,6 +68,9 @@ test('a malformed or endless sequence cannot swallow the output', () => {
 	assert.deepEqual(stream.feed('\x1b[' + '1;'.repeat(400)), []);
 	// Dropped, and what follows is text again.
 	assert.deepEqual(stream.feed('9'.repeat(10) + 'tail'), [{ text: '9999999999tail', css: '' }]);
+	// A stray OSC introducer followed by plenty of output in the same piece: the output stays.
+	const long = 'line of output\n'.repeat(100);
+	assert.equal(new AnsiStream().feed('before\x1b]' + long).map((s) => s.text).join(''), 'before' + long);
 });
 
 test('the style lasts across pieces until it is reset', () => {
