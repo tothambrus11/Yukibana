@@ -132,8 +132,43 @@ async function run(language, c) {
 		check(ended && /code 0/.test((await status.textContent()) ?? '') && shown.includes(c.output), `Run prints "${c.output}" (${(await status.textContent())?.trim()}: ${JSON.stringify(shown.slice(0, 200))})`);
 	}
 
+	if (language === 'javascript') await settings(page, check);
+
 	check(errors.length === 0, `no page errors${errors.length ? ': ' + errors.join('; ') : ''}`);
 	await page.close();
+}
+
+/** jsconfig.json is highlighted as JSON, completes compiler options from its schema and flags unknown values. */
+async function settings(page, check) {
+	await page.locator('.explorer .row .name', { hasText: /^jsconfig\.json$/ }).click();
+	await page.locator('.dv-tab.dv-active-tab .dock-tab', { hasText: 'jsconfig.json' }).first().waitFor({ timeout: 10_000 });
+	const lines = page.locator('.dv-groupview .monaco-editor .view-lines').first();
+	const key = lines.locator('span', { hasText: /^"compilerOptions"$/ }).first();
+	const colours = await page.waitForFunction(() => {
+		const spans = [...document.querySelectorAll('.dv-groupview .monaco-editor .view-line span span')];
+		const of = (t) => spans.find((s) => s.textContent === t);
+		const k = of('"compilerOptions"'), v = of('"es2023"');
+		return k && v && getComputedStyle(k).color !== getComputedStyle(v).color;
+	}, null, { timeout: 10_000 }).then(() => true, () => false);
+	check(colours, 'jsconfig.json is highlighted (keys and strings in different colours)');
+
+	await key.click();
+	await page.keyboard.press('End');
+	await page.keyboard.press('Enter');
+	await page.keyboard.type('"noUnused');
+	await page.keyboard.press('Control+Space');
+	const suggest = page.locator('.suggest-widget .monaco-list-row');
+	const completed = await suggest.filter({ hasText: 'noUnusedLocals' }).first().waitFor({ timeout: 15_000 }).then(() => true, () => false);
+	check(completed, `jsconfig.json completes noUnusedLocals (offered: ${(await suggest.allTextContents()).slice(0, 5).join(' | ').slice(0, 120)})`);
+	await page.keyboard.press('Escape');
+	for (let i = 0; i < 10; i++) await page.keyboard.press('Control+z');
+
+	const target = lines.locator('span', { hasText: /^"es2023"$/ }).first();
+	await target.dblclick();
+	await page.keyboard.type('es1999');
+	const flagged = await page.locator('.dv-groupview .monaco-editor .squiggly-warning, .dv-groupview .monaco-editor .squiggly-error').first().waitFor({ timeout: 15_000 }).then(() => true, () => false);
+	check(flagged, 'jsconfig.json flags an unknown target');
+	for (let i = 0; i < 10; i++) await page.keyboard.press('Control+z');
 }
 
 /** Quick switches and a reload must leave one consistent project and server, and keep edits. */
