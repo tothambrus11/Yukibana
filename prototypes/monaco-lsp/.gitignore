@@ -1,0 +1,7 @@
+node_modules/
+app/static/packs/
+app/build/
+app/.svelte-kit/
+*.tsbuildinfo
+# The repository ignores **/lib (TypeScript output); this app keeps sources there.
+!app/src/lib/
