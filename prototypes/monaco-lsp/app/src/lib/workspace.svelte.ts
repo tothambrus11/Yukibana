@@ -7,6 +7,7 @@
 import { monaco } from './monaco';
 import { LanguageClient, type ClientState, type LoadingProgress, type LogLevel } from './lsp/client';
 import { isLanguageId, languageOf, LANGUAGES, type LanguageId } from './languages';
+import { Runner } from './run.svelte';
 import { baseName, loadLanguage, loadProject, parentOf, pathProblem, sampleProject, saveLanguage, saveProject, type Project } from './project';
 
 /** Every project file lives under this folder, as the servers see it. */
@@ -47,6 +48,8 @@ export interface EditorHost {
 	close(path: string): void;
 	/** Closes every tab, before the project is replaced. */
 	closeAll(): void;
+	/** Brings the terminal panel to the front. */
+	showTerminal(): void;
 }
 
 const SAVE_DELAY_MS = 400;
@@ -63,6 +66,8 @@ export class Workspace {
 	progress = $state<LoadingProgress | null>(null);
 	log = $state<LogLine[]>([]);
 	problems = $state<Problem[]>([]);
+	/** The program run from this project, if any, and the terminal's contents. */
+	readonly runner = new Runner();
 
 	private client: LanguageClient | null = null;
 	private readonly models = new Map<string, monaco.editor.ITextModel>();
@@ -122,6 +127,24 @@ export class Workspace {
 			await this.stopClient();
 			this.startClient();
 		});
+	}
+
+	/**
+	 * Runs the project: the language's entry file when the project has one,
+	 * else the file shown. Every file goes along, as last edited.
+	 */
+	run(): void {
+		const language = languageOf(this.language);
+		if (!language.runs) return;
+		const entry = this.models.has(language.entry) ? language.entry : this.active;
+		if (!entry) {
+			this.write('warning', `There is no ${language.entry} to run.`);
+			return;
+		}
+		const files: Record<string, string> = {};
+		for (const [path, model] of this.models) files[path] = model.getValue();
+		this.host?.showTerminal();
+		this.runner.start(this.language, files, entry);
 	}
 
 	/** Saves now instead of after the debounce: the page is being hidden or reloaded. */
@@ -278,6 +301,8 @@ export class Workspace {
 
 	/** Saves the project, stops its server, and removes its files from the editor. */
 	private async closeProject(): Promise<void> {
+		this.runner.stop(false);
+		this.runner.clear();
 		this.flush();
 		await this.stopClient();
 		this.flush(); // edits typed while the server was shutting down

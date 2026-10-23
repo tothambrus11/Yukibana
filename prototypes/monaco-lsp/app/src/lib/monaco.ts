@@ -7,6 +7,9 @@
 import * as monaco from 'monaco-editor/editor/editor.api';
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker';
 
+/** The editors' font stack; the first entry is the bundled web font. */
+export const EDITOR_FONT = "'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+
 // The editor features used, as editor.main.js imports them, minus the ones
 // this app has no use for (diff editor, colour picker, sticky scroll, ...).
 // The `features/*/register` modules are not used: some import only part of a
@@ -63,6 +66,13 @@ import 'monaco-editor/languages/definitions/scala/register';
 // Monaco runs diffing and word-based helpers in a worker of its own; it is
 // the only worker the editor needs, since no Monaco language service is loaded.
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
+
+// Monaco measures character widths once, with whatever font is available at
+// that moment. The editor font is a web font that arrives later, so without
+// a remeasure the caret is drawn at the fallback font's offsets while the
+// text uses JetBrains Mono: the cursor drifts away from what was typed.
+document.fonts.addEventListener('loadingdone', () => monaco.editor.remeasureFonts());
+void document.fonts.load(`13.5px ${EDITOR_FONT.split(',')[0]}`).then(() => monaco.editor.remeasureFonts());
 
 export { monaco };
 

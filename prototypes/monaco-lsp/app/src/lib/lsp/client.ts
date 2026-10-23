@@ -149,7 +149,7 @@ export class LanguageClient {
 		const markup = ['markdown', 'plaintext'] as lsp.MarkupKind[];
 		return {
 			processId: null,
-			clientInfo: { name: 'Yukibana Code' },
+			clientInfo: { name: 'Yukibana Light' },
 			locale: navigator.language,
 			rootUri: this.options.rootUri,
 			workspaceFolders: [{ uri: this.options.rootUri, name: 'workspace' }],

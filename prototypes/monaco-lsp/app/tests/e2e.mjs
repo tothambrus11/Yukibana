@@ -23,11 +23,11 @@ const build = join(here, '..', 'build');
  * whose definition lives in `definitionFile`, and a word to hover.
  */
 const CASES = {
-	python: { file: 'main.py', error: '\nundefined_name_xyz\n', access: '\nPoint(1, 2).', member: 'norm', definition: 'distance', definitionFile: 'geometry.py', hover: 'Point' },
-	javascript: { file: 'main.js', error: '\na.nope();\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'geometry.js', hover: 'Point' },
-	cpp: { file: 'main.cpp', error: '\nint broken = undeclared_xyz;\n', access: '\nvoid f(Point p) { p.', member: 'norm', definition: 'distance', definitionFile: 'geometry', hover: 'Point' },
+	python: { output: 'Point(x=0, y=0) to Point(x=3, y=4): 5.0', file: 'main.py', error: '\nundefined_name_xyz\n', access: '\nPoint(1, 2).', member: 'norm', definition: 'distance', definitionFile: 'geometry.py', hover: 'Point' },
+	javascript: { output: '(0, 0) to (3, 4): 5', file: 'main.js', error: '\na.nope();\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'geometry.js', hover: 'Point' },
+	cpp: { output: 'to', file: 'main.cpp', error: '\nint broken = undeclared_xyz;\n', access: '\nvoid f(Point p) { p.', member: 'norm', definition: 'distance', definitionFile: 'geometry', hover: 'Point' },
 	swift: { file: 'main.swift', error: '\nlet x: Int = "no"\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'Geometry.swift', hover: 'Point' },
-	scala: { file: 'Main.scala', error: '\nval broken: Int = "no"\n', access: '\nval q = Point(1, 2)\nval r = q.', member: 'norm', definition: 'distance', definitionFile: 'Geometry.scala', hover: 'Point' },
+	scala: { output: 'to', file: 'Main.scala', error: '\nval broken: Int = "no"\n', access: '\nval q = Point(1, 2)\nval r = q.', member: 'norm', definition: 'distance', definitionFile: 'Geometry.scala', hover: 'Point' },
 };
 
 const only = process.argv.slice(2);
@@ -116,6 +116,14 @@ async function run(language, c) {
 	await page.keyboard.press('F12');
 	const jumped = await page.locator('.dv-tab.dv-active-tab .dock-tab', { hasText: c.definitionFile }).first().waitFor({ timeout: 20_000 }).then(() => true, () => false);
 	check(jumped, `go to definition of ${c.definition} opens ${c.definitionFile}`);
+
+	if (c.output && existsSync(join(build, 'packs', language, 'runner.js'))) {
+		await page.locator('header button.run').click();
+		const status = page.locator('.terminal .status');
+		const ended = await status.filter({ hasText: /Exited|Stopped/ }).waitFor({ timeout: 240_000 }).then(() => true, () => false);
+		const shown = (await page.locator('.terminal pre').textContent()) ?? '';
+		check(ended && /code 0/.test((await status.textContent()) ?? '') && shown.includes(c.output), `Run prints "${c.output}" (${(await status.textContent())?.trim()}: ${JSON.stringify(shown.slice(0, 200))})`);
+	}
 
 	check(errors.length === 0, `no page errors${errors.length ? ': ' + errors.join('; ') : ''}`);
 	await page.close();

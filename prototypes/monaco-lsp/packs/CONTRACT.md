@@ -81,3 +81,75 @@ simply not used. Positions are UTF-16 (the LSP default).
   what works and what does not, sizes, how long the build takes, any patch
   and why. If the real server named by the task cannot run in a browser,
   the README says so plainly and the pack does not pretend otherwise.
+
+# Running a program
+
+A pack may also run the project. It does so with a second, independent
+module worker, `app/static/packs/<id>/runner.js`, which the app starts when
+the user presses **Run** (and terminates on **Stop** or when the program
+ends). A runner shares nothing with `server.js` at run time, so the language
+server's download is never a prerequisite for running and vice versa; the
+two may of course share files (a toolchain's wasm, headers) by URL so the
+browser and service worker cache them once.
+
+## Protocol
+
+Every message is a plain object with a `type`.
+
+App to runner, once:
+
+```ts
+{ type: 'run',
+  files: Record<string, string>,  // the project: relative path -> text
+  entry: string,                  // the entry file, e.g. "main.py"
+  stdin: SharedArrayBuffer | null }
+```
+
+Runner to app, any number of times:
+
+```ts
+{ type: 'loading', label: string, loaded: number, total: number } // a download, as yukibana/loading
+{ type: 'phase', text: string }        // "Compiling", "Linking", "Running": shown in the status bar
+{ type: 'stdout', text: string }       // program output, as it is produced (not buffered to the end)
+{ type: 'stderr', text: string }       // program errors, and compiler diagnostics
+{ type: 'exit', code: number }         // last message; 0 = success. Compile errors exit non-zero
+                                       // after printing them to stderr.
+```
+
+## Standard input
+
+The page is cross-origin isolated, so the app passes a `SharedArrayBuffer`
+(`stdin`, or `null` when the page is not isolated, in which case reading
+stdin gives end of file) laid out as:
+
+```text
+Int32[0]  state: 0 = idle, 1 = runner waiting for input, 2 = input ready, 3 = end of file
+Int32[1]  length in bytes of the input in the data area
+bytes 8.. data area (64 KiB): UTF-8 input, normally one line including its "\n"
+```
+
+A runner that needs input (`input()`, `std::cin`, `readLine()`) and has no
+buffered input left:
+
+1. stores 1 in `state` and posts `{ type: 'stdin' }` (the app then shows an
+   input line in the terminal),
+2. blocks with `Atomics.wait(state, 0, 1)`,
+3. on 2 reads `length` bytes of data, stores 0 in `state` and continues;
+   on 3 treats it as end of file.
+
+The app writes the data, then stores 2 (or 3 for Ctrl-D) in `state` and
+calls `Atomics.notify`. A runner must flush its stdout before waiting, so a
+prompt printed without a newline is visible.
+
+## Requirements
+
+* The same as for servers: everything from `/packs/<id>/`, small,
+  compressed siblings, honest README section ("Running"), a test
+  (`test-run.mjs` or a section of `test.mjs`) that runs the sample project
+  and a program reading two lines of stdin.
+* The sample projects in `app/src/lib/languages.ts` are what runs by
+  default: entry `main.py`, `main.js`, `main.cpp` (with every `.cpp` of the
+  project compiled and linked), `main.swift`, `Main.scala` (`@main` or
+  `object Main { def main }`).
+* A program that runs forever must be stoppable: the app terminates the
+  worker, so a runner must not depend on finishing cleanly.

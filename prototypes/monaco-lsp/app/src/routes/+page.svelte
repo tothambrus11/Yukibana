@@ -43,6 +43,7 @@
 	const errors = $derived(workspace.problems.filter((p) => p.marker.severity === monaco.MarkerSeverity.Error).length);
 	const warnings = $derived(workspace.problems.filter((p) => p.marker.severity === monaco.MarkerSeverity.Warning).length);
 	const percent = $derived(workspace.progress && workspace.progress.total > 0 ? Math.min(100, (100 * workspace.progress.loaded) / workspace.progress.total) : null);
+	const language = $derived(languageOf(workspace.language));
 	const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
 
 	function reset() {
@@ -52,9 +53,9 @@
 </script>
 
 <header class="bar">
-	<a class="brand" href="./" aria-label="Yukibana Code">
-		<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 6l5.5 16.5H55L41 33l5.5 17L32 39.5 17.5 50 23 33 9 22.5h17.5z" /></svg>
-		<span class="name">Yukibana</span><span class="product">Code</span>
+	<a class="brand" href="./" aria-label="Yukibana Light">
+		<img src="logo-64.png" alt="" width="28" height="28" />
+		<span class="name">Yukibana</span><span class="product">Light</span>
 	</a>
 
 	<label class="select">
@@ -66,6 +67,16 @@
 		</select>
 		<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>
 	</label>
+
+	{#if workspace.runner.busy}
+		<button class="button run stop" onclick={() => workspace.runner.stop()} title="Stop the program">
+			<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1" /></svg>Stop
+		</button>
+	{:else}
+		<button class="button run" onclick={() => workspace.run()} disabled={!language.runs} title={language.runs ? 'Run the project (Ctrl+Enter)' : language.cannotRun}>
+			<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7-4.5z" /></svg>Run
+		</button>
+	{/if}
 
 	<button class="button" onclick={reset} title="Replace this language's project with the sample">Reset project</button>
 	<button class="button" onclick={() => void workspace.restartServer()} title="Restart the language server">Restart server</button>
@@ -129,10 +140,9 @@
 		color: var(--white);
 		text-decoration: none;
 	}
-	.brand svg {
-		width: 1.6rem;
-		height: 1.6rem;
-		fill: var(--accent-high);
+	.brand img {
+		width: 1.75rem;
+		height: 1.75rem;
 	}
 	.name {
 		font-weight: 700;
@@ -182,6 +192,26 @@
 		font: inherit;
 		font-size: 0.85rem;
 		cursor: pointer;
+	}
+	.run {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		border-color: var(--accent);
+		color: var(--white);
+		font-weight: 600;
+	}
+	.run svg {
+		width: 0.85rem;
+		height: 0.85rem;
+		fill: var(--accent-high);
+	}
+	.run.stop svg {
+		fill: var(--red-high);
+	}
+	.run:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
 	}
 	.button:hover,
 	.button:focus-visible,
@@ -303,7 +333,7 @@
 			gap: 0.4rem;
 		}
 		.product,
-		.button {
+		.button:not(.run) {
 			display: none;
 		}
 	}

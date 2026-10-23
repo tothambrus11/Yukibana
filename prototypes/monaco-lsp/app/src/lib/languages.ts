@@ -23,6 +23,12 @@ export interface Language {
 	sample: Files;
 	/** Extension suggested for a new file. */
 	extension: string;
+	/**
+	 * Whether the pack has a runner (`runner.js`) that can run the project
+	 * from `entry`. When false, `cannotRun` says why, for the Run button.
+	 */
+	runs: boolean;
+	cannotRun?: string;
 }
 
 export const LANGUAGES: readonly Language[] = [
@@ -33,6 +39,7 @@ export const LANGUAGES: readonly Language[] = [
 		settings: { python: { analysis: { typeCheckingMode: 'standard', diagnosticMode: 'workspace' } } },
 		entry: 'main.py',
 		extension: '.py',
+		runs: true,
 		sample: {
 			'main.py': `from geometry import Point, distance
 
@@ -76,6 +83,7 @@ def distance(a: Point, b: Point) -> float:
 		settings: {},
 		entry: 'main.js',
 		extension: '.js',
+		runs: true,
 		sample: {
 			'main.js': `// @ts-check
 import { Point, distance } from './geometry.js';
@@ -135,6 +143,7 @@ export function distance(a, b) {
 		settings: {},
 		entry: 'main.cpp',
 		extension: '.cpp',
+		runs: true,
 		sample: {
 			'main.cpp': `#include <cstdio>
 #include <vector>
@@ -185,6 +194,8 @@ double distance(const Point &a, const Point &b) {
 		settings: {},
 		entry: 'main.swift',
 		extension: '.swift',
+		runs: false,
+		cannotRun: 'Swift programs cannot run in the browser: no build of the Swift compiler runs in WebAssembly.',
 		sample: {
 			'main.swift': `let a = Point(x: 0, y: 0)
 let b = Point(x: 3, y: 4)
@@ -218,6 +229,7 @@ func distance(_ a: Point, _ b: Point) -> Double {
 		settings: {},
 		entry: 'Main.scala',
 		extension: '.scala',
+		runs: true,
 		sample: {
 			'Main.scala': `@main def run(): Unit =
   val a = Point(0, 0)

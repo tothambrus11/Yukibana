@@ -1,0 +1,19 @@
+{
+  "name": "yukibana-pack-javascript",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "JavaScript/TypeScript language pack: an LSP server over the TypeScript LanguageService, in a module Web Worker.",
+  "scripts": {
+    "build": "./build.sh",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node test.mjs"
+  },
+  "devDependencies": {
+    "es-module-lexer": "3.0.3",
+    "esbuild": "0.28.2",
+    "playwright-core": "1.56.1",
+    "typescript": "6.0.3",
+    "vscode-languageserver-protocol": "3.18.5"
+  }
+}
