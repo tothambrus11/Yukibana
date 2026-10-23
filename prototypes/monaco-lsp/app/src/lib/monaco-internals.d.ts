@@ -7,7 +7,11 @@ type ServiceId = { readonly _serviceBrand: undefined };
 
 declare module 'monaco-editor/editor/standalone/browser/standaloneServices' {
 	/** The services of every standalone editor on the page; `get` creates one on first use. */
-	export const StandaloneServices: { get(id: ServiceId): unknown };
+	export const StandaloneServices: {
+		get(id: ServiceId): unknown;
+		/** Starts the services, with the given ones (by service id) instead of Monaco's own; a no-op once started. */
+		initialize(overrides: Record<string, unknown>): unknown;
+	};
 }
 declare module 'monaco-editor/platform/list/browser/listService' {
 	/** Tracks the list or tree that last had focus (`lastFocusedList`). */

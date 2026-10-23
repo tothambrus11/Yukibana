@@ -10,22 +10,11 @@ import { isLanguageId, languageOf, LANGUAGES, type LanguageId } from './language
 import { Runner } from './run.svelte';
 import { exportProject } from './export';
 import { zip } from './zip';
-import { baseName, loadLanguage, loadProject, parentOf, pathProblem, sampleProject, saveLanguage, saveProject, type Project } from './project';
-
-/** Every project file lives under this folder, as the servers see it. */
-export const ROOT_URI = 'file:///workspace/';
+import { baseName, loadLanguage, loadProject, parentOf, pathOf, pathProblem, ROOT_URI, sampleProject, saveLanguage, saveProject, type Project } from './project';
 
 /** The model URI of a project path. */
 export function uriOf(path: string): monaco.Uri {
 	return monaco.Uri.parse(ROOT_URI + path.split('/').map(encodeURIComponent).join('/'));
-}
-
-const ROOT_PATH = '/workspace/';
-
-/** The project path of a model URI, or `null` for a URI outside the workspace. */
-export function pathOf(uri: monaco.Uri): string | null {
-	// `uri.path` is decoded; `toString(true)` would still escape `#` and `?`.
-	return uri.scheme === 'file' && !uri.authority && uri.path.startsWith(ROOT_PATH) ? uri.path.slice(ROOT_PATH.length) : null;
 }
 
 /** One line of the output panel. */

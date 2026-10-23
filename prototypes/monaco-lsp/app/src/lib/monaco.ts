@@ -14,12 +14,30 @@ import { StandaloneServices } from 'monaco-editor/editor/standalone/browser/stan
 import { OneReference } from 'monaco-editor/editor/contrib/gotoSymbol/browser/referencesModel';
 import { ICommandService } from 'monaco-editor/platform/commands/common/commands';
 import { IListService } from 'monaco-editor/platform/list/browser/listService';
+import { pathOf } from './project';
 
 /** The part of Monaco's internal list and tree widgets the references peek's keys use. */
 type List = {
 	getFocus(): unknown[];
 	setSelection(elements: unknown[], browserEvent: KeyboardEvent): void;
+	getInput?(): unknown;
+	expand?(element: unknown): Promise<boolean>;
+	onDidChangeModel?(listener: () => void): { dispose(): void };
 };
+
+// How Monaco names a file to people: the references peek's title and file
+// rows, for example. Standalone Monaco's label service shows a file URI as
+// a platform path (`\workspace` on Windows) and has no idea of a workspace.
+// This one is the standalone service with the project folder as the
+// workspace: a project file is shown by its project path, so a file at the
+// root has no folder to show. Monaco reads overrides only when its services
+// start, which is before any editor or other service exists: here.
+StandaloneServices.initialize({
+	labelService: {
+		getUriLabel: (uri: monaco.Uri) => pathOf(uri) ?? (uri.scheme === 'file' ? uri.fsPath : uri.path),
+		getUriBasenameLabel: (uri: monaco.Uri) => uri.path.slice(uri.path.lastIndexOf('/') + 1),
+	},
+});
 
 /** The editors' font stack; the first entry is the bundled web font. */
 export const EDITOR_FONT = "'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
@@ -106,6 +124,33 @@ jsonDefaults.setDiagnosticsOptions({
 // does; the tree then opens it as a preview. Enter is taken before the tree
 // gets it and runs `openReference`, Monaco's own command for going to the
 // focused reference and closing the peek.
+//
+// The peek also opens with every file's references shown, not only the
+// current file's, so the arrows walk through all of them. Monaco's tree
+// collapses every node it has not been told to expand; the peek focuses its
+// tree when it opens, and that is when the files are
+// expanded, once per peek (as soon as the tree has them).
+const expanded = new WeakSet<object>();
+/** Expands every file of the peek's references, once; false while the tree has none yet. */
+function expandFiles(list: List): boolean {
+	const input = list.getInput?.();
+	if (typeof input !== 'object' || input === null) return false;
+	if (expanded.has(input)) return true;
+	expanded.add(input);
+	// A peek over one file has that file as its input; over several, a model with `groups`.
+	const groups = 'groups' in input && Array.isArray(input.groups) ? (input.groups as unknown[]) : [];
+	for (const group of groups) void list.expand?.(group);
+	return true;
+}
+window.addEventListener('focusin', (e) => {
+	if (!(e.target instanceof Element) || !e.target.closest('.reference-zone-widget .ref-tree')) return;
+	const list = (StandaloneServices.get(IListService) as { lastFocusedList?: List }).lastFocusedList;
+	if (!list || expandFiles(list) || !list.onDidChangeModel) return;
+	// Focused before its references arrived: expand them when they do.
+	const listener = list.onDidChangeModel(() => {
+		if (expandFiles(list)) listener.dispose();
+	});
+});
 window.addEventListener(
 	'keydown',
 	(e) => {

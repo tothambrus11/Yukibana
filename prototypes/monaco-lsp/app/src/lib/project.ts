@@ -16,6 +16,23 @@ export interface Project {
 	active: string | null;
 }
 
+/** Every project file lives under this folder, as the servers see it. */
+export const ROOT_URI = 'file:///workspace/';
+
+const ROOT_PATH = '/workspace/';
+
+/**
+ * The project path of a URI (a `monaco.Uri`, or anything with its parts),
+ * or `null` for a URI outside the workspace. The workspace folder itself is
+ * `''`.
+ */
+export function pathOf(uri: { scheme: string; authority: string; path: string }): string | null {
+	if (uri.scheme !== 'file' || uri.authority) return null;
+	// `uri.path` is decoded; `toString(true)` would still escape `#` and `?`.
+	if (uri.path === ROOT_PATH.slice(0, -1)) return '';
+	return uri.path.startsWith(ROOT_PATH) ? uri.path.slice(ROOT_PATH.length) : null;
+}
+
 const VERSION = 1;
 const key = (language: LanguageId) => `yukibana.code.v${VERSION}.project.${language}`;
 const LANGUAGE_KEY = `yukibana.code.v${VERSION}.language`;

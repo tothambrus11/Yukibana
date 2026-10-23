@@ -189,6 +189,11 @@ async function peek(page, check) {
 	await page.keyboard.press('Shift+F12');
 	const widget = page.locator('.reference-zone-widget');
 	await widget.waitFor({ timeout: 20_000 });
+	// Every file's references are shown at once, and files are named by their project path.
+	const allShown = await widget.locator('.monaco-list-row', { hasText: /^\s*class Point:/ }).first().waitFor({ timeout: 5_000 }).then(() => true, () => false);
+	check(allShown, "the references peek opens with every file's references shown (geometry.py's too)");
+	const labels = (await widget.locator('.peekview-title, .monaco-list-row .label-description').allTextContents()).join(' | ');
+	check(!/workspace/.test(labels), `the references peek names files by project path (${labels})`);
 	const selected = () => widget.locator('.monaco-list-row.selected').first().textContent();
 	const before = await selected();
 	await page.keyboard.press('ArrowDown');
