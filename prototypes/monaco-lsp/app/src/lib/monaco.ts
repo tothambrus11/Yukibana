@@ -10,6 +10,16 @@ import * as monaco from 'monaco-editor/editor/editor.api';
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker';
 import JsonWorker from 'monaco-editor/languages/features/json/json.worker?worker';
 import { jsonDefaults } from 'monaco-editor/languages/features/json/register';
+import { StandaloneServices } from 'monaco-editor/editor/standalone/browser/standaloneServices';
+import { OneReference } from 'monaco-editor/editor/contrib/gotoSymbol/browser/referencesModel';
+import { ICommandService } from 'monaco-editor/platform/commands/common/commands';
+import { IListService } from 'monaco-editor/platform/list/browser/listService';
+
+/** The part of Monaco's internal list and tree widgets the references peek's keys use. */
+type List = {
+	getFocus(): unknown[];
+	setSelection(elements: unknown[], browserEvent: KeyboardEvent): void;
+};
 
 /** The editors' font stack; the first entry is the bundled web font. */
 export const EDITOR_FONT = "'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
@@ -85,6 +95,35 @@ jsonDefaults.setDiagnosticsOptions({
 		fileMatch: [`${name}.json`, `*/${name}.json`, `${name}.*.json`],
 	})),
 });
+
+// The references peek (Shift+F12, or F12 with several definitions) behaves
+// as in VS Code: Up and Down show each reference in the preview, Enter goes
+// to it and closes the peek. Standalone Monaco lacks VS Code's list
+// commands: its tree handles the keys itself, so they only move the focus
+// (arrows) or preview the focused reference (Enter), and keybindings never
+// see them. After an arrow moves the focus, the focused reference is
+// selected with the key's event, which is what VS Code's `list.focusDown`
+// does; the tree then opens it as a preview. Enter is taken before the tree
+// gets it and runs `openReference`, Monaco's own command for going to the
+// focused reference and closing the peek.
+window.addEventListener(
+	'keydown',
+	(e) => {
+		if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+		if (!(e.target instanceof Element) || !e.target.closest('.reference-zone-widget .ref-tree')) return;
+		const list = (StandaloneServices.get(IListService) as { lastFocusedList?: List }).lastFocusedList;
+		if (!list) return;
+		if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+			// The tree moves its focus as usual; the focused reference is selected once it has.
+			setTimeout(() => list.setSelection(list.getFocus(), e));
+		} else if (e.key === 'Enter' && list.getFocus()[0] instanceof OneReference) {
+			e.preventDefault();
+			e.stopPropagation();
+			void (StandaloneServices.get(ICommandService) as { executeCommand(id: string): Promise<unknown> }).executeCommand('openReference');
+		}
+	},
+	true,
+);
 
 // Monaco measures character widths once, with whatever font is available at
 // that moment. The editor font is a web font that arrives later, so without

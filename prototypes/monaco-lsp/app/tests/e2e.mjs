@@ -133,6 +133,7 @@ async function run(language, c) {
 	}
 
 	if (language === 'javascript') await settings(page, check);
+	if (language === 'python') await peek(page, check);
 
 	check(errors.length === 0, `no page errors${errors.length ? ': ' + errors.join('; ') : ''}`);
 	await page.close();
@@ -169,6 +170,25 @@ async function settings(page, check) {
 	const flagged = await page.locator('.dv-groupview .monaco-editor .squiggly-warning, .dv-groupview .monaco-editor .squiggly-error').first().waitFor({ timeout: 15_000 }).then(() => true, () => false);
 	check(flagged, 'jsconfig.json flags an unknown target');
 	for (let i = 0; i < 10; i++) await page.keyboard.press('Control+z');
+}
+
+/** In the references peek, arrows preview each reference and Enter goes to it and closes the peek, as in VS Code. */
+async function peek(page, check) {
+	await page.locator('.explorer .row .name', { hasText: /^main\.py$/ }).click();
+	await page.locator('.dv-groupview .view-line span', { hasText: /^Point$/ }).first().click();
+	await page.keyboard.press('Shift+F12');
+	const widget = page.locator('.reference-zone-widget');
+	await widget.waitFor({ timeout: 20_000 });
+	const selected = () => widget.locator('.monaco-list-row.selected').first().textContent();
+	const before = await selected();
+	await page.keyboard.press('ArrowDown');
+	const moved = await page.waitForFunction((b) => document.querySelector('.reference-zone-widget .monaco-list-row.selected')?.textContent !== b, before, { timeout: 5_000 }).then(() => true, () => false);
+	const target = (await selected())?.trim();
+	check(moved, `Down in the references peek previews the next reference (${target})`);
+	await page.keyboard.press('Enter');
+	const closed = await widget.waitFor({ state: 'detached', timeout: 5_000 }).then(() => true, () => false);
+	const line = await page.locator('.dv-groupview .monaco-editor .current-line').count();
+	check(closed && line > 0, 'Enter in the references peek goes to the reference and closes the peek');
 }
 
 /** Quick switches and a reload must leave one consistent project and server, and keep edits. */
