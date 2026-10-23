@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Builds the Python pack (basedpyright, browser build) from upstream source
+# into ../../app/static/packs/python/. Idempotent: each step is skipped when
+# its output exists in the cache. Needs git, node 22, pnpm (the version the
+# upstream lockfile pins is fetched with npx if pnpm differs), python3 and uv.
+set -euo pipefail
+
+BASEDPYRIGHT_TAG=v1.40.2
+BASEDPYRIGHT_COMMIT=344759687c2fff3bd0a7d6a83a9d1847f806b795
+PNPM_VERSION=11.21.0      # packageManager in upstream package.json
+DOCIFY_VERSION=1.2.1      # as pinned in upstream uv.lock
+DOCSTUBS_PYTHON=3.13
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUT="$(cd "$HERE/../.." && pwd)/app/static/packs/python"
+CACHE="${PACK_CACHE:-$HOME/.cache/yukibana-packs}/python"
+SRC="$CACHE/basedpyright-$BASEDPYRIGHT_TAG"
+NICE="nice -n 10"
+mkdir -p "$CACHE" "$OUT"
+
+pnpm_() {
+    if [ "$(pnpm --version 2>/dev/null || true)" = "$PNPM_VERSION" ]; then $NICE pnpm "$@"; else $NICE npx -y "pnpm@$PNPM_VERSION" "$@"; fi
+}
+
+# 1. Upstream source at a pinned commit.
+if [ ! -d "$SRC/.git" ]; then
+    git clone --quiet --depth 1 --branch "$BASEDPYRIGHT_TAG" https://github.com/detachhead/basedpyright "$SRC"
+fi
+actual="$(git -C "$SRC" rev-parse HEAD)"
+[ "$actual" = "$BASEDPYRIGHT_COMMIT" ] || { echo "basedpyright $BASEDPYRIGHT_TAG is $actual, expected $BASEDPYRIGHT_COMMIT" >&2; exit 1; }
+
+# 2. Build dependencies from upstream's lockfile, for the two packages the
+#    bundle is made of: browser-pyright reaches pyright-internal through
+#    tsconfig paths rather than a package dependency, so both are named.
+if [ ! -d "$SRC/packages/pyright-internal/node_modules/vscode-languageserver" ] \
+    || [ ! -d "$SRC/packages/browser-pyright/node_modules/@rspack" ]; then
+    (cd "$SRC" && pnpm_ install --frozen-lockfile --ignore-scripts --filter browser-basedpyright --filter pyright-internal \
+        --config.store-dir="$CACHE/pnpm-store")
+fi
+
+# 3. Docstubs: typeshed plus docstrings of compiled stdlib modules, generated
+#    by upstream's own script with docify, so hover on `len` or `str.split`
+#    has documentation. Upstream CI runs it under 3.10-3.15 on three OSes;
+#    here it is one interpreter on Linux (see README).
+if [ ! -f "$SRC/docstubs/.done" ]; then
+    rm -rf "$SRC/docstubs"
+    (cd "$SRC" && UV_CACHE_DIR="$CACHE/uv-cache" $NICE uv run --quiet --no-project --python "$DOCSTUBS_PYTHON" \
+        --with "docify==$DOCIFY_VERSION" python build/py_old/generate_docstubs.py 2>&1 | grep -v '^could not import' || true)
+    [ -f "$SRC/docstubs/stdlib/builtins.pyi" ] || { echo "docstub generation failed" >&2; exit 1; }
+    touch "$SRC/docstubs/.done"
+fi
+
+# 4. Stdlib stubs archive, fetched by the worker at startup.
+python3 -I "$HERE/scripts/make-stubs-tar.py" "$SRC/docstubs" "$OUT/typeshed-stdlib.tar.gz"
+
+# 5. The worker bundle: our entry and config dropped next to upstream's
+#    browser-pyright sources (upstream files are not modified), built with
+#    upstream's rspack and ts-loader.
+rm -rf "$SRC/packages/browser-pyright/src-yukibana"
+cp -r "$HERE/src" "$SRC/packages/browser-pyright/src-yukibana"
+rm -f "$OUT/server.js" "$OUT/server.js.gz" "$OUT/server.js.br"
+(cd "$SRC/packages/browser-pyright" && PACK_OUT="$OUT" $NICE node_modules/.bin/rspack build \
+    -c src-yukibana/rspack.config.js --mode production)
+
+# 6. Licences and precompressed siblings.
+cp "$SRC/LICENSE.txt" "$OUT/LICENSE-basedpyright.txt"
+cp "$SRC/packages/pyright-internal/typeshed-fallback/LICENSE" "$OUT/LICENSE-typeshed.txt"
+node "$HERE/scripts/compress.mjs" "$OUT/server.js"
+
+# 7. The runner (Pyodide), a separate download the language server does not
+#    use; see build-runner.sh.
+"$HERE/build-runner.sh"
+echo "built $(du -sh "$OUT" | cut -f1) into $OUT"
