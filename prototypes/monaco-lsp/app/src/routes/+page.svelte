@@ -81,6 +81,7 @@
 		{/if}
 	{/if}
 
+	<button class="button" onclick={() => void workspace.download()} title="Download the project as a zip, with the build files an IDE needs">Download</button>
 	<button class="button" onclick={reset} title="Replace this language's project with the sample">Reset project</button>
 	<button class="button" onclick={() => void workspace.restartServer()} title="Restart the language server">Restart server</button>
 

@@ -8,6 +8,8 @@ import { monaco } from './monaco';
 import { LanguageClient, type ClientState, type LoadingProgress, type LogLevel } from './lsp/client';
 import { isLanguageId, languageOf, LANGUAGES, type LanguageId } from './languages';
 import { Runner } from './run.svelte';
+import { exportProject } from './export';
+import { zip } from './zip';
 import { baseName, loadLanguage, loadProject, parentOf, pathProblem, sampleProject, saveLanguage, saveProject, type Project } from './project';
 
 /** Every project file lives under this folder, as the servers see it. */
@@ -146,6 +148,38 @@ export class Workspace {
 		for (const [path, model] of this.models) files[path] = model.getValue();
 		this.host?.showTerminal();
 		this.runner.start(this.language, files, entry, mode);
+	}
+
+	/**
+	 * Downloads the project as `<language>-project.zip`, for an IDE: its files
+	 * as last edited and its empty folders, in a folder of the same name, plus
+	 * the build files, README and .gitignore it lacks (export.ts). Says in the
+	 * output panel what was generated.
+	 */
+	async download(): Promise<void> {
+		const language = languageOf(this.language);
+		const files: Record<string, string> = {};
+		for (const [path, model] of this.models) files[path] = model.getValue();
+		const exported = exportProject(language, files);
+		const paths = Object.keys(exported.files).sort();
+		const empty = this.allFolders().filter((f) => !paths.some((p) => p.startsWith(f + '/')) && !this.folders.some((g) => g.startsWith(f + '/')));
+		const name = `${language.id}-project`;
+		try {
+			const archive = await zip([
+				...empty.map((f) => ({ path: `${name}/${f}/` })),
+				...paths.map((p) => ({ path: `${name}/${p}`, text: exported.files[p] ?? '' })),
+			]);
+			const url = URL.createObjectURL(archive);
+			const link = Object.assign(document.createElement('a'), { href: url, download: `${name}.zip` });
+			link.click();
+			// The download has its own copy once it starts; a minute is ample.
+			setTimeout(() => URL.revokeObjectURL(url), 60_000);
+		} catch (e) {
+			this.write('error', `Could not make the zip archive: ${e instanceof Error ? e.message : String(e)}`);
+			return;
+		}
+		const generated = exported.generated.length ? `, with ${exported.generated.join(', ')} generated` : '';
+		this.write('info', `Downloaded ${name}.zip${generated}.`);
 	}
 
 	/** Saves now instead of after the debounce: the page is being hidden or reloaded. */

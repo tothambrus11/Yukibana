@@ -43,7 +43,11 @@ formatting and semantic highlighting, as far as each language server offers
 them. Run (Ctrl+Enter) compiles and runs the project in a worker, with a
 terminal that can read input. Test (Ctrl+Shift+Enter) runs the project's
 tests in `tests/` (`Tests/` for Swift): pytest, `node:test`, GoogleTest or
-XCTest; Scala has no Test yet.
+XCTest; Scala has no Test yet. Download saves the project as
+`<language>-project.zip` for an IDE: its files as they are, at the same
+paths, plus the build files it lacks (CMakeLists.txt, Package.swift,
+pyproject.toml, package.json or build.sbt, set up for the flat layout), a
+README.md with the commands and a .gitignore.
 
 | Language | Language server | Runs with | Download to edit | More to run |
 | --- | --- | --- | --- | --- |
@@ -82,4 +86,7 @@ what does not work.
 Each pack has `test.mjs`, which drives its server headlessly in Chromium.
 `app/tests/e2e.mjs` drives the built app for every built pack: a server
 starts, an error is reported, completion, hover, definition, Run prints the
-expected output, and project switching keeps edits.
+expected output, project switching keeps edits, and Download saves a valid
+zip. `app/tests/export.mjs` downloads each sample as the app does and builds,
+runs and tests it with CMake and CTest, SwiftPM, Node, pytest and sbt,
+skipping (and saying so) any tool the machine lacks.

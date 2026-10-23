@@ -7,8 +7,9 @@
 //
 // Serves app/build with ../serve.py on a free port. Exits non-zero naming
 // every check that failed.
-import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,7 +27,7 @@ const CASES = {
 	python: { output: 'Point(x=0, y=0) to Point(x=3, y=4): 5.0', testOutput: '6 passed', file: 'main.py', error: '\nundefined_name_xyz\n', access: '\nPoint(1, 2).', member: 'norm', definition: 'distance', definitionFile: 'geometry.py', hover: 'Point' },
 	javascript: { output: '(0, 0) to (3, 4): 5', testOutput: 'ℹ pass 4', file: 'main.js', error: '\na.nope();\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'geometry.js', hover: 'Point' },
 	cpp: { output: '5.000000', testOutput: '[  PASSED  ] 3 tests.', file: 'main.cpp', error: '\nint broken = undeclared_xyz;\n', access: '\nvoid f(Point p) { p.', member: 'norm', definition: 'distance', definitionFile: 'geometry', hover: 'Point' },
-	swift: { output: 'to', file: 'main.swift', error: '\nlet x: Int = "no"\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'Geometry.swift', hover: 'Point' },
+	swift: { output: 'to', testOutput: 'Executed 2 tests, with 0 failures', file: 'main.swift', error: '\nlet x: Int = "no"\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'Geometry.swift', hover: 'Point' },
 	scala: { output: 'to', file: 'Main.scala', error: '\nval broken: Int = "no"\n', access: '\nval q = Point(1, 2)\nval r = q.', member: 'norm', definition: 'distance', definitionFile: 'Geometry.scala', hover: 'Point' },
 };
 
@@ -54,6 +55,7 @@ try {
 		}
 	}
 	if (languages.includes('python') && languages.includes('javascript')) await switching();
+	await downloading();
 } finally {
 	await browser.close();
 	server.kill();
@@ -226,5 +228,34 @@ async function switching() {
 	await page.locator('footer .state', { hasText: 'basedpyright' }).waitFor({ timeout: 60_000 });
 	const text = await page.locator('.dv-groupview .view-lines').first().textContent();
 	check(text?.replaceAll('\u00a0', ' ').includes('kept across reload') ?? false, 'an edit made just before a reload is kept');
+	await page.close();
+}
+
+/**
+ * Download saves <language>-project.zip, a zip that Python's zipfile reads
+ * without error, holding the project's files in a folder of that name and
+ * the build file generated for it. Needs no pack: nothing is compiled.
+ */
+async function downloading() {
+	const page = await browser.newPage({ viewport: { width: 1400, height: 850 }, acceptDownloads: true });
+	const check = (ok, what) => {
+		console.log(`${ok ? 'ok  ' : 'FAIL'} download: ${what}`);
+		if (!ok) failures.push(`download: ${what}`);
+	};
+	await page.goto(`http://127.0.0.1:${port}/`);
+	await page.evaluate(() => localStorage.clear());
+	await page.reload();
+	await page.selectOption('header select', 'cpp');
+	await page.locator('.explorer .row .name', { hasText: 'compile_flags.txt' }).waitFor({ timeout: 30_000 });
+	const [download] = await Promise.all([page.waitForEvent('download'), page.click('header button:has-text("Download")')]);
+	const dir = mkdtempSync(join(tmpdir(), 'yukibana-download-'));
+	const path = join(dir, download.suggestedFilename());
+	await download.saveAs(path);
+	check(download.suggestedFilename() === 'cpp-project.zip', `the file is called ${download.suggestedFilename()}`);
+	const listing = spawnSync('python3', ['-I', '-c', 'import sys, zipfile\nz = zipfile.ZipFile(sys.argv[1])\nassert z.testzip() is None\nprint("\\n".join(z.namelist()))', path], { encoding: 'utf8' });
+	const names = listing.stdout.trim().split('\n');
+	const expected = ['cpp-project/CMakeLists.txt', 'cpp-project/README.md', 'cpp-project/.gitignore', 'cpp-project/main.cpp', 'cpp-project/geometry.h', 'cpp-project/tests/geometry_test.cpp', 'cpp-project/compile_flags.txt'];
+	check(listing.status === 0 && expected.every((n) => names.includes(n)), `the zip is valid and holds the project and its CMakeLists.txt (${names.join(', ')}${listing.stderr})`);
+	rmSync(dir, { recursive: true, force: true });
 	await page.close();
 }

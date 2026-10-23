@@ -156,6 +156,9 @@
 		<button title="New folder" aria-label="New folder" onclick={() => startCreate('folder')}>
 			<svg viewBox="0 0 16 16"><path d="M1.5 3.5a1 1 0 0 1 1-1h3.5l1.5 1.5h6a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1zM8 7v4M6 9h4" /></svg>
 		</button>
+		<button title="Download the project for an IDE" aria-label="Download the project" onclick={() => void workspace.download()}>
+			<svg viewBox="0 0 16 16"><path d="M8 2v8M4.5 6.5L8 10l3.5-3.5M2.5 11v2a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-2" /></svg>
+		</button>
 		<button title="Collapse folders" aria-label="Collapse folders" onclick={() => (collapsed = new Set(folders))}>
 			<svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" transform="rotate(180 8 8)" /></svg>
 		</button>

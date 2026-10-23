@@ -307,6 +307,7 @@ func distance(_ a: Point, _ b: Point) -> Double {
 }
 `,
 			'Tests/GeometryTests.swift': `import XCTest
+@testable import App
 
 final class GeometryTests: XCTestCase {
     func testNorm() {

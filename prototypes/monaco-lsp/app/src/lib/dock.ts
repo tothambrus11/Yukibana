@@ -111,6 +111,11 @@ class EditorRenderer implements IContentRenderer {
 			keybindings: [KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.Enter],
 			run: () => this.workspace.run('test'),
 		});
+		editor.addAction({
+			id: 'yukibana.download',
+			label: 'Download Project for an IDE',
+			run: () => this.workspace.download(),
+		});
 	}
 
 	focus(): void {
