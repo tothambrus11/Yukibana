@@ -1,0 +1,14 @@
+{
+    "name": "yukibana-pack-scala",
+    "private": true,
+    "description": "Yukibana Scala pack: the Scala 3 compiler compiled to JavaScript with Scala.js, in a module Web Worker. The build uses sbt (see build.sh); this file only holds the test's dependency.",
+    "type": "module",
+    "scripts": {
+        "build": "./build.sh",
+        "test": "node test.mjs"
+    },
+    "devDependencies": {
+        "esbuild": "0.25.12",
+        "playwright-core": "1.56.1"
+    }
+}

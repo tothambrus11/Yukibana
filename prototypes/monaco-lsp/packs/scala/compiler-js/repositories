@@ -1,0 +1,5 @@
+[repositories]
+  local
+  gcs-central-mirror: https://maven-central.storage-download.googleapis.com/maven2/
+  maven-central
+  sbt-ivy-releases: https://repo.scala-sbt.org/scalasbt/ivy-releases/, [organization]/[module]/[revision]/[type]s/[artifact](-[classifier]).[ext], bootOnly
