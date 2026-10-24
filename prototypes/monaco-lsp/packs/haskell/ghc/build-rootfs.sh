@@ -105,6 +105,15 @@ cp "$BUILD/libyuki.so" "$ROOT/tmp/libyuki.so"
 mkdir -p "$OUT"
 tar -C "$ROOT" --owner=0 --group=0 --numeric-owner --sort=name --mtime=@0 -cf "$OUT/rootfs.tar" tmp
 cp "$LIBDIR"/dyld.mjs "$LIBDIR"/post-link.mjs "$LIBDIR"/prelude.mjs "$OUT/"
+# The licences of GHC and of every package in the root file system, as their
+# bindist and store have them.
+{
+    for f in $(find "$PREFIX/wasm32-wasi-ghc" "$STORE" -type f \( -iname 'LICENSE' -o -iname 'LICENSE.*' -o -iname 'COPYING*' \) | sort); do
+        printf '==== %s\n\n' "${f#"$PREFIX/"}"
+        cat "$f"
+        printf '\n\n'
+    done
+} > "$OUT/LICENSE-ghc-and-libraries.txt"
 BINDIST_URL=$(jq -r ".\"wasm32-wasi-ghc-$FLAVOUR\".url" "$PREFIX/../ghc-wasm-meta-autogen.json" 2>/dev/null || true)
 cat > "$OUT/versions.json" <<EOF
 {
@@ -126,7 +135,16 @@ log "smoke test (Node)"
 # Node's WASI sees the real file system, so the root goes where the
 # browser's will be.
 cp -r "$ROOT/tmp/." /tmp/
-node "$HERE/smoke.mjs" "$OUT" "$HS_SEARCHDIR" "$STOREDB" editor
-echo world | node "$HERE/smoke.mjs" "$OUT" "$HS_SEARCHDIR" "$STOREDB" runner
+timeout 900 node "$HERE/smoke.mjs" "$OUT" "$HS_SEARCHDIR" "$STOREDB" editor
+echo world | timeout 900 node "$HERE/smoke.mjs" "$OUT" "$HS_SEARCHDIR" "$STOREDB" runner
 (cd "$PKGDIR" && wasm32-wasi-cabal --store-dir="$STORE" freeze "${PACKAGES[@]}" 2>/dev/null && cp cabal.project.freeze "$OUT/") || true
 cat "$PKGDIR/env" > "$OUT/package-env" || true
+
+log "compressed siblings"
+# The compressed siblings the app's host serves (brotli 11 with a 16 MB
+# window: 230 MB take minutes, so here rather than in the pack's build.sh).
+if command -v brotli >/dev/null; then brotli -q 11 -w 24 -k -f -o "$OUT/rootfs.tar.br" "$OUT/rootfs.tar"; fi
+gzip -9 -n -k -f "$OUT/rootfs.tar"
+(cd "$OUT" && sha256sum $(ls | grep -v SHA256SUMS) > SHA256SUMS)
+cat "$OUT/SHA256SUMS"
+ls -la "$OUT"

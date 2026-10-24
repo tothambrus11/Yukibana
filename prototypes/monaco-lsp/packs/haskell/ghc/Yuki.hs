@@ -25,6 +25,7 @@ module Yuki () where
 
 import Control.Exception (SomeException, displayException, evaluate, fromException, try)
 import Control.Monad (forM, when)
+import Control.Monad.IO.Class (liftIO)
 import Data.Coerce (coerce)
 import Data.IORef
 import Data.List (intercalate, nub, sortOn)
@@ -51,16 +52,18 @@ import GHC.Iface.Ext.Utils (recoverFullType, renderHieType, smallestContainingSa
 import GHC.Runtime.Interpreter (evalIO)
 import GHC.Tc.Types (TcGblEnv (..))
 import GHC.Types.Error (MessageClass (..))
-import GHC.Types.Name (isInternalName, nameModule_maybe)
+import GHC.Types.Name (isInternalName, nameModule_maybe, nameOccName)
 import GHC.Types.Name.Occurrence (isDataOcc, isTcOcc, isTvOcc, occNameString)
 import GHC.Types.Name.Reader (ImpDeclSpec (..), ImportSpec (..), globalRdrEnvElts, gre_imp, gre_lcl, gre_name)
 import GHC.Types.SrcLoc (mkRealSrcLoc, mkRealSrcSpan)
 import GHC.Types.TyThing.Ppr (pprTyThingHdr)
-import GHC.Unit.Module (moduleNameString, moduleUnit, unitString)
+import GHC.Unit.Module (ml_hie_file, ml_hs_file, moduleNameString, moduleUnit, unitString)
+import GHC.Unit.Module.ModSummary (msHsFilePath)
 import GHC.Unit.State (listVisibleModuleNames)
-import GHC.Utils.Json (JsonDoc (..))
+import GHC.Utils.Json (JsonDoc)
+import qualified GHC.Utils.Json as J
 import GHC.Utils.Logger (pushJsonLogHook)
-import GHC.Wasm.Prim (JSString, freeJSVal, fromJSString, toJSString)
+import GHC.Wasm.Prim (JSString (..), JSVal, freeJSVal, fromJSString, toJSString)
 
 -- * State
 
@@ -100,7 +103,7 @@ yukiInit jsLibdir jsMode jsFlags = do
   libdir <- evaluate (fromJSString jsLibdir)
   mode <- evaluate (fromJSString jsMode)
   flags <- evaluate (lines (fromJSString jsFlags))
-  mapM_ (freeJSVal . coerce) [jsLibdir, jsMode, jsFlags]
+  mapM_ (freeJSVal . (coerce :: JSString -> JSVal)) [jsLibdir, jsMode, jsFlags]
   ref <- newIORef (error "yukiInit: no session yet")
   let session = Session ref
       editor = mode == "editor"
@@ -131,7 +134,9 @@ yukiInit jsLibdir jsMode jsFlags = do
     when editor $
       modifyLogger (pushJsonLogHook (\_ -> \_ cls doc -> collect diags cls doc))
     getSessionDynFlags
-  hSetBuffering stdout LineBuffering
+  -- A runner's program writes unbuffered, as under GHCi and runghc: a
+  -- prompt shows before the program reads.
+  hSetBuffering stdout (if editor then LineBuffering else NoBuffering)
   writeIORef stateRef . Just
     =<< State session df editor diags <$> newIORef M.empty <*> newIORef M.empty
   where
@@ -144,7 +149,7 @@ yukiInit jsLibdir jsMode jsFlags = do
 yukiRequest :: JSString -> IO JSString
 yukiRequest jsReq = do
   req <- evaluate (lines (fromJSString jsReq))
-  freeJSVal (coerce jsReq)
+  freeJSVal (coerce jsReq :: JSVal)
   r <- try $ do
     st <- getState
     case req of
@@ -202,7 +207,6 @@ check st args = do
     let src = msHsFilePath ms
     r <- try (readHieFile (hsc_NC env) (ml_hie_file (ms_location ms)))
     pure $ case r of
-      Right h | hie_hs_file (hie_file_result h) == src -> Just (src, hie_file_result h)
       Right h -> Just (src, hie_file_result h)
       Left (_ :: SomeException) -> Nothing
   modifyIORef' (stHie st) (M.union (M.fromList hies))
@@ -214,12 +218,12 @@ check st args = do
       obj
         [ ("file", str (msHsFilePath ms)),
           ("module", str (moduleNameString (ms_mod_name ms))),
-          ("hie", JSBool (isJust (lookup (msHsFilePath ms) hies))),
-          ("tops", JSArray ds)
+          ("hie", J.JSBool (isJust (lookup (msHsFilePath ms) hies))),
+          ("tops", J.JSArray ds)
         ]
-  pure (obj [("diagnostics", JSArray (map Raw diags)), ("modules", JSArray tops)])
+  pure (obj [("diagnostics", J.JSArray (map Raw diags)), ("modules", J.JSArray tops)])
   where
-    printException' e = modifyIORef' (stDiags st) (renderJson (obj [("severity", str "Error"), ("message", JSArray [str (show e)])]) :)
+    printException' e = modifyIORef' (stDiags st) (renderJson (obj [("severity", str "Error"), ("message", J.JSArray [str (show e)])]) :)
 
 nubOn :: Ord b => (a -> b) -> [a] -> [a]
 nubOn f = go S.empty
@@ -302,7 +306,7 @@ info st f line col =
     Just hf -> case identAt hf line col of
       Nothing -> pure notFound
       Just (sp, Left m, _, _) ->
-        pure (obj [("found", JSBool True), ("span", spanJson sp), ("kind", str "module"), ("name", str (moduleNameString m))])
+        pure (obj [("found", J.JSBool True), ("span", spanJson sp), ("kind", str "module"), ("name", str (moduleNameString m))])
       Just (sp, Right n, d, ni) -> do
         df <- inGhc st getSessionDynFlags
         let typeOf ix = renderHieType df (recoverFullType ix (hie_types hf))
@@ -314,19 +318,19 @@ info st f line col =
         docs <- if isJust (nameModule_maybe n) then inGhc st (docOf n) else pure ""
         pure $
           obj
-            [ ("found", JSBool True),
+            [ ("found", J.JSBool True),
               ("span", spanJson sp),
               ("name", str (occNameString (nameOccName n))),
               ("kind", str (nameKind n thing)),
-              ("type", maybe JSNull str here),
-              ("decl", maybe JSNull (str . thingText df) thing),
-              ("module", maybe JSNull (str . moduleNameString . moduleName) (nameModule_maybe n)),
-              ("package", maybe JSNull (str . unitString . moduleUnit) (nameModule_maybe n)),
-              ("def", case nameSrcSpan n of RealSrcSpan s _ -> spanJson s; _ -> JSNull),
+              ("type", maybe J.JSNull str here),
+              ("decl", maybe J.JSNull (str . thingText df) thing),
+              ("module", maybe J.JSNull (str . moduleNameString . moduleName) (nameModule_maybe n)),
+              ("package", maybe J.JSNull (str . unitString . moduleUnit) (nameModule_maybe n)),
+              ("def", case nameSrcSpan n of RealSrcSpan s _ -> spanJson s; _ -> J.JSNull),
               ("doc", str docs)
             ]
   where
-    notFound = obj [("found", JSBool False)]
+    notFound = obj [("found", J.JSBool False)]
 
 nameKind :: Name -> Maybe TyThing -> String
 nameKind n = \case
@@ -357,13 +361,13 @@ docOf n = do
 refs :: State -> FilePath -> Int -> Int -> IO JsonDoc
 refs st f line col =
   lookupHie st f >>= \case
-    Nothing -> pure (JSArray [])
+    Nothing -> pure (J.JSArray [])
     Just hf -> case identAt hf line col of
       Just (_, Right n, _, _) -> do
         hies <- readIORef (stHie st)
         let files = if isJust (nameModule_maybe n) then M.toList hies else [(f, hf)]
-        pure . JSArray $
-          [ obj [("file", str file), ("span", spanJson sp), ("def", JSBool (any isBinding (S.toList (identInfo d))))]
+        pure . J.JSArray $
+          [ obj [("file", str file), ("span", spanJson sp), ("def", J.JSBool (any isBinding (S.toList (identInfo d))))]
             | (file, h) <- files,
               ast <- M.elems (getAsts (hie_asts h)),
               node <- flatten ast,
@@ -371,7 +375,7 @@ refs st f line col =
               Just d <- [M.lookup (Right n) (nodeIdentifiers ni)],
               let sp = nodeSpan node
           ]
-      _ -> pure (JSArray [])
+      _ -> pure (J.JSArray [])
   where
     flatten n = n : concatMap flatten (nodeChildren n)
     isBinding = \case
@@ -413,10 +417,10 @@ scope st f line col = do
               obj
                 [ ("name", str (occNameString (nameOccName n))),
                   ("kind", str (nameKind n thing)),
-                  ("type", maybe JSNull (str . thingText df) thing),
+                  ("type", maybe J.JSNull (str . thingText df) thing),
                   ("module", str (if gre_lcl gre then "" else maybe "" (moduleNameString . moduleName) (nameModule_maybe n))),
-                  ("quals", JSArray (map str quals)),
-                  ("unqual", JSBool unqual)
+                  ("quals", J.JSArray (map str quals)),
+                  ("unqual", J.JSBool unqual)
                 ]
   df <- inGhc st getSessionDynFlags
   env <- inGhc st getSession
@@ -435,9 +439,9 @@ scope st f line col = do
             ]
   pure $
     obj
-      [ ("names", JSArray names),
-        ("locals", JSArray [obj [("name", str n), ("type", str t)] | (n, t) <- locals]),
-        ("modules", JSArray (map str mods))
+      [ ("names", J.JSArray names),
+        ("locals", J.JSArray [obj [("name", str n), ("type", str t)] | (n, t) <- locals]),
+        ("modules", J.JSArray (map str mods))
       ]
   where
     flatten n = n : concatMap flatten (nodeChildren n)
@@ -476,7 +480,7 @@ run st args = do
     r <- handleSourceError (\e -> do printException e; pure Failed) (load LoadAllTargets)
     pure (succeeded r)
   if not ok
-    then pure (obj [("exit", JSInt 1)])
+    then pure (obj [("exit", J.JSInt 1)])
     else do
       r <- try $ inGhc st $ do
         setContext [IIDecl (simpleImportDecl (mkModuleName "Main")), IIDecl (simpleImportDecl (mkModuleName "System.Environment"))]
@@ -493,28 +497,28 @@ run st args = do
             hPutStrLn stderr ("haskell-project: " ++ displayException e)
             pure 1
       hFlush stderr
-      pure (obj [("exit", JSInt code)])
+      pure (obj [("exit", J.JSInt code)])
 
 -- * JSON
 
 -- | Raw is JSON already rendered (GHC's diagnostics).
 pattern Raw :: String -> JsonDoc
-pattern Raw s = JSArray [JSString "\0raw", JSString s]
+pattern Raw s = J.JSArray [J.JSString "\0raw", J.JSString s]
 
 obj :: [(String, JsonDoc)] -> JsonDoc
-obj = JSObject
+obj = J.JSObject
 
 str :: String -> JsonDoc
-str = JSString
+str = J.JSString
 
 spanJson :: RealSrcSpan -> JsonDoc
 spanJson s =
   obj
     [ ("file", str (unpackFS (srcSpanFile s))),
-      ("sl", JSInt (srcSpanStartLine s)),
-      ("sc", JSInt (srcSpanStartCol s)),
-      ("el", JSInt (srcSpanEndLine s)),
-      ("ec", JSInt (srcSpanEndCol s))
+      ("sl", J.JSInt (srcSpanStartLine s)),
+      ("sc", J.JSInt (srcSpanStartCol s)),
+      ("el", J.JSInt (srcSpanEndLine s)),
+      ("ec", J.JSInt (srcSpanEndCol s))
     ]
 
 renderJson :: JsonDoc -> String
@@ -522,12 +526,12 @@ renderJson d = go d ""
   where
     go = \case
       Raw s -> showString s
-      JSNull -> showString "null"
-      JSBool b -> showString (if b then "true" else "false")
-      JSInt n -> shows n
-      JSString s -> quote s
-      JSArray xs -> showChar '[' . commas (map go xs) . showChar ']'
-      JSObject fs -> showChar '{' . commas [quote k . showChar ':' . go v | (k, v) <- fs] . showChar '}'
+      J.JSNull -> showString "null"
+      J.JSBool b -> showString (if b then "true" else "false")
+      J.JSInt n -> shows n
+      J.JSString s -> quote s
+      J.JSArray xs -> showChar '[' . commas (map go xs) . showChar ']'
+      J.JSObject fs -> showChar '{' . commas [quote k . showChar ':' . go v | (k, v) <- fs] . showChar '}'
     commas [] = id
     commas (x : xs) = x . foldr (\y acc -> showChar ',' . y . acc) id xs
     quote s = showChar '"' . foldr (\c acc -> esc c . acc) id s . showChar '"'

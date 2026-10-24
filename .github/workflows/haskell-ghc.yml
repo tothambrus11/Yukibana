@@ -34,6 +34,9 @@ jobs:
           key: ghc-wasm-${{ hashFiles('prototypes/monaco-lsp/packs/haskell/ghc/build-rootfs.sh') }}
           restore-keys: ghc-wasm-
 
+      - name: Install brotli
+        run: sudo apt-get install -y --no-install-recommends brotli
+
       - name: Build
         run: prototypes/monaco-lsp/packs/haskell/ghc/build-rootfs.sh "$RUNNER_TEMP/out"
 
