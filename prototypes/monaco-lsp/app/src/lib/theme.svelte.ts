@@ -1,30 +1,49 @@
 /**
  * Light and dark themes. The page's colours are CSS variables keyed on
  * `<html data-theme>`; Monaco needs its own theme objects, defined here with
- * the same palette. The choice follows the system until the user toggles it.
+ * the same palette, every text colour at least 7:1 against the editor
+ * (palette.ts). The choice follows the system until the user toggles it.
  */
+import { vs, vs_dark } from 'monaco-editor/editor/standalone/common/themes';
 import { monaco } from './monaco';
+import { EDITOR, LINE_NUMBERS, OWN_RULES, raise, raisedRules, TEXT_CONTRAST, viewText, type Hex, type Theme } from './palette';
 
-export type Theme = 'light' | 'dark';
+export type { Theme };
 
 const KEY = 'yukibana.code.theme';
+
+/**
+ * Every token rule of a theme, Monaco's underneath the theme's own, with
+ * each colour raised to TEXT_CONTRAST (palette.ts says why). Monaco's rules
+ * are repeated rather than inherited so that the ones below the contrast
+ * (vs-dark's registers, `variable.predefined`, at 3.3:1) are raised too.
+ */
+export const THEME_RULES: Record<Theme, monaco.editor.ITokenThemeRule[]> = {
+	dark: raisedRules(vs_dark.rules, OWN_RULES.dark, EDITOR.dark.background),
+	light: raisedRules(vs.rules, OWN_RULES.light, EDITOR.light.background),
+};
+
+/** The line numbers, raised like the tokens. */
+const lineNumbers = (theme: Theme) => ({
+	'editorLineNumber.foreground': raise(LINE_NUMBERS[theme].normal, EDITOR[theme].background, TEXT_CONTRAST),
+	'editorLineNumber.activeForeground': raise(LINE_NUMBERS[theme].active, EDITOR[theme].caretLine, TEXT_CONTRAST),
+});
+
+/** Every text colour the linked views can draw on a tinted row, per theme (link-colours.ts checks the tints against them). */
+export const VIEW_TEXT: Record<Theme, Hex[]> = {
+	dark: viewText(THEME_RULES.dark, lineNumbers('dark')),
+	light: viewText(THEME_RULES.light, lineNumbers('light')),
+};
 
 monaco.editor.defineTheme('yukibana-dark', {
 	base: 'vs-dark',
 	inherit: true,
-	rules: [
-		{ token: 'comment', foreground: '7f7676', fontStyle: 'italic' },
-		{ token: 'keyword', foreground: 'e0788f' },
-		{ token: 'string', foreground: '9ccf8a' },
-		{ token: 'number', foreground: '6fc2c6' },
-		{ token: 'type', foreground: '72c2a0' },
-	],
+	rules: THEME_RULES.dark,
 	colors: {
-		'editor.background': '#121111',
-		'editor.lineHighlightBackground': '#1f1c1c',
-		'editorLineNumber.foreground': '#635c5c',
-		'editorLineNumber.activeForeground': '#e3dcdc',
-		'editorGutter.background': '#121111',
+		'editor.background': EDITOR.dark.background,
+		'editor.lineHighlightBackground': EDITOR.dark.caretLine,
+		...lineNumbers('dark'),
+		'editorGutter.background': EDITOR.dark.background,
 		'editorWidget.background': '#1f1c1c',
 		'editorWidget.border': '#2e2a2a',
 		'editorHoverWidget.background': '#1f1c1c',
@@ -42,18 +61,11 @@ monaco.editor.defineTheme('yukibana-dark', {
 monaco.editor.defineTheme('yukibana-light', {
 	base: 'vs',
 	inherit: true,
-	rules: [
-		{ token: 'comment', foreground: '8a8080', fontStyle: 'italic' },
-		{ token: 'keyword', foreground: 'b3264f' },
-		{ token: 'string', foreground: '3c7a28' },
-		{ token: 'number', foreground: '0d7b80' },
-		{ token: 'type', foreground: '018053' },
-	],
+	rules: THEME_RULES.light,
 	colors: {
-		'editor.background': '#ffffff',
-		'editor.lineHighlightBackground': '#f4f1f1',
-		'editorLineNumber.foreground': '#a59c9c',
-		'editorLineNumber.activeForeground': '#352b2b',
+		'editor.background': EDITOR.light.background,
+		'editor.lineHighlightBackground': EDITOR.light.caretLine,
+		...lineNumbers('light'),
 		'editorWidget.background': '#faf8f8',
 		'editorWidget.border': '#ddd5d5',
 		'editorHoverWidget.background': '#faf8f8',

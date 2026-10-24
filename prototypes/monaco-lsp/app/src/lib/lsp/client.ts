@@ -363,6 +363,19 @@ export class LanguageClient {
 	}
 
 	/**
+	 * The server's selection ranges at `positions` of `model`, one chain per
+	 * position (innermost first), for the compiler output views, which tell
+	 * the parts of a line apart with them (linking.ts). Null when the server
+	 * has none, does not own the model, or fails (logged, as `ask` does).
+	 */
+	async selectionRanges(model: monaco.editor.ITextModel, positions: monaco.IPosition[]): Promise<lsp.SelectionRange[] | null> {
+		if (!this.capabilities.selectionRangeProvider || positions.length === 0) return null;
+		const params = { textDocument: { uri: model.uri.toString() }, positions: positions.map(c.toPosition) };
+		const ranges = await this.ask<lsp.SelectionRange[]>(model, 'textDocument/selectionRange', params, new monaco.CancellationTokenSource().token);
+		return ranges && ranges.length === positions.length ? ranges : null;
+	}
+
+	/**
 	 * Sends a request on behalf of a Monaco provider. A cancelled request,
 	 * or one for a model the server does not own, answers `null`; any other
 	 * failure is written to the output panel and also answers `null`, since

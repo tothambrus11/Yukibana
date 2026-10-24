@@ -68,8 +68,16 @@ WebAssembly, or, chosen in the Run options next to it, under QEMU's user
 mode (experimental), on 1, 2 or 4 CPUs, with strace if asked ("C and C++
 targets" below). The **IR** and **Asm** buttons open read-only panels with
 the LLVM IR and the assembly of the active source, recompiled as it is
-edited, for whichever target; the caret maps lines both ways between the
-source and the output, and Ctrl+click on an output line goes to its source.
+edited, for whichever target. Every source line that produced code has a
+colour, and its rows in the source, the IR and the assembly are tinted with
+it. The caret's line (in the source or in an output) is drawn stronger in
+every pane and the rest fades; within the line, the expression under the
+caret is filled in the source, and the output rows that came from it are
+stronger than the rest of the line's. Holding Ctrl (Cmd on macOS) and
+pointing at a line focuses it for as long as the key is held, scrolling the
+other panes to it and back. Ctrl+click on an output line goes to its source.
+Every text colour reaches 7:1 against its editor's background, and the tints
+are checked to keep it readable (app/src/lib/link-colours.ts).
 
 A web project's Run opens a Preview panel with its `index.html` in a
 sandboxed iframe: a stylesheet edit is applied in place, any other edit

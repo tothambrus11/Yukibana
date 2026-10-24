@@ -98,3 +98,15 @@ declare module 'monaco-editor/editor/browser/services/bulkEditService' {
 		isApplied: boolean;
 	}
 }
+declare module 'monaco-editor/editor/standalone/common/themes' {
+	/** A rule of Monaco's built-in themes: a token and its colour (`rrggbb`). */
+	interface BuiltinRule {
+		token: string;
+		foreground?: string;
+		background?: string;
+		fontStyle?: string;
+	}
+	/** Monaco's `vs` and `vs-dark` themes, whose rules colour every token the Yukibana themes do not name. */
+	export const vs: { rules: BuiltinRule[] };
+	export const vs_dark: { rules: BuiltinRule[] };
+}

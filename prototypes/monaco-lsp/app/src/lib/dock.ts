@@ -23,8 +23,9 @@ import { pathOf } from './project';
 import type { EditorHost, Workspace } from './workspace.svelte';
 import type { ExploreKind } from './languages';
 import { languageOf } from './languages';
-import type { SourceLine } from './explorer-map';
 import type { CompilerView, ViewHost } from './compiler-view';
+import type { Caret } from './linking';
+import { VIEW_TEXT } from './theme.svelte';
 import Explorer from './components/Explorer.svelte';
 import Problems from './components/Problems.svelte';
 import Output from './components/Output.svelte';
@@ -265,11 +266,11 @@ export function createDock(element: HTMLElement, workspace: Workspace): EditorHo
 		if (place) host.open(place.path, monaco.Range.fromPositions({ lineNumber: place.line, column: place.column }));
 	};
 	/** Who follows the active source editor's caret: the open compiler output views. */
-	const cursorListeners = new Set<(place: SourceLine | null) => void>();
+	const cursorListeners = new Set<(caret: Caret | null) => void>();
 	/** The active editor's caret, as the views see it: the last editor shown, even while a view has focus. */
-	const sourceCaret = (): SourceLine | null => {
+	const sourceCaret = (): Caret | null => {
 		const position = lastEditor ? editors.get(editorId(lastEditor))?.editor?.getPosition() : null;
-		return lastEditor && position ? { file: lastEditor, line: position.lineNumber } : null;
+		return lastEditor && position ? { file: lastEditor, line: position.lineNumber, column: position.column } : null;
 	};
 	const emitCursor = () => {
 		const place = sourceCaret();
@@ -283,8 +284,6 @@ export function createDock(element: HTMLElement, workspace: Workspace): EditorHo
 			if (path === lastEditor) emitCursor();
 		},
 	};
-	/** The source line a view points at, drawn in its file's editor. */
-	let sourceMark: monaco.editor.IEditorDecorationsCollection | null = null;
 	const viewHost: Omit<ViewHost, 'explorer'> = {
 		monaco,
 		editorFont: EDITOR_FONT,
@@ -295,13 +294,10 @@ export function createDock(element: HTMLElement, workspace: Workspace): EditorHo
 			listener(sourceCaret());
 			return { dispose: () => cursorListeners.delete(listener) };
 		},
-		markSource(place) {
-			sourceMark?.clear();
-			sourceMark = null;
-			const editor = place ? editors.get(editorId(place.file))?.editor : null;
-			if (!place || !editor) return;
-			sourceMark = editor.createDecorationsCollection([{ range: new monaco.Range(place.line, 1, place.line, 1), options: { isWholeLine: true, className: 'yk-mapped-source' } }]);
-		},
+		editorFor: (path) => editors.get(editorId(path))?.editor ?? null,
+		modelFor: (path) => workspace.model(path) ?? null,
+		selectionRanges: (path, positions) => workspace.selectionRanges(path, positions),
+		textColours: VIEW_TEXT,
 	};
 	let lastEditor: string | null = null;
 	let replacing = false;
@@ -492,7 +488,6 @@ export function createDock(element: HTMLElement, workspace: Workspace): EditorHo
 			});
 		},
 		hideViews(): void {
-			viewHost.markSource(null);
 			for (const kind of VIEW_KINDS) dock.getPanel(VIEWS[kind].id)?.api.close();
 		},
 		setProblemCount(n: number): void {

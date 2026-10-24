@@ -17,6 +17,7 @@ import { DEFAULT_RUN_OPTIONS, targetById, targetOf, withTarget, type CppTargetId
 import { describeSanitizers, sanitizersOf, withSanitizers, type SanitizerChoice } from './cpp-sanitizers';
 import { cppLevelOf, defaultLevel, levelsOf, withCppLevel, type LevelChoice } from './optimization';
 import type { Explorer } from './explorer.svelte';
+import type * as lsp from 'vscode-languageserver-protocol';
 import { baseName, loadLanguage, loadProject, parentOf, pathOf, pathProblem, ROOT_URI, sampleProject, saveLanguage, saveProject, type Project } from './project';
 
 /** The model URI of a project path. */
@@ -430,6 +431,16 @@ export class Workspace {
 	/** The model of a project file. */
 	model(path: string): monaco.editor.ITextModel | undefined {
 		return this.models.get(path);
+	}
+
+	/**
+	 * The language server's selection ranges at `positions` of project file
+	 * `path` (LanguageClient.selectionRanges), or null: no such file, no
+	 * server, or a server without them.
+	 */
+	async selectionRanges(path: string, positions: monaco.IPosition[]): Promise<lsp.SelectionRange[] | null> {
+		const model = this.models.get(path);
+		return model && this.client ? this.client.selectionRanges(model, positions) : null;
 	}
 
 	/** Called by the editor area when tabs change, so they are restored next time. */

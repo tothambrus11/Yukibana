@@ -9,7 +9,7 @@
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && tsc -p src/service-worker --noEmit",
 		"prepare": "svelte-kit sync",
-		"test:unit": "node --test tests/ansi.mjs tests/lsp.mjs tests/cpp-targets.mjs tests/optimization.mjs tests/explorer-map.mjs tests/haskell-export.mjs tests/cpp-sanitizers.mjs tests/terminal-links.mjs tests/undo-text.mjs",
+		"test:unit": "node --test tests/ansi.mjs tests/lsp.mjs tests/cpp-targets.mjs tests/optimization.mjs tests/explorer-map.mjs tests/link-colours.mjs tests/haskell-export.mjs tests/cpp-sanitizers.mjs tests/terminal-links.mjs tests/undo-text.mjs",
 		"test:e2e": "node tests/e2e.mjs",
 		"test:e2e:targets": "node tests/e2e-targets.mjs",
 		"test:export": "node tests/export.mjs"

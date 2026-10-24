@@ -5,11 +5,11 @@
  * downloads, and a read-only Monaco editor showing the output, or clang's
  * messages when the source does not compile.
  *
- * The output is mapped to the source a line at a time (explorer-map.ts): the
- * caret in a source editor lights up the output lines it produced (class
- * `yk-mapped`), and the caret on, or the mouse over, an output line lights up
- * its source line in that file's editor (`yk-mapped-source`, which the
- * editor area draws); Ctrl/Cmd+click on an output line opens its source line.
+ * The output is mapped to the source a line at a time (explorer-map.ts), and
+ * the views and the source are drawn as one picture by linking.ts: every
+ * mapped line tinted with its own hue, the caret's line (or, with Ctrl/Cmd
+ * held, the one under the mouse) in focus in every pane, down to the part of
+ * the line. Ctrl/Cmd+click on an output line opens its source line.
  *
  * Loaded by dynamic `import()` from dock.ts when a view first opens, with
  * the grammars it needs (asm-languages.ts), so a session that never opens
@@ -19,12 +19,13 @@
 import type { monaco as Monaco } from './monaco';
 import { registerOutputLanguages } from './asm-languages';
 import { asmLanguageOf, targetById } from './cpp-targets';
-import { outputLinesFor, runsOf, shortFlags, sourceOf, type SourceLine } from './explorer-map';
+import { shortFlags, sourceOf, type SourceLine } from './explorer-map';
+import { linkerFor, type LinkHost } from './linking';
 import type { Explorer, ViewOptions, ViewState } from './explorer.svelte';
 import type { ExploreKind } from './languages';
 
-/** What a view needs of the editor area, which owns the source editors. */
-export interface ViewHost {
+/** What a view needs of the editor area, which owns the source editors (LinkHost: what the linking of the panes needs). */
+export interface ViewHost extends LinkHost {
 	/** The app's Monaco (monaco.ts), and the editors' font. */
 	monaco: typeof Monaco;
 	editorFont: string;
@@ -34,15 +35,6 @@ export interface ViewHost {
 	isProjectFile(path: string): boolean;
 	/** Opens a project file and selects a range in it (Ctrl/Cmd+click). */
 	open(path: string, selection: Monaco.IRange): void;
-	/**
-	 * Calls `listener` with the active source editor's caret (its file and
-	 * line) whenever it moves or another editor becomes active, and once
-	 * right away with the current one (null: no editor). Returns the
-	 * subscription, to dispose.
-	 */
-	onSourceCursor(listener: (place: SourceLine | null) => void): Monaco.IDisposable;
-	/** Decorates `place`'s line in its file's editor as mapped (null: no line). */
-	markSource(place: SourceLine | null): void;
 }
 
 /** One view, as dock.ts holds it. */
@@ -90,7 +82,6 @@ function addStyles(): void {
 .yk-view-body { position: relative; flex: 1; min-height: 0; }
 .yk-view-editor { position: absolute; inset: 0; }
 .yk-view-note { position: absolute; inset: 0; padding: 0.75rem 1rem; color: var(--gray-3); font-size: 0.8125rem; pointer-events: none; }
-.yk-mapped, .yk-mapped-source { background: color-mix(in oklch, var(--accent) 22%, transparent); }
 `;
 	document.head.append(style);
 }
@@ -161,46 +152,13 @@ export function createCompilerView(element: HTMLElement, kind: ExploreKind, host
 		// The clang messages of a failed compile name files and lines, not links to follow.
 		links: false,
 	});
-	const mapped = editor.createDecorationsCollection();
-	/** The output lines (text and map) the decorations were made against. */
+	/** The output lines (text and map) shown, while they are a compile's output. */
 	let shown: ViewState | null = null;
-	/** The source editor's caret, for decorating output that arrives later. */
-	let caret: SourceLine | null = null;
-	/** The source line the output caret or mouse points at, as last marked. */
-	let marked: SourceLine | null = null;
-
-	const markSource = (place: SourceLine | null) => {
-		if (place?.file === marked?.file && place?.line === marked?.line) return;
-		marked = place;
-		host.markSource(place);
-	};
-
-	/** Lights up the output lines of the source caret's line, and brings the first into view when it is off screen. */
-	const decorate = (reveal: boolean) => {
-		const view = shown;
-		const lines = view && view.status !== 'error' && caret ? outputLinesFor(view.lines, caret.file, caret.line) : [];
-		mapped.set(runsOf(lines).map((r) => ({ range: new monaco.Range(r.start, 1, r.end, 1), options: { isWholeLine: true, className: 'yk-mapped' } })));
-		const first = lines[0];
-		if (reveal && first !== undefined) {
-			const visible = editor.getVisibleRanges();
-			if (!visible.some((r) => first >= r.startLineNumber && first <= r.endLineNumber)) editor.revealLineInCenter(first, monaco.editor.ScrollType.Smooth);
-		}
-	};
+	const linker = linkerFor(explorer, host);
 
 	const outputSource = (line: number | undefined): SourceLine | null => (shown && shown.status !== 'error' && line !== undefined ? sourceOf(shown.lines, line) : null);
 
 	const disposables: Monaco.IDisposable[] = [
-		host.onSourceCursor((place) => {
-			caret = place;
-			decorate(true);
-		}),
-		editor.onDidChangeCursorPosition((e) => markSource(outputSource(e.position.lineNumber))),
-		editor.onMouseMove((e) => {
-			const line = e.target.position?.lineNumber;
-			markSource(outputSource(line) ?? outputSource(editor.getPosition()?.lineNumber));
-		}),
-		editor.onMouseLeave(() => markSource(editor.hasTextFocus() ? outputSource(editor.getPosition()?.lineNumber) : null)),
-		editor.onDidBlurEditorText(() => markSource(null)),
 		editor.onMouseDown((e) => {
 			if (!(e.event.ctrlKey || e.event.metaKey)) return;
 			const source = outputSource(e.target.position?.lineNumber);
@@ -286,8 +244,7 @@ export function createCompilerView(element: HTMLElement, kind: ExploreKind, host
 			show(view.text, kind === 'llvm-ir' ? 'llvm-ir' : asmLanguageOf(view.target ?? 'wasm32-wasi'));
 			shown = view;
 		}
-		decorate(false);
-		if (marked && !outputSource(editor.getPosition()?.lineNumber)) markSource(null);
+		linker.setView(kind, editor, shown && shown.status !== 'error' ? shown.lines : null);
 	};
 	const unsubscribe = explorer.subscribe((k) => {
 		if (k === kind) render();
@@ -297,7 +254,7 @@ export function createCompilerView(element: HTMLElement, kind: ExploreKind, host
 	return {
 		dispose(): void {
 			unsubscribe();
-			markSource(null);
+			linker.removeView(kind);
 			for (const d of disposables) d.dispose();
 			editor.dispose();
 			model.dispose();
