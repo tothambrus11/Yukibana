@@ -126,6 +126,14 @@ plugin with the entry's `MainKt` class, `kotlin.test` on JUnit 5) and
   syntax does not say (when the name is not unique among the project's
   members). Files are not renamed with their class.
 * **No formatting, no quick fixes, no type definition, no Run, no Test.**
+  So no property-based tests and no mutation testing either: both need a
+  compiler and a test runner in the browser, and kotlinc is a JVM program
+  ("Why no Run"). In the downloaded Gradle build they work as usual:
+  kotest-property (`io.kotest:kotest-property`, with JUnit 5) for
+  properties, and PIT (the `info.solidsoft.pitest` Gradle plugin) for
+  mutants, which mutates Kotlin's bytecode as it does Java's. Neither is
+  added to the generated `build.gradle.kts`: the editor could not check or
+  complete their API.
 * Error recovery is tree-sitter's: an unfinished construct can hide
   declarations after it until it is closed (a text fallback keeps member
   completion working for top-level `val x = Class(…)`).
