@@ -21,6 +21,13 @@ test('each import names its package once, qualified, with a package import or sa
 	assert.deepEqual(haskellDepends(files), ['containers >=0.6', 'mtl >=2.2', 'text >=2.0', 'bytestring >=0.11', 'random >=1.2', 'QuickCheck >=2.14', 'hspec >=2.10']);
 });
 
+test('Template Haskell and the packages beyond the testing ones are named too', () => {
+	const files = {
+		'Main.hs': 'import Language.Haskell.TH\nimport qualified Data.Vector.Unboxed as U\nimport qualified Data.HashMap.Strict as HM\nimport Data.Hashable (hash)\nimport Data.List.Split (splitOn)\nimport Control.Concurrent.Async\nimport Text.Parsec\n',
+	};
+	assert.deepEqual(haskellDepends(files), ['template-haskell >=2.18', 'parsec >=3.1', 'vector >=0.12', 'unordered-containers >=0.2', 'hashable >=1.3', 'split >=0.2', 'async >=2.2']);
+});
+
 test('a module whose name only starts like a package\'s does not count', () => {
 	assert.deepEqual(haskellDepends({ 'Main.hs': 'import Data.Maybe\nimport Data.Mapping\nimport Data.Textual\n' }), []);
 });

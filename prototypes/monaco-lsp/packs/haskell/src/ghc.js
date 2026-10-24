@@ -4,8 +4,8 @@
 //
 // GHC runs as WebAssembly shared libraries (build.sh, ghc/build-rootfs.sh):
 // rootfs.tar holds GHC 9.14's library directory (every boot package's
-// libHS*.so and interface files, libHSghc.so among them), QuickCheck, hspec
-// and random built the same way, the C libraries, and libyuki.so, the pack's
+// libHS*.so and interface files, libHSghc.so among them), the Hackage
+// packages (QuickCheck, hspec, random, vector, ...) built the same way, the C libraries, and libyuki.so, the pack's
 // GHC API program (ghc/Yuki.hs). The archive is unpacked into an in-memory
 // file system (browser_wasi_shim), and GHC's own wasm dynamic linker
 // (dyld.mjs, from GHC's libdir) links libyuki.so and everything it needs
@@ -32,7 +32,7 @@ export async function manifestOf() {
  * build-depends would: everything else (ghc itself, its private packages)
  * is hidden, so an import names the module a cabal build would find.
  */
-export const PACKAGES = ['base', 'containers', 'mtl', 'transformers', 'text', 'bytestring', 'array', 'deepseq', 'directory', 'filepath', 'time', 'stm', 'exceptions', 'random', 'QuickCheck', 'hspec'];
+export const PACKAGES = ['base', 'containers', 'mtl', 'transformers', 'text', 'bytestring', 'array', 'deepseq', 'directory', 'filepath', 'time', 'stm', 'exceptions', 'random', 'QuickCheck', 'hspec', 'HUnit', 'template-haskell', 'parsec', 'pretty', 'binary', 'vector', 'primitive', 'unordered-containers', 'hashable', 'split', 'async'];
 
 /**
  * Unpacks a tar stream (ustar, with GNU long names and pax paths) into

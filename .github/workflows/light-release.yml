@@ -169,8 +169,13 @@ jobs:
           (cd "$E" && EMSDK_KEEP_DOWNLOADS=1 ./emsdk install "$EMSDK_VERSION" >/dev/null && ./emsdk activate "$EMSDK_VERSION" >/dev/null)
           rm -rf "$E/downloads"
 
+      # An artifact that has expired (90 days) is not an error: build.sh
+      # then downloads the same files from the release that keeps them
+      # (INPUTS_RELEASE in build.sh, .github/workflows/haskell-inputs-release.yml).
       - uses: actions/download-artifact@v7
+        id: rootfs-artifact
         if: steps.haskell.outputs.rootfs-run
+        continue-on-error: true
         with:
           name: haskell-ghc-rootfs
           run-id: ${{ steps.haskell.outputs.rootfs-run }}
@@ -179,7 +184,9 @@ jobs:
 
       # ormolu and hlint, built by haskell-ghc-tools.yml.
       - uses: actions/download-artifact@v7
+        id: tools-artifact
         if: steps.haskell.outputs.tools-run
+        continue-on-error: true
         with:
           name: haskell-ghc-tools
           run-id: ${{ steps.haskell.outputs.tools-run }}
@@ -189,8 +196,8 @@ jobs:
       - name: Build
         run: ./build.sh
         env:
-          HASKELL_GHC_ROOTFS: ${{ steps.haskell.outputs.rootfs-run && format('{0}/haskell-ghc-rootfs', runner.temp) || '' }}
-          HASKELL_GHC_TOOLS: ${{ steps.haskell.outputs.tools-run && format('{0}/haskell-ghc-tools', runner.temp) || '' }}
+          HASKELL_GHC_ROOTFS: ${{ steps.rootfs-artifact.outcome == 'success' && format('{0}/haskell-ghc-rootfs', runner.temp) || '' }}
+          HASKELL_GHC_TOOLS: ${{ steps.tools-artifact.outcome == 'success' && format('{0}/haskell-ghc-tools', runner.temp) || '' }}
 
       - name: Disk and cache usage
         if: always()

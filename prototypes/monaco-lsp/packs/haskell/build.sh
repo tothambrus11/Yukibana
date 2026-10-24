@@ -31,7 +31,9 @@
 # $HASKELL_GHC_ROOTFS (a directory or the artifact's zip), checking each file
 # by the sha256 below (of its SHA256SUMS); ormolu and hlint likewise, the
 # "haskell-ghc-tools" artifact of .github/workflows/haskell-ghc-tools.yml,
-# from $HASKELL_GHC_TOOLS. With the toolchain installed ($GHC_WASM_PREFIX or
+# from $HASKELL_GHC_TOOLS. Given neither, it downloads both from the GitHub
+# release that keeps them past the artifacts' 90 days ($INPUTS_RELEASE
+# below). With the toolchain installed ($GHC_WASM_PREFIX or
 # ~/.ghc-wasm), set HASKELL_GHC_ROOTFS=build to build it here instead (the
 # hashes then differ: they pin CI's build). Idempotent; the unpacked
 # artifact is kept in $PACK_CACHE/haskell (default
@@ -41,12 +43,18 @@ set -euo pipefail
 GHC_VERSION=9.14.1.20260731
 # The CI build the pack is made of: its run, and the sha256 of its
 # SHA256SUMS, which holds every other file's.
-ROOTFS_RUN=40098246484
-SUMS_SHA256=b9f4a8933aaa57078b6337f8725c4408d348833cc5e36ea8f32c529dac7a883d
+ROOTFS_RUN=40133827035
+SUMS_SHA256=d477a850694988ff7d9d7e50590535234b0f20d7fd80250d9ba717bf6931285a
 # ormolu and hlint (ghc/build-tools.sh, .github/workflows/haskell-ghc-tools.yml):
 # the CI build, and the sha256 of its SHA256SUMS.
 TOOLS_RUN=40098246483
 TOOLS_SUMS_SHA256=fb197fb0215b158f615519407882ee084c54ea371eeed06a76d3f2c19277fdd1
+# Where the two are kept once their artifacts expire (90 days): a GitHub
+# release of both, made by hand with .github/workflows/haskell-inputs-release.yml
+# from the runs pinned here. Used when no artifact is given and the cache
+# has none; the same sha256 pins check what it holds.
+INPUTS_RELEASE=haskell-inputs-$ROOTFS_RUN-$TOOLS_RUN
+RELEASES=https://github.com/tothambrus11/Yukibana/releases/download
 # browser_wasi_shim: the haskell-wasm fork at the commit GHC's browser tests
 # use (ghc-in-browser loads it from esm.sh at this commit).
 SHIM_REPO=https://github.com/haskell-wasm/browser_wasi_shim
@@ -60,22 +68,42 @@ mkdir -p "$CACHE" "$OUT"
 
 step() { printf '\n== %s\n' "$*"; }
 
+# Unzips $2 (an artifact's zip, or its directory) into $1, replacing it.
+take() {
+    rm -rf "$1.part" && mkdir -p "$1.part"
+    if [ -d "$2" ]; then cp -al "$2"/. "$1.part/" 2>/dev/null || cp -r "$2"/. "$1.part/"
+    else (cd "$1.part" && unzip -q "$(realpath "$2")"); fi
+    rm -rf "$1" && mv "$1.part" "$1"
+}
+# Downloads $2 of the inputs' release into $1, if the release has it.
+from_release() {
+    local zip="$CACHE/$2.download"
+    echo "no $2 artifact given: trying release $INPUTS_RELEASE"
+    if curl -fsSL --retry 3 -o "$zip" "$RELEASES/$INPUTS_RELEASE/$2.zip"; then
+        take "$1" "$zip"
+        rm -f "$zip"
+    else
+        rm -f "$zip"
+        echo "release $INPUTS_RELEASE has no $2.zip (not made or not published yet)"
+    fi
+}
+
 step "GHC root file system"
 ART="$CACHE/ghc-rootfs-$ROOTFS_RUN"
 if [ "${HASKELL_GHC_ROOTFS:-}" = build ]; then
     ART="$CACHE/ghc-rootfs-local"
     "$HERE/ghc/build-rootfs.sh" "$ART"
 elif [ -n "${HASKELL_GHC_ROOTFS:-}" ]; then
-    rm -rf "$ART.part" && mkdir -p "$ART.part"
-    if [ -d "$HASKELL_GHC_ROOTFS" ]; then cp -al "$HASKELL_GHC_ROOTFS"/. "$ART.part/" 2>/dev/null || cp -r "$HASKELL_GHC_ROOTFS"/. "$ART.part/"
-    else (cd "$ART.part" && unzip -q "$(realpath "$HASKELL_GHC_ROOTFS")"); fi
-    rm -rf "$ART" && mv "$ART.part" "$ART"
+    take "$ART" "$HASKELL_GHC_ROOTFS"
+elif [ ! -f "$ART/rootfs.tar" ]; then
+    from_release "$ART" haskell-ghc-rootfs
 fi
 if [ ! -f "$ART/rootfs.tar" ]; then
     cat >&2 <<EOF
 No GHC root file system in $ART.
 Download the "haskell-ghc-rootfs" artifact of
 https://github.com/tothambrus11/Yukibana/actions/runs/$ROOTFS_RUN
+(or haskell-ghc-rootfs.zip of the release $INPUTS_RELEASE)
 and run HASKELL_GHC_ROOTFS=path/to/haskell-ghc-rootfs.zip $0
 (or HASKELL_GHC_ROOTFS=build with GHC's wasm toolchain installed).
 EOF
@@ -89,16 +117,16 @@ fi
 step "ormolu and hlint"
 TOOLS="$CACHE/ghc-tools-$TOOLS_RUN"
 if [ -n "${HASKELL_GHC_TOOLS:-}" ]; then
-    rm -rf "$TOOLS.part" && mkdir -p "$TOOLS.part"
-    if [ -d "$HASKELL_GHC_TOOLS" ]; then cp -r "$HASKELL_GHC_TOOLS"/. "$TOOLS.part/"
-    else (cd "$TOOLS.part" && unzip -q "$(realpath "$HASKELL_GHC_TOOLS")"); fi
-    rm -rf "$TOOLS" && mv "$TOOLS.part" "$TOOLS"
+    take "$TOOLS" "$HASKELL_GHC_TOOLS"
+elif [ -n "$TOOLS_RUN" ] && [ ! -f "$TOOLS/SHA256SUMS" ]; then
+    from_release "$TOOLS" haskell-ghc-tools
 fi
 if [ -n "$TOOLS_RUN" ] && [ ! -f "$TOOLS/SHA256SUMS" ]; then
     cat >&2 <<EOF
 No ormolu and hlint in $TOOLS.
 Download the "haskell-ghc-tools" artifact of
 https://github.com/tothambrus11/Yukibana/actions/runs/$TOOLS_RUN
+(or haskell-ghc-tools.zip of the release $INPUTS_RELEASE)
 and run HASKELL_GHC_TOOLS=path/to/haskell-ghc-tools.zip $0
 EOF
     exit 1

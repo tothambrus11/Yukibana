@@ -1134,6 +1134,17 @@ const HASKELL_PACKAGES: readonly (readonly [string, RegExp])[] = [
 	['random >=1.2', /^System\.Random\b/],
 	['QuickCheck >=2.14', /^Test\.QuickCheck\b/],
 	['hspec >=2.10', /^Test\.Hspec\b/],
+	['HUnit >=1.6', /^Test\.HUnit\b/],
+	['template-haskell >=2.18', /^Language\.Haskell\.TH\b/],
+	['parsec >=3.1', /^Text\.(Parsec|ParserCombinators\.Parsec)\b/],
+	['pretty >=1.1', /^Text\.PrettyPrint\b/],
+	['binary >=0.8', /^Data\.Binary\b/],
+	['vector >=0.12', /^Data\.Vector\b/],
+	['primitive >=0.7', /^(Data|Control\.Monad)\.Primitive\b/],
+	['unordered-containers >=0.2', /^Data\.Hash(Map|Set)\b/],
+	['hashable >=1.3', /^Data\.Hashable\b/],
+	['split >=0.2', /^Data\.List\.Split\b/],
+	['async >=2.2', /^Control\.Concurrent\.Async\b/],
 ];
 
 /** The build-depends of HASKELL_PACKAGES that some file of `files` imports a module of. */

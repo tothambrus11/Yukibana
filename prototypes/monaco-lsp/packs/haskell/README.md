@@ -11,8 +11,9 @@ dynamic linker (`dyld.mjs`). A small GHC API program of ours,
   holes, as HLS checks), and answers GHC's diagnostics as GHC's own JSON
   (`-fdiagnostics-as-json`) and every name GHC resolved, from the modules'
   `.hie` files (the files HLS reads). Diagnostics, hover, definition,
-  references, highlights, rename, completion, symbols and quick fixes come
-  from that. **hlint** 3.10 adds its hints, and **ormolu** 0.8.0.2 formats:
+  references, highlights, rename, completion, symbols, quick fixes,
+  signature help and semantic tokens come from that. Template Haskell
+  splices run while checking, in GHC's interpreter, as in a build. **hlint** 3.10 adds its hints, and **ormolu** 0.8.0.2 formats:
   each is its own WASI command (`ghc/build-tools.sh`), started only when
   wanted.
 * `runner.js` loads the project into GHC's bytecode interpreter and runs
@@ -22,12 +23,17 @@ dynamic linker (`dyld.mjs`). A small GHC API program of ours,
   0.1 s.
 
 Packages, all of them exposed to both workers as GHC's `-package` flags
-(GHC's versions; the Hackage ones built in CI):
+(`PACKAGES` in `src/ghc.js`; GHC's versions, the Hackage ones built in CI):
 `base` 4.22.1, `containers` 0.8, `mtl` 2.3.1, `transformers` 0.6.3,
 `text` 2.1.4, `bytestring` 0.12.2, `array`, `deepseq`, `directory`,
-`filepath`, `time` 1.15, `stm`, `exceptions`, and from Hackage
-**QuickCheck** 2.19.0.0, **hspec** 2.11.18 and **random** 1.3.1
-(their dependencies as Hackage's index had them on 2026-10-24, `INDEX_STATE` in `ghc/build-rootfs.sh`).
+`filepath`, `time` 1.15, `stm`, `exceptions`, `template-haskell` 2.24,
+`parsec` 3.1.18, `pretty`, `binary`, and from Hackage **QuickCheck**
+2.19.0.0, **hspec** 2.11.18 (with HUnit 1.6.2), **random** 1.3.1,
+**vector** 0.13.2.0 (with primitive), **unordered-containers** 0.2.21,
+**hashable** 1.5.1.0, **split** 0.2.5.1 and **async** 2.2.6 (their
+dependencies as Hackage's index had them on 2026-10-24, `INDEX_STATE` in
+`ghc/build-rootfs.sh`). Download's cabal file names the ones a project
+imports (`haskellDepends` in the app's `export.ts`).
 
 ## Why this engine
 
@@ -37,9 +43,9 @@ formatter. Options compared (measured where marked):
 
 | | What it type checks | Download (br) | Editor features | Verdict |
 | --- | --- | --- | --- | --- |
-| **GHC 9.14 wasm + GHC API (chosen)** | everything GHC does, all extensions, real `base` | **33.2 MB** once (measured) | ours on the GHC API and `.hie` files (HLS's sources of truth) | parity on diagnostics, types and libraries; 5 to 8 s cold start |
+| **GHC 9.14 wasm + GHC API (chosen)** | everything GHC does, all extensions, Template Haskell, real `base` | **36.2 MB** once (measured) | ours on the GHC API and `.hie` files (HLS's sources of truth) | parity on diagnostics, types and libraries; 5 to 8 s cold start |
 | MicroHs 0.16 (the previous engine) | Haskell 2010 and many extensions, its own `base` | 1.6 MB | ours on a patched type checker | one error per module, its own messages and types, no QuickCheck, mtl, text or bytestring |
-| HLS / ghcide on wasm | everything | — | the real ones | needs processes, a real file system and Template Haskell; no wasm build exists or is near |
+| HLS / ghcide on wasm | everything | — | the real ones | needs processes, a real file system and threads; no wasm build exists or is near |
 | ghc-in-browser (GHC's browser GHCi demo) | everything | ~49 MB zstd | none: a REPL | the same wasm GHC; we use its dyld.mjs and pieces of its approach, not its image |
 | GHC's JavaScript backend | — | — | — | compiles Haskell to JS, does not run GHC in a browser |
 
@@ -70,7 +76,10 @@ formatter. Options compared (measured where marked):
 | Formatting | ormolu or fourmolu | ormolu 0.8.0.2; a module that does not parse is refused with ormolu's message | 3 checks |
 | Run | `runghc` / GHCi | GHC's bytecode interpreter: stdout unbuffered, stdin from the terminal (`getLine`, `getContents` to Ctrl-D), `exitWith`, uncaught exceptions with GHC's message and call stack, compile errors in colour, many runs in one session | 11 checks |
 | Test | `cabal test` with hspec + QuickCheck | hspec 2.11's report, coloured, QuickCheck properties | 3 checks |
-| Packages | whatever cabal installs | the list above; others are not there (no cabal in the browser) | |
+| Signature help | HLS's: the function's type, the argument at the cursor highlighted | the same: the call found in the text as typed (a space or `(` starts an argument), the type GHC declared or inferred, split by GHC into context, arguments and result, with Haddock; locals, qualified names, constructors, class methods | 8 checks |
+| Semantic tokens | HLS's plugin, from `.hie` files | the same classification from the same files (function, variable, method, field, constructor, type, class, type family, type variable, operator, module); asked before a check finishes, a token follows its line or is dropped | 4 checks |
+| Template Haskell | splices and quasi-quotes, compiled with the interpreter | the same, in the editor and in Run: the project's own splice functions and quasi-quoters, `template-haskell`'s; errors in a splice reported at it | 5 checks, and 1 of Run |
+| Packages | whatever cabal installs | the list above; others are not there (see Limits) | runner: vector, unordered-containers, hashable, split, async, parsec |
 
 Measured (Chromium, this machine, local server so download time is not
 included; a script drives both workers, as test.mjs does):
@@ -92,7 +101,7 @@ included; a script drives both workers, as test.mjs does):
 
 | file | raw | gzip | brotli | what |
 |---|---|---|---|---|
-| `rootfs.tar` | 247.1 MB | 49.4 MB | 33.2 MB | GHC's libdir, the packages and libyuki.so, unpacked by each worker into memory |
+| `rootfs.tar` | 268.9 MB | 53.9 MB | 36.2 MB | GHC's libdir, the packages and libyuki.so, unpacked by each worker into memory |
 | `dyld.mjs`, `prelude.mjs`, `post-link.mjs` | 57 KB | 19 KB | 17 KB | GHC's wasm dynamic linker (patched, `scripts/patch-dyld.mjs`) |
 | `wasi.js` | 32 KB | 9 KB | 8 KB | browser_wasi_shim (the haskell-wasm fork), bundled |
 | `ghc.js`, `server.js`, `runner.js`, `tools.js` | 57 KB | 20 KB | 18 KB | ours |
@@ -104,7 +113,7 @@ Downloads (brotli), by what the person does:
 
 | | |
 | --- | --- |
-| open a Haskell project (editor) | **33.2 MB** (rootfs) + 0.04 MB |
+| open a Haskell project (editor) | **36.2 MB** (rootfs) + 0.04 MB |
 | hints, after the first check | + 3.6 MB |
 | first Format | + 3.3 MB |
 | Run and Test | + 3 KB (`runner.js`): the runner fetches the same `rootfs.tar`, from the browser's cache or the service worker |
@@ -140,8 +149,15 @@ and by the sha256 of its `SHA256SUMS` (which holds every file's):
 
 Download an artifact (`haskell-ghc-rootfs`, `haskell-ghc-tools`) of the
 pinned run and pass it as `HASKELL_GHC_ROOTFS=…zip` / `HASKELL_GHC_TOOLS=…zip`;
-the release workflow does that itself. Artifacts are kept 90 days, so a
-pin older than that needs the workflow run again (and the pins updated).
+the release workflow does that itself. Artifacts are kept 90 days. To keep
+the pinned inputs past that, `.github/workflows/haskell-inputs-release.yml`
+(run by hand, a draft by default) checks both artifacts against the pins
+and attaches them to a GitHub release named `haskell-inputs-<rootfs
+run>-<tools run>` (`INPUTS_RELEASE`); once that release is published,
+`build.sh` given no artifact downloads them from it (sha256-checked the
+same way), and the release workflow falls back to it when an artifact has
+expired. Without the release, a pin older than 90 days needs the workflow
+run again (and the pins updated).
 `HASKELL_GHC_ROOTFS=build` builds the root file system locally with the
 toolchain installed.
 
@@ -157,15 +173,29 @@ toolchain installed.
 
 ## Limits
 
-* **The download**: 33 MB the first time, then cached. MicroHs was 1.6 MB.
+* **The download**: 36 MB the first time, then cached. MicroHs was 1.6 MB.
 * **The start**: 5 to 8 s from opening a project to the first diagnostics;
   a Run pressed in the first seconds waits for its own GHC (the app starts
   the runner ahead, once the server is up).
-* **Packages are fixed**: the list above. A `build-depends` on anything else
-  is not there; Download's cabal project builds it on a desktop.
-* **No Template Haskell**: `template-haskell` is not among the packages
-  (an import of `Language.Haskell.TH` says it is hidden), and splices would
-  need GHC's interpreter in the editor's session, which does not start it.
+* **Packages are fixed**: the list above, built in CI. A `build-depends` on
+  anything else is not there; Download's cabal project builds it on a
+  desktop. Adding one is a line in `PACKAGES` of `ghc/build-rootfs.sh`
+  and of `src/ghc.js` (vector and the four after it cost 3 MB brotli).
+  Installing from Hackage at run time is not realistic: Hackage sends no
+  CORS headers (a browser cannot fetch its tarballs or its 140 MB index
+  without a proxy), there is no cabal solver in the browser, and a package
+  with C sources (hashable, text-short, ...) or `CPP` needs a C compiler
+  and preprocessor that the browser does not have. A pure-Haskell package
+  could be loaded from source into the interpreter, but slowly and only
+  that kind.
+* **Template Haskell** runs a splice that its module needs compiled: the
+  editor compiles a project module a splice uses to bytecode
+  (`-fprefer-byte-code`), as GHC does when it generates no code. A splice
+  that does not type check is reported as GHC's "Exception when trying to
+  run compile-time code", with the type error inside (type errors are
+  deferred in the editor, as HLS does), and a hover on a name inside a
+  splice shows where it is defined but not its type (the `.hie` file has
+  none there).
 * **hlint and ormolu parse as GHC 9.12**: syntax new in 9.14 is not
   understood by them (GHC's own diagnostics are unaffected).
 * **Runtime errors' call stacks** point into the project's files and into

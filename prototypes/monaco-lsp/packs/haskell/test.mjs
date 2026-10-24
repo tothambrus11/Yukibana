@@ -125,6 +125,47 @@ main = hspec $ do
       area (Square 3) \`shouldBe\` 9
 `;
 const SAMPLE = { 'Main.hs': MAIN, 'Geometry.hs': GEOMETRY, 'tests/Spec.hs': SPEC };
+// Template Haskell: a splice of a function from another module of the
+// project, a quasi-quoter defined in the project, and one from
+// template-haskell itself.
+const TH = `{-# LANGUAGE TemplateHaskell #-}
+module TH (power, str, fib) where
+
+import Language.Haskell.TH
+import Language.Haskell.TH.Quote
+
+-- | \\x -> x ^ n, unrolled at compile time.
+power :: Int -> Q Exp
+power 0 = [|const 1|]
+power n = [|\\x -> x * $(power (n - 1)) x|]
+
+-- | A string literal over several lines.
+str :: QuasiQuoter
+str = QuasiQuoter {quoteExp = stringE, quotePat = undefined, quoteType = undefined, quoteDec = undefined}
+
+-- | The n-th Fibonacci number, as a literal.
+fib :: Int -> Q Exp
+fib n = litE (integerL (go n))
+  where
+    go :: Int -> Integer
+    go k = if k < 2 then toInteger k else go (k - 1) + go (k - 2)
+`;
+const TH_MAIN = `{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE TemplateHaskell #-}
+module Main (main) where
+
+import Language.Haskell.TH (stringE)
+import TH
+
+main :: IO ()
+main = do
+  print ($(power 3) (2 :: Int))
+  putStr [str|hello
+world
+|]
+  print ($(fib 20) :: Integer)
+  putStrLn $(stringE (show (3 :: Int)))
+`;
 const README = `# Not Haskell (at all\n`;
 const append = (text, more) => text + more;
 /** `text` with LSP TextEdits applied (non-overlapping, any order). */
@@ -180,6 +221,7 @@ async function serverTests(page) {
         worker.onerror = (e) => log.push({ method: 'worker/error', params: String(e.message) });
         worker.onmessage = ({ data: msg }) => {
             if (msg.id !== undefined && msg.method) {
+                log.push(msg);
                 worker.postMessage({ jsonrpc: '2.0', id: msg.id, result: null });
             } else if (msg.id !== undefined) {
                 pending.get(msg.id)?.(msg);
@@ -255,7 +297,7 @@ async function serverTests(page) {
         processId: null,
         rootUri: 'file:///workspace/',
         workspaceFolders: [{ uri: 'file:///workspace/', name: 'workspace' }],
-        capabilities: { textDocument: { hover: { contentFormat: ['markdown', 'plaintext'] } } },
+        capabilities: { textDocument: { hover: { contentFormat: ['markdown', 'plaintext'] } }, workspace: { semanticTokens: { refreshSupport: true } } },
     });
     const loading = (await lsp.log()).filter((m) => m.method === 'yukibana/loading');
     check('initialize answers after the downloads, with progress notifications', !!init.result?.capabilities?.hoverProvider && loading.length > 0,
@@ -422,6 +464,121 @@ async function serverTests(page) {
     comp = (await typing(MAIN.replace('import Geometry\n', 'import Geometry\nimport Data.\n'), 3, 12)).result?.items ?? [];
     check('completion after `import Data.` offers the modules there are', ['Data.Map', 'Data.Map.Strict', 'Data.Char', 'Data.List', 'Data.Set'].every((x) => comp.some((i) => i.label === x)), `${comp.length} modules`);
 
+    // Signature help: the call is found in the text as it is now, the
+    // function's type is GHC's.
+    await change('Main.hs', MAIN);
+    mark = (await lsp.log()).length;
+    await checked(mark);
+    check('the server offers signature help and semantic tokens', !!init.result?.capabilities?.signatureHelpProvider && init.result?.capabilities?.semanticTokensProvider?.full === true);
+    /** Signature help at the `|` of `text` (put in Main.hs as typed, without waiting for a check). */
+    const signature = async (text) => {
+        const at0 = text.indexOf('|');
+        const typed = text.slice(0, at0) + text.slice(at0 + 1);
+        await change('Main.hs', typed);
+        const before = typed.slice(0, at0);
+        const line = before.split('\n').length - 1;
+        const character = at0 - (before.lastIndexOf('\n') + 1);
+        const t = Date.now();
+        const r = (await lsp.request('textDocument/signatureHelp', { ...at('Main.hs', line, character), context: { triggerKind: 2, triggerCharacter: ' ', isRetrigger: false } })).result;
+        const s = r?.signatures?.[r.activeSignature ?? 0];
+        const active = s?.parameters?.[r.activeParameter ?? 0]?.label;
+        return { label: s?.label ?? null, active: Array.isArray(active) ? s.label.slice(active[0], active[1]) : null, count: s?.parameters?.length ?? 0, doc: s?.documentation?.value ?? '', ms: Date.now() - t };
+    };
+    let sh = await signature(append(MAIN, '  print (distance a |'));
+    check('signature help in `distance a ` shows distance\'s type with its second argument active, and its Haddock', sh.label === 'distance :: Point -> Point -> Double' && sh.active === 'Point' && sh.count === 2 && /Euclidean distance/.test(sh.doc), `${JSON.stringify(sh)}`);
+    sh = await signature(append(MAIN, '  print (distance (|'));
+    check('just inside a bracket that opens an argument, it is the first', sh.label === 'distance :: Point -> Point -> Double' && sh.count === 2 && sh.active === 'Point', JSON.stringify(sh));
+    await change('Main.hs', QUALIFIED);
+    mark = (await lsp.log()).length;
+    await checked(mark);
+    sh = await signature(append(QUALIFIED, '  print (Map.insert (1 :: Int) |'));
+    check('a qualified function of a library (Map.insert): its context, and the argument after the key active', sh.label === 'insert :: Ord k => k -> a -> Map k a -> Map k a' && sh.active === 'a', JSON.stringify(sh));
+    sh = await signature(append(MAIN, '  mapM_ |'));
+    check('a class-constrained function\'s first argument, a function, in parentheses', sh.label === 'mapM_ :: (Foldable t, Monad m) => (a -> m b) -> t a -> m ()' && sh.active === '(a -> m b)', JSON.stringify(sh));
+    sh = await signature(append(MAIN, '  print (Point 1 |'));
+    check('a data constructor is a function of its fields', sh.label === 'Point :: Double -> Double -> Point' && sh.active === 'Double', JSON.stringify(sh));
+    const LOCAL = MAIN.replace('  print (norm b)\n', '  let scale k p = Point (k * px p) (k * py p)\n  print (norm (scale 2 b))\n');
+    await change('Main.hs', LOCAL);
+    mark = (await lsp.log()).length;
+    await checked(mark);
+    sh = await signature(LOCAL.replace('(scale 2 b)', '(scale 2 |'));
+    check('a local function (a let in main) has the type GHC inferred for it', sh.label === 'scale :: Double -> Point -> Point' && sh.active === 'Point', JSON.stringify(sh));
+    sh = await signature(append(MAIN, '  print (a |'));
+    check('a value that is not a function has no signature help', sh.label === null, JSON.stringify(sh));
+    sh = await signature(append(MAIN, '  putStrLn "distance a |'));
+    check('nor has a position in a string', sh.label === null, JSON.stringify(sh));
+
+    // Semantic tokens: GHC's names, classified as HLS does.
+    await change('Main.hs', MAIN);
+    mark = (await lsp.log()).length;
+    await checked(mark);
+    check('after a check the server asks the client to refresh semantic tokens', (await lsp.log()).slice(mark).some((m) => m.method === 'workspace/semanticTokens/refresh'));
+    const legend = init.result?.capabilities?.semanticTokensProvider?.legend?.tokenTypes ?? [];
+    const tokensOf = async (name, text) => {
+        const data = (await lsp.request('textDocument/semanticTokens/full', { textDocument: { uri: uri(name) } })).result?.data ?? [];
+        const lines = text.split('\n');
+        const out = [];
+        let line = 0;
+        let ch = 0;
+        for (let i = 0; i + 4 < data.length; i += 5) {
+            line += data[i];
+            ch = data[i] === 0 ? ch + data[i + 1] : data[i + 1];
+            out.push({ line, ch, text: lines[line]?.slice(ch, ch + data[i + 2]), type: legend[data[i + 3]] });
+        }
+        return out;
+    };
+    const kindAt = (tokens, text, word, n = 0, offset = 0) => {
+        const [line, ch] = find(text, word, n);
+        return tokens.find((x) => x.line === line && x.ch === ch + offset)?.type ?? null;
+    };
+    let toks = await tokensOf('Geometry.hs', GEOMETRY);
+    const kinds = {
+        'norm (its signature)': kindAt(toks, GEOMETRY, 'norm ::'),
+        'Point (a type)': kindAt(toks, GEOMETRY, 'Point -> Double'),
+        'Circle (a constructor)': kindAt(toks, GEOMETRY, 'Circle r'),
+        'px (a field)': kindAt(toks, GEOMETRY, 'px a'),
+        'sqrt (a method of Floating)': kindAt(toks, GEOMETRY, 'sqrt'),
+        'x (a variable)': kindAt(toks, GEOMETRY, 'x * x'),
+        '* (a class method)': kindAt(toks, GEOMETRY, '* x', 0),
+        'Show (a class)': kindAt(toks, GEOMETRY, 'Show Point'),
+        'side (a variable)': kindAt(toks, GEOMETRY, 'side * side'),
+    };
+    const want = { 'norm (its signature)': 'function', 'Point (a type)': 'type', 'Circle (a constructor)': 'enumMember', 'px (a field)': 'property', 'sqrt (a method of Floating)': 'method', 'x (a variable)': 'variable', '* (a class method)': 'method', 'Show (a class)': 'class', 'side (a variable)': 'variable' };
+    check('semantic tokens of Geometry.hs: functions, types, constructors, fields, variables, methods and classes, each where it is written', JSON.stringify(kinds) === JSON.stringify(want) && toks.every((x) => x.text && /^[\w'.*+\-/<>=$!&|^~:]+$|^\(.*\)$|^`.*`$/.test(x.text)), JSON.stringify(kinds));
+    toks = await tokensOf('Main.hs', MAIN);
+    const mainKinds = { Geometry: kindAt(toks, MAIN, 'Geometry'), mapM_: kindAt(toks, MAIN, 'mapM_'), putStrLn: kindAt(toks, MAIN, 'putStrLn'), b: kindAt(toks, MAIN, 'b)') };
+    check('and of Main.hs: the imported module, library functions, a local', JSON.stringify(mainKinds) === JSON.stringify({ Geometry: 'namespace', mapM_: 'function', putStrLn: 'function', b: 'variable' }), JSON.stringify(mainKinds));
+    const SHIFTED = '-- a new first line\n' + GEOMETRY;
+    await change('Geometry.hs', SHIFTED);
+    toks = await tokensOf('Geometry.hs', SHIFTED);
+    check('asked before the check of an edit, the tokens follow the lines that moved', kindAt(toks, SHIFTED, 'norm ::') === 'function' && kindAt(toks, SHIFTED, 'Circle r') === 'enumMember' && toks.every((x) => x.line > 0), JSON.stringify(toks.slice(0, 4)));
+    mark = (await lsp.log()).length;
+    await change('Geometry.hs', GEOMETRY);
+    await checked(mark);
+
+    // Template Haskell: splices run in GHC's interpreter, in the editor as
+    // in a build.
+    mark = (await lsp.log()).length;
+    await lsp.notify('textDocument/didOpen', { textDocument: { uri: uri('TH.hs'), languageId: 'haskell', version: 1, text: TH } });
+    await change('Main.hs', TH_MAIN);
+    await checked(mark);
+    let thd = await diagnostics('Main.hs', () => true);
+    const thd2 = await diagnostics('TH.hs', () => true);
+    check('Template Haskell: splices of the project\'s functions, its quasi-quoter and template-haskell\'s, without errors', thd?.length === 0 && thd2?.length === 0, `${show(thd)} ${show(thd2)}`);
+    [l, c] = find(TH_MAIN, 'power');
+    h = (await lsp.request('textDocument/hover', at('Main.hs', l, c + 1))).result?.contents?.value ?? '';
+    check('hover in a splice names the function it calls and where it is defined', /power/.test(h) && /Defined at TH\.hs:9:1/.test(h), JSON.stringify(h));
+    await errorCase('a splice that does not type check is an error where it is', TH_MAIN.replace('$(power 3)', '$(power "3")'),
+        (x) => x.range.start.line === 9 && /Couldn't match/.test(x.message));
+    await errorCase('a splice that fails while it runs is an error, in its words', TH_MAIN.replace('$(fib 20)', '$(fail "no Fibonacci today")'),
+        (x) => x.range.start.line === 13 && /no Fibonacci today/.test(x.message));
+    mark = (await lsp.log()).length;
+    await lsp.notify('textDocument/didClose', { textDocument: { uri: uri('TH.hs') } });
+    await change('Main.hs', MAIN);
+    thd = await diagnostics('Main.hs', (x) => x.length === 0, mark);
+    await checked(mark);
+    check('and back to the sample, no diagnostics', thd?.length === 0, show(thd));
+
     // Rename.
     await change('Main.hs', MAIN);
     mark = (await lsp.log()).length;
@@ -540,6 +697,28 @@ main = do
 `;
     r = await run({ 'Main.hs': MAP });
     check('Data.Map, Data.List and Data.Char work', r.code === 0 && r.stdout === '[("a",3),("b",2),("c",1)]\nDONE\n', `${JSON.stringify(r.stdout)} ${r.stderr}`);
+
+    r = await run({ 'Main.hs': TH_MAIN, 'TH.hs': TH });
+    check('Template Haskell runs: a splice unrolls power, a quasi-quote is a string, fib 20 is a literal', r.code === 0 && r.stdout === '8\nhello\nworld\n6765\n3\n', `${JSON.stringify(r.stdout)} ${JSON.stringify(plain(r.stderr).slice(0, 400))} (${r.ms} ms)`);
+
+    const LIBRARIES = `import qualified Data.Vector.Unboxed as U
+import qualified Data.HashMap.Strict as HM
+import Data.Hashable (hash)
+import Data.List.Split (splitOn)
+import Control.Concurrent.Async (concurrently)
+import Text.Parsec (parse, many1, digit, sepBy, char)
+
+main :: IO ()
+main = do
+  print (U.sum (U.enumFromN (1 :: Int) 100))
+  print (HM.toList (HM.fromListWith (+) [(w, 1 :: Int) | w <- splitOn "," "a,b,a"]))
+  print (hash "x" == hash "x")
+  (x, y) <- concurrently (pure (1 :: Int)) (pure (2 :: Int))
+  print (x + y)
+  print (parse (many1 digit \`sepBy\` char ',') "" "12,3")
+`;
+    r = await run({ 'Main.hs': LIBRARIES });
+    check('vector, unordered-containers, hashable, split, async and parsec work', r.code === 0 && r.stdout === '5050\n[("a",2),("b",1)]\nTrue\n3\nRight ["12","3"]\n', `${JSON.stringify(r.stdout)} ${JSON.stringify(plain(r.stderr).slice(0, 600))} (${r.ms} ms)`);
 
     r = await run({ ...SAMPLE, 'Main.hs': MAIN.replace('print (norm b)', 'print (norm True)') });
     check('a compile error is printed as GHC does, in colour, and the exit code is 1',
