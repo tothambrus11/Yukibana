@@ -1,0 +1,50 @@
+<!doctype html><meta charset="utf-8"><title>kotlinc in wasm</title>
+<pre id="log"></pre>
+<script type="module">
+import { wasiImports } from "./wasi.mjs";
+const log = (s) => { document.getElementById("log").textContent += s + "\n"; console.log(s); };
+const w = new Worker("worker.js");
+let next = 0; const pending = new Map();
+const call = (msg) => new Promise((res) => { const id = next++; pending.set(id, res); w.postMessage({ ...msg, id }); });
+const t0 = performance.now();
+w.onmessage = async (e) => {
+  if (e.data.type === "ready") {
+    log(`ready: runtime ${e.data.tReady.toFixed(0)} ms, libraries ${e.data.tLibs.toFixed(0)} ms, page ${(performance.now()-t0).toFixed(0)} ms`);
+    window.results = [];
+    const main = `data class Point(val x: Double, val y: Double)\nfun Point.distanceTo(o: Point) = kotlin.math.sqrt((x - o.x) * (x - o.x) + (y - o.y) * (y - o.y))\nfun main() {\n    val a = Point(0.0, 0.0); val b = Point(3.0, 4.0)\n    println("$a to $b: \${a.distanceTo(b)}")\n}\n`;
+    const bad = `fun bad() {\n    val s: String = 42\n    undefinedCall()\n}\n`;
+    const jvm = ["-kotlin-home", "/kotlinc", "-Xuse-fast-jar-file-system=false", "-no-jdk", "-no-stdlib", "-no-reflect", "-classpath", "/lib/kotlin-stdlib.jar:/lib/jdk-api.jar", "-d", "/out/jvm"];
+    for (let i = 0; i < 4; i++) {
+      const r = await call({ which: "jvm", files: { "/src/Main.kt": main }, args: [...jvm, "/src/Main.kt"] });
+      log(`jvm Main.kt #${i}: exit ${r.result.exit}, ${r.wall.toFixed(0)} ms`); window.results.push(["jvm", r.wall]);
+    }
+    const rb = await call({ which: "jvm", files: { "/src/Bad.kt": bad }, args: [...jvm, "/src/Bad.kt"] });
+    log(`jvm Bad.kt: exit ${rb.result.exit}, ${rb.wall.toFixed(0)} ms`);
+    for (const m of rb.result.messages) log(`  ${m.severity} ${m.path}:${m.line}:${m.column}-${m.lineEnd}:${m.columnEnd} ${m.message}`);
+    const kl = await call({ which: "js", args: ["-kotlin-home", "/kotlinc", "-Xir-produce-klib-dir", "-ir-output-dir", "/out/klib", "-ir-output-name", "main", "-libraries", "/lib/kotlin-stdlib-js.klib", "/src/Main.kt"] });
+    log(`js klib: exit ${kl.result.exit}, ${kl.wall.toFixed(0)} ms`);
+    const js = await call({ which: "js", args: ["-kotlin-home", "/kotlinc", "-Xir-produce-js", "-Xinclude=/out/klib", "-ir-output-dir", "/out/js", "-ir-output-name", "main", "-libraries", "/lib/kotlin-stdlib-js.klib", "-main", "call", "-target", "es2015", "-module-kind", "es", "main"] });
+    log(`js link: exit ${js.result.exit}, ${js.wall.toFixed(0)} ms, ${Object.values(js.out)[0]?.length} chars`);
+    const src = Object.values(js.out)[0];
+    const orig = console.log; const lines = []; console.log = (...a) => lines.push(a.join(" "));
+    await import(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+    console.log = orig;
+    log("program output: " + lines.join(" | "));
+    const W = ["-kotlin-home", "/kotlinc", "-Xwasm-target=wasm-wasi", "-libraries", "/lib/kotlin-stdlib-wasm-wasi.klib"];
+    const prog = `fun main() {\n    print("Name? ")\n    val name = readln()\n    val n = readln().toInt()\n    println("Hello, $name! \${(1..n).sum()} \${1.0 / 3} \${listOf(3, 1, 2).sorted()}")\n}\n`;
+    for (let i = 0; i < 3; i++) {
+      const k = await call({ which: "wasm", files: { "/src2/Main.kt": prog }, args: [...W, "-Xir-produce-klib-dir", "-ir-output-dir", "/out/wklib", "-ir-output-name", "main", "/src2/Main.kt"] });
+      const l = await call({ which: "wasm", args: [...W, "-Xir-produce-js", "-Xinclude=/out/wklib", "-Xcache-directory=/cache/wasi", "-ir-output-dir", "/out/wasm", "-ir-output-name", "main"] });
+      log(`wasm #${i}: klib exit ${k.result.exit} ${k.wall.toFixed(0)} ms, link exit ${l.result.exit} ${l.wall.toFixed(0)} ms`);
+      window.wasmBytes = l.out["/out/wasm/main.wasm"];
+    }
+    let stdout = "";
+    const w = wasiImports(new TextEncoder().encode("Ambrus\n10\n"), (fd, text) => { stdout += text; });
+    const t = performance.now();
+    const { instance } = await WebAssembly.instantiate(window.wasmBytes, { wasi_snapshot_preview1: w.imports });
+    w.bind(instance); instance.exports._start();
+    log(`wasm program (${window.wasmBytes.length} bytes, ran in ${(performance.now() - t).toFixed(0)} ms): ${stdout.trim()}`);
+    log("DONE");
+  } else pending.get(e.data.id)(e.data);
+};
+</script>

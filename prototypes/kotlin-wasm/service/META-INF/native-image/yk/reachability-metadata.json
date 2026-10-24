@@ -1,0 +1,5 @@
+{
+  "reflection": [
+    { "type": "yk.KotlinService", "allPublicMethods": true }
+  ]
+}
