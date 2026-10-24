@@ -76,11 +76,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Node 22: the runner's test report is Node 22's, and test-run.mjs
+      # compares it line for line with this machine's `node --test` (Node 24
+      # reports a failing todo differently). No npm cache from setup-node:
+      # it asks npm at the repository root, whose package.json (the IDE)
+      # refuses Node 22; the pack caches its own npm downloads below.
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: prototypes/monaco-lsp/app/package-lock.json
+          node-version: 22
 
       # The app's playwright-core installs the Chromium that the pack's tests
       # and the e2e both launch (as $CHROMIUM).
