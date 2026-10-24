@@ -64,7 +64,12 @@ fi
 # shellcheck disable=SC1091
 source "$EM/env.sh"
 # meson 1.5 (QEMU 8.2's configure wants a newer one than distributions ship)
-[ -x "$QC/venv/bin/meson" ] || { python3 -m venv "$QC/venv" && "$QC/venv/bin/pip" -q install meson==1.5.2; }
+# and setuptools, whose distutils shim glib 2.75's gdbus-codegen imports
+# (distutils.version): Python 3.12 dropped distutils, and a venv made by 3.12
+# or later has no setuptools of its own.
+[ -x "$QC/venv/bin/meson" ] || python3 -m venv "$QC/venv"
+"$QC/venv/bin/python3" -c 'import setuptools, mesonbuild' 2>/dev/null ||
+  "$QC/venv/bin/pip" -q install meson==1.5.2 setuptools==84.2.1
 export PATH=$QC/venv/bin:$PATH
 
 # --- dependencies (PR #3's scripts/build-deps.sh, with the tarballs checked)
