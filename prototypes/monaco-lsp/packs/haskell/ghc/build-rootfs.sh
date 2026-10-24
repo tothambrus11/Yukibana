@@ -31,8 +31,10 @@ ROOT=/tmp/yk-root
 STORE=/tmp/yk/store
 # Packages from Hackage beyond GHC's boot packages, pinned; their
 # dependencies are what Hackage's index offered at INDEX_STATE, so the
-# same plan is chosen on every build.
-PACKAGES=(QuickCheck-2.19.0.0 hspec-2.11.18 random-1.3.1)
+# same plan is chosen on every build. Testing (QuickCheck, hspec), and what
+# course code reaches for after base and containers: random, vector,
+# unordered-containers and hashable, split, async.
+PACKAGES=(QuickCheck-2.19.0.0 hspec-2.11.18 random-1.3.1 vector-0.13.2.0 unordered-containers-0.2.21 hashable-1.5.1.0 split-0.2.5.1 async-2.2.6)
 INDEX_STATE=2026-10-24T00:00:00Z
 
 log() { printf '\n== %s\n' "$*"; }
