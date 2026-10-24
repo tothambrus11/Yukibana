@@ -6,6 +6,7 @@
  */
 import type * as lsp from 'vscode-languageserver-protocol';
 import { monaco } from '../monaco';
+import { applyWorkspaceEdit } from '../workspace-edits';
 import { Connection, REQUEST_CANCELLED, ResponseError } from './connection';
 import * as c from './convert';
 import { reasonOf, toFolds, toSelectionChain } from './plain';
@@ -289,7 +290,10 @@ export class LanguageClient {
 			events.open(uri, d.selection && c.toRange(d.selection));
 			return { success: true };
 		});
-		conn.onRequest('workspace/applyEdit', (p) => ({ applied: this.applyEdit((p as lsp.ApplyWorkspaceEditParams).edit) }));
+		conn.onRequest('workspace/applyEdit', async (p) => {
+			const params = p as lsp.ApplyWorkspaceEditParams;
+			return { applied: await this.applyEdit(params.edit, params.label) };
+		});
 		conn.onRequest('workspace/semanticTokens/refresh', () => this.semanticTokensChanged.fire());
 		for (const m of ['workspace/inlayHint/refresh', 'workspace/codeLens/refresh', 'workspace/diagnostic/refresh']) conn.onRequest(m, () => null);
 	}
@@ -336,21 +340,20 @@ export class LanguageClient {
 		monaco.editor.setModelMarkers(entry.model, MARKER_OWNER, p.diagnostics.map(c.toMarker));
 	}
 
-	private applyEdit(edit: lsp.WorkspaceEdit): boolean {
+	/**
+	 * Applies an edit the server asks for, as Monaco applies a rename's:
+	 * one undo step across every file it touches (workspace-edits.ts), so
+	 * Ctrl+Z in any of them offers to undo it in all.
+	 */
+	private async applyEdit(edit: lsp.WorkspaceEdit, label: string | undefined): Promise<boolean> {
 		const { edit: converted, unsupported } = c.toWorkspaceEdit(edit);
 		for (const u of unsupported) this.options.events.log('warning', `not applied (file operations are not supported): ${u}`);
-		const byModel = new Map<monaco.editor.ITextModel, monaco.editor.IIdentifiedSingleEditOperation[]>();
-		for (const e of converted.edits) {
-			const model = monaco.editor.getModel(e.resource);
-			if (!model) {
-				this.options.events.log('warning', `not applied: no such file ${e.resource.toString()}`);
-				return false;
-			}
-			const list = byModel.get(model) ?? [];
-			list.push({ range: e.textEdit.range, text: e.textEdit.text });
-			byModel.set(model, list);
+		try {
+			await applyWorkspaceEdit(converted, label ?? 'Workspace edit');
+		} catch (e) {
+			this.options.events.log('warning', `not applied: ${e instanceof Error ? e.message : String(e)}`);
+			return false;
 		}
-		for (const [model, edits] of byModel) model.pushEditOperations([], edits, () => null);
 		return unsupported.length === 0;
 	}
 

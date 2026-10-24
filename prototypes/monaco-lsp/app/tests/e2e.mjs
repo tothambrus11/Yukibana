@@ -197,6 +197,7 @@ async function run(language, c) {
 	if (language === 'python') await peek(page, check);
 	if (language === 'cpp') await cppBridge(page, check, lspLog);
 	if (language === 'typescript') await renameFromUse(page, check);
+	if (language === 'python') await undoRename(page, check, { file: 'main.py', needle: 'distance(a, b)', from: 'distance', name: 'dist3', declarationFile: 'geometry.py', declaration: 'def dist3(', edit: '\n# edited\n' });
 	if (language === 'swift' && existsSync(join(build, 'packs', 'swift', 'runner.js'))) await swiftMacros(page, check, requests);
 	if (language === 'cpp' && existsSync(join(build, 'packs', 'cpp', 'runner.js'))) await testFrameworks(page, check);
 	if (language === 'cpp') {
@@ -689,11 +690,140 @@ async function cppBridge(page, check, lspLog) {
  * (`import { distance as dist3 }`).
  */
 async function renameFromUse(page, check) {
-	await openFile(page, 'main.ts');
-	await rename(page, 'distance(a, b)', 'dist3');
-	const renamed = await page.waitForFunction(() => globalThis.monaco.editor.getModels().find((m) => m.uri.path === '/workspace/geometry.ts')?.getValue().includes('function dist3('), null, { timeout: 15_000 }).then(() => true, () => false);
-	const main = (await modelText(page, 'main.ts')) ?? '';
-	check(renamed && !/\bas dist3\b/.test(main) && main.includes('dist3(a, b)'), `renaming distance from its call in main.ts renames the function in geometry.ts, without an alias (main.ts: ${JSON.stringify(main.split('\n')[0])})`);
+	await undoRename(page, check, {
+		file: 'main.ts',
+		needle: 'distance(a, b)',
+		from: 'distance',
+		name: 'dist3',
+		declarationFile: 'geometry.ts',
+		declaration: 'function dist3(',
+		edit: '\n// edited\n',
+		renamed: async (renamed) => {
+			const main = (await modelText(page, 'main.ts')) ?? '';
+			check(renamed && !/\bas dist3\b/.test(main) && main.includes('dist3(a, b)'), `renaming distance from its call in main.ts renames the function in geometry.ts, without an alias (main.ts: ${JSON.stringify(main.split('\n')[0])})`);
+		},
+	});
+}
+
+/** Every project file's text, by project path. */
+function projectTexts(page) {
+	return page.evaluate(() => Object.fromEntries(globalThis.monaco.editor.getModels().filter((m) => m.uri.path.startsWith('/workspace/')).map((m) => [m.uri.path.slice('/workspace/'.length), m.getValue()])));
+}
+
+/** Waits until every project file's text is `texts`'s; false after `timeout`. */
+function textsBecome(page, texts, timeout = 10_000) {
+	return page
+		.waitForFunction((texts) => Object.entries(texts).every(([path, text]) => globalThis.monaco.editor.getModels().find((m) => m.uri.path === `/workspace/${path}`)?.getValue() === text), texts, { timeout })
+		.then(() => true, () => false);
+}
+
+/** Focuses the editor showing project file `path`, its caret at `needle` (or at the end). */
+async function focusFile(page, path, needle) {
+	await openFile(page, path.split('/').pop());
+	const ok = await page.evaluate(({ path, needle }) => {
+		const editor = globalThis.monaco.editor.getEditors().find((e) => e.getModel()?.uri.path === `/workspace/${path}`);
+		const model = editor?.getModel();
+		if (!editor || !model) return false;
+		const match = needle ? model.findMatches(needle, false, false, true, null, false)[0] : null;
+		editor.setPosition(match ? { lineNumber: match.range.startLineNumber, column: match.range.startColumn + 1 } : model.getFullModelRange().getEndPosition());
+		editor.focus();
+		return true;
+	}, { path, needle });
+	if (!ok) throw new Error(`no editor shows ${path}`);
+}
+
+/**
+ * Undo and redo of a rename across files, as in VS Code
+ * (src/lib/workspace-edits.ts): Ctrl+Z in the file renamed from asks
+ * whether to undo across all files and, told so, restores every file, with
+ * the server following (no errors); Ctrl+Y renames them all again without
+ * asking. Once another of the files is edited, Ctrl+Z does not offer to
+ * undo across files: it undoes this file's part only and says which file
+ * changed, the server reports the now broken call, and the edited file
+ * keeps both the rename and the edit.
+ */
+async function undoRename(page, check, { file, needle, from, name, declarationFile, declaration, edit, renamed: afterRename }) {
+	const errorCount = page.locator('footer .counts span[title=Errors]');
+	const noErrors = () => page.waitForFunction(() => document.querySelector('footer .counts span[title=Errors]')?.textContent?.trim() === '0', null, { timeout: 30_000 }).then(() => true, () => false);
+	await openFile(page, file);
+	const before = await projectTexts(page);
+	await rename(page, needle, name);
+	const renamed = await page.waitForFunction(({ path, declaration }) => globalThis.monaco.editor.getModels().find((m) => m.uri.path === `/workspace/${path}`)?.getValue().includes(declaration), { path: declarationFile, declaration }, { timeout: 15_000 }).then(() => true, () => false);
+	if (afterRename) await afterRename(renamed);
+	if (!renamed) return;
+	const after = await projectTexts(page);
+	const changed = Object.keys(after).filter((p) => after[p] !== before[p]);
+	check(changed.length >= 2 && changed.includes(file) && changed.includes(declarationFile), `renaming ${from} to ${name} edits several files (${changed.join(', ')})`);
+
+	await focusFile(page, file, `${name}(`);
+	await page.keyboard.press('Control+z');
+	const dialog = page.locator('dialog.app-dialog');
+	const asked = await dialog.waitFor({ timeout: 5_000 }).then(() => true, () => false);
+	const question = asked ? ((await dialog.locator('.app-dialog-message').textContent()) ?? '') : '';
+	const buttons = asked ? await dialog.locator('button').allTextContents() : [];
+	check(asked && question === `Would you like to undo 'Renaming ${from} to ${name}' across all files?` && buttons.join('|') === `Undo in ${changed.length} Files|Undo this File|Cancel`, `Ctrl+Z after the rename asks whether to undo it across all files, in the app's dialog (${JSON.stringify(question)}: ${buttons.join(', ')})`);
+	if (!asked) return;
+	await dialog.locator('button', { hasText: /^Undo in \d+ Files$/ }).click();
+	const restored = await textsBecome(page, before);
+	check(restored, `Undo in ${changed.length} Files restores every file (${changed.join(', ')})`);
+	check(restored && (await noErrors()), `the language server follows the undo in every file: no errors (${(await errorCount.textContent())?.trim()})`);
+
+	await page.keyboard.press('Control+y');
+	const redone = await textsBecome(page, after);
+	check(redone && (await dialog.count()) === 0, `Ctrl+Y redoes the rename in every file, without asking (${redone ? 'redone' : 'not redone'})`);
+	check(redone && (await noErrors()), `the language server follows the redo: no errors (${(await errorCount.textContent())?.trim()})`);
+
+	await focusFile(page, declarationFile);
+	await page.keyboard.type(edit);
+	await page.waitForTimeout(300);
+	await focusFile(page, file, `${name}(`);
+	await page.keyboard.press('Control+z');
+	const notice = page.locator('.monaco-editor-overlaymessage');
+	const told = await notice.first().waitFor({ timeout: 5_000 }).then(() => true, () => false);
+	const said = told ? ((await notice.first().textContent()) ?? '').trim() : '';
+	const texts = await projectTexts(page);
+	check(
+		told && said.includes(`Could not undo 'Renaming ${from} to ${name}' across all files because changes were made to ${declarationFile}`) && (await dialog.count()) === 0,
+		`after ${declarationFile} was edited, Ctrl+Z in ${file} does not offer to undo across files and says why (${JSON.stringify(said)})`,
+	);
+	check(
+		texts[file] === before[file] && texts[declarationFile] === after[declarationFile] + edit && changed.every((p) => p === file || p === declarationFile || texts[p] === after[p]),
+		`only ${file} is undone; ${declarationFile} keeps the rename and the edit, the other files the rename`,
+	);
+	const broken = await page.waitForFunction(() => document.querySelector('footer .counts span[title=Errors]')?.textContent?.trim() !== '0', null, { timeout: 30_000 }).then(() => true, () => false);
+	check(broken, `the language server sees ${file} undone alone: its call of ${from} is an error (${(await errorCount.textContent())?.trim()})`);
+
+	// From the sample again: the rename, then the file it declared renamed
+	// in the explorer. Its undo history went with its old name, so Ctrl+Z
+	// in the file renamed from undoes that file only and says why.
+	page.once('dialog', (d) => void d.accept());
+	await page.locator('header button', { hasText: 'Reset project' }).click();
+	const reset = await textsBecome(page, { [file]: before[file], [declarationFile]: before[declarationFile] }, 15_000);
+	if (!reset) return check(false, 'Reset project restores the sample');
+	// Reset restarts the server: rename once it answers again.
+	await page.locator('footer .state').filter({ hasNotText: /Starting|Downloading|stopped/ }).waitFor({ timeout: 60_000 });
+	await noErrors();
+	await page.waitForTimeout(1000);
+	await focusFile(page, file);
+	const sample = await projectTexts(page);
+	await rename(page, needle, name);
+	await page.waitForFunction(({ path, declaration }) => globalThis.monaco.editor.getModels().find((m) => m.uri.path === `/workspace/${path}`)?.getValue().includes(declaration), { path: declarationFile, declaration }, { timeout: 15_000 }).catch(() => {});
+	const moved = declarationFile.replace(/^geometry/, 'shapes');
+	// The row's buttons show on hover.
+	await page.locator('.explorer .row', { has: page.locator('.name', { hasText: new RegExp(`^${declarationFile.replace(/[.]/g, '\\.')}$`) }) }).hover();
+	await page.locator(`.explorer button[aria-label="Rename ${declarationFile}"]`).click();
+	const input = page.locator('.explorer input[aria-label="File name"]');
+	await input.fill(moved);
+	await input.press('Enter');
+	await page.waitForFunction((path) => globalThis.monaco.editor.getModels().some((m) => m.uri.path === `/workspace/${path}`), moved, { timeout: 5_000 }).catch(() => {});
+	await focusFile(page, file, `${name}(`);
+	await page.keyboard.press('Control+z');
+	const gone = await notice.first().waitFor({ timeout: 5_000 }).then(() => true, () => false);
+	const why = gone ? ((await notice.first().textContent()) ?? '').trim() : '';
+	check(
+		gone && why.includes(`These files were deleted or renamed since: ${declarationFile}`) && (await dialog.count()) === 0 && (await modelText(page, file)) === sample[file] && (await modelText(page, moved))?.includes(declaration),
+		`after ${declarationFile} was renamed to ${moved}, Ctrl+Z in ${file} undoes the rename there only and says why (${JSON.stringify(why)})`,
+	);
 }
 
 /** jsconfig.json is highlighted as JSON, completes compiler options from its schema and flags unknown values. */

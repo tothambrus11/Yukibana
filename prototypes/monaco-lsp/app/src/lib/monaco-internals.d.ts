@@ -43,3 +43,58 @@ declare module 'monaco-editor/editor/contrib/gotoSymbol/browser/referencesModel'
 	/** One reference in the references peek's tree (as opposed to a file's row). */
 	export class OneReference {}
 }
+declare module 'monaco-editor/platform/undoRedo/common/undoRedo' {
+	/** Every file's undo and redo stack, and the cross-file elements in them (workspace-edits.ts). */
+	export const IUndoRedoService: ServiceId;
+}
+declare module 'monaco-editor/editor/common/model/editStack' {
+	type Model = import('monaco-editor/editor/editor.api').editor.ITextModel;
+	type Selection = import('monaco-editor/editor/editor.api').Selection;
+	/**
+	 * One file's undo step. While open (until `close`), the model's edits
+	 * are appended to it when it is the last element in the file's stack.
+	 */
+	export class SingleModelEditStackElement {
+		constructor(label: string, code: string, model: Model, beforeCursorState: Selection[] | null);
+		close(): void;
+	}
+	/**
+	 * One undo step across files, made of each file's step: the undo
+	 * service keeps it in every one of those files' stacks and undoes it in
+	 * all of them, or (split) in one.
+	 */
+	export class MultiModelEditStackElement {
+		constructor(label: string, code: string, editStackElements: SingleModelEditStackElement[]);
+		close(): void;
+	}
+}
+declare module 'monaco-editor/editor/browser/services/bulkEditService' {
+	type Uri = import('monaco-editor/editor/editor.api').Uri;
+	type IRange = import('monaco-editor/editor/editor.api').IRange;
+	type Editor = import('monaco-editor/editor/editor.api').editor.ICodeEditor;
+	/** The service Monaco's features apply a workspace edit through (rename, code actions). */
+	export const IBulkEditService: ServiceId;
+	export class ResourceEdit {
+		/** A Monaco `WorkspaceEdit`'s edits as these classes; throws on an edit of no known kind. */
+		static convert(edit: unknown): ResourceEdit[];
+	}
+	/** One text edit of one file; `versionId` is the model version it was computed for, if known. */
+	export class ResourceTextEdit extends ResourceEdit {
+		readonly resource: Uri;
+		readonly textEdit: { range: IRange; text: string };
+		readonly versionId: number | undefined;
+	}
+	/** What a feature says about the edit it applies; the labels name the undo step. */
+	export interface BulkEditOptions {
+		editor?: Editor | undefined;
+		label?: string | undefined;
+		quotableLabel?: string | undefined;
+		code?: string | undefined;
+		undoRedoGroup?: unknown;
+		undoRedoSource?: unknown;
+	}
+	export interface BulkEditResult {
+		ariaSummary: string;
+		isApplied: boolean;
+	}
+}

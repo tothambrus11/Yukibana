@@ -5,6 +5,7 @@
  * methods change it.
  */
 import { monaco } from './monaco';
+import { forgetUndo } from './workspace-edits';
 import { LanguageClient, type ClientState, type LoadingProgress, type LogLevel } from './lsp/client';
 import { isLanguageId, languageOf, LANGUAGES, packOf, type ExploreKind, type LanguageId } from './languages';
 import { Runner, type RunMode } from './run.svelte';
@@ -560,6 +561,9 @@ export class Workspace {
 		this.models.delete(path);
 		this.preview.changed(path);
 		model.dispose();
+		// The file was deleted or renamed: an edit across files that
+		// included it can no longer be undone across them (workspace-edits.ts).
+		forgetUndo(model.uri);
 	}
 
 	private disposeModels(): void {

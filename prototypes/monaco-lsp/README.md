@@ -101,6 +101,17 @@ Sizes are brotli transfer sizes. The app itself is 1.2 MB, icons included.
 Each pack's README has the details: what was patched and why, what is
 measured, and what does not work.
 
+Undo works as in VS Code. A rename, a quick fix or a server's edit that
+changes several files is one undo step across them: Ctrl+Z in any of them
+asks whether to undo it in all the files or in this one only, and Ctrl+Y
+redoes it in all. Once another of those files has been edited, deleted or
+renamed since, undoing in all would take that file's later changes with
+it, or undo the edit underneath them; so Ctrl+Z undoes this file's part
+only, at once, and says which file changed. Every project file stays
+loaded whether or not it has a tab, so the undo reaches files without one,
+and the language server is told of each file's change
+(app/src/lib/workspace-edits.ts).
+
 ## C and C++ targets
 
 The target is one line of `compile_flags.txt`; the pack has the details

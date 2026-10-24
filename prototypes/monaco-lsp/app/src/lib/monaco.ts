@@ -25,7 +25,9 @@ import { MessageController } from 'monaco-editor/editor/contrib/message/browser/
 import { OneReference } from 'monaco-editor/editor/contrib/gotoSymbol/browser/referencesModel';
 import { ICommandService } from 'monaco-editor/platform/commands/common/commands';
 import { IListService } from 'monaco-editor/platform/list/browser/listService';
-import { pathOf } from './project';
+import { pathOf, ROOT_URI } from './project';
+import { AppDialogService, WorkspaceBulkEditService } from './workspace-edits';
+import { projectNotice } from './undo-text';
 
 /** The part of Monaco's internal list and tree widgets the references peek's keys use. */
 type List = {
@@ -49,25 +51,38 @@ type List = {
 // was typed (Phpactor's class rename, clangd's "the chosen name is a
 // keyword") looked like a rename that did nothing. This service also shows
 // each one as the inline message of the editor with focus, the place a
-// rename refused before the name was typed already says why.
+// rename refused before the name was typed already says why. A notice that
+// an undo across files was done in one file only (workspace-edits.ts) comes
+// just before that undo, which moves the caret and would close a message
+// shown at once: so the message is shown once the current task is done,
+// where the caret then is, and names files by their project paths.
+const ROOT_PATH = monaco.Uri.parse(ROOT_URI).path;
 class EditorNotificationService extends StandaloneNotificationService {
 	override notify(notification: { severity: number; message: unknown }): unknown {
 		const shown = super.notify(notification);
 		const m = notification.message;
-		const text = typeof m === 'string' ? m : m instanceof Error ? m.message : '';
+		const text = projectNotice(typeof m === 'string' ? m : m instanceof Error ? m.message : '', ROOT_PATH);
 		// Severity 0 is Ignore.
 		const editor = monaco.editor.getEditors().find((e) => e.hasWidgetFocus());
-		const position = editor?.getPosition();
-		if (text && notification.severity > 0 && editor && position) MessageController.get(editor)?.showMessage(text, position);
+		if (!text || notification.severity <= 0 || !editor) return shown;
+		setTimeout(() => {
+			const position = editor.getPosition();
+			if (position) MessageController.get(editor)?.showMessage(text, position);
+		});
 		return shown;
 	}
 }
+// Workspace edits (rename, code actions) as one undo step across their
+// files, and the dialog that asks whether to undo one: workspace-edits.ts.
+// The keys are Monaco's service ids.
 StandaloneServices.initialize({
 	labelService: {
 		getUriLabel: (uri: monaco.Uri) => pathOf(uri) ?? (uri.scheme === 'file' ? uri.fsPath : uri.path),
 		getUriBasenameLabel: (uri: monaco.Uri) => uri.path.slice(uri.path.lastIndexOf('/') + 1),
 	},
 	notificationService: new EditorNotificationService(),
+	IWorkspaceEditService: new WorkspaceBulkEditService(),
+	dialogService: new AppDialogService(),
 });
 
 /** The editors' font stack; the first entry is the bundled web font. */
