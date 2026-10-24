@@ -32,10 +32,10 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            ~/.ghc-wasm
+            ~/.ghc-wasm-9.12
             /tmp/yk/tools-store
-          key: ghc-wasm-tools-${{ github.run_id }}
-          restore-keys: ghc-wasm-tools-
+          key: ghc-wasm-912-tools-${{ github.run_id }}
+          restore-keys: ghc-wasm-912-tools-
 
       - name: Install alex and happy
         run: sudo apt-get install -y --no-install-recommends alex happy
@@ -48,9 +48,9 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
-            ~/.ghc-wasm
+            ~/.ghc-wasm-9.12
             /tmp/yk/tools-store
-          key: ghc-wasm-tools-${{ github.run_id }}
+          key: ghc-wasm-912-tools-${{ github.run_id }}
 
       - uses: actions/upload-artifact@v4
         if: always()
