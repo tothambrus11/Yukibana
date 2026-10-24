@@ -9,6 +9,7 @@
 	import { registerServiceWorker } from '../lib/pwa';
 	import { offline } from '../lib/offline.svelte';
 	import Offline from '../lib/components/Offline.svelte';
+	import Sanitizers from '../lib/components/Sanitizers.svelte';
 	import { theme } from '../lib/theme.svelte';
 	import { Workspace } from '../lib/workspace.svelte';
 	import { monaco } from '../lib/monaco';
@@ -145,6 +146,8 @@
 			</select>
 			<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>
 		</label>
+		<!-- The -fsanitize= line of compile_flags.txt (cpp-sanitizers.ts): ticking one rewrites it; a hand-written one is honoured. -->
+		<span class="sanitizers-menu"><Sanitizers {workspace} /></span>
 		{#if linuxTarget}
 			<!-- Loaded the first time a project is on a Linux target: most sessions never need it. -->
 			{#await import('../lib/components/RunOptions.svelte') then { default: RunOptions }}
@@ -463,6 +466,7 @@
 		.framework,
 		.target,
 		.optimization,
+		.sanitizers-menu,
 		.run-options {
 			display: none;
 		}

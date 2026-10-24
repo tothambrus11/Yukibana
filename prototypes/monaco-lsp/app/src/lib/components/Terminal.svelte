@@ -2,12 +2,19 @@
   The program's terminal: what it printed (errors in red, and the colours
   the program asked for with ANSI escapes, see ansi.ts), its system calls
   when strace is on (dimmed), what was typed, and an input line. Enter sends the line; Ctrl+D ends the input.
+  A project file's path and line in the output (a compiler's diagnostic, a
+  sanitizer's frame) is a link to that line (terminal-links.ts).
 -->
 <script lang="ts">
 	import type { Workspace } from '../workspace.svelte';
+	import { linksIn, type Place } from '../terminal-links';
 
 	let { workspace }: { workspace: Workspace } = $props();
 	const runner = $derived(workspace.runner);
+	const files = $derived(new Set(workspace.files));
+
+	/** Opens a link's file, the caret at its line and column (the line's start without one). */
+	const go = ({ path, line, column }: Place) => workspace.show(path, { startLineNumber: line, startColumn: column ?? 1, endLineNumber: line, endColumn: column ?? 1 });
 
 	let scroller: HTMLDivElement | undefined = $state();
 	let field: HTMLInputElement | undefined = $state();
@@ -59,7 +66,7 @@
 		{#if runner.chunks.length === 0 && runner.state.kind === 'idle'}
 			<p class="empty">Press <strong>Run</strong> (Ctrl+Enter) to run the project. Its output appears here.</p>
 		{/if}
-		<pre>{#each runner.chunks as chunk (chunk.id)}<span class={chunk.kind} style={chunk.style || undefined}>{chunk.text}</span>{/each}</pre>
+		<pre>{#each runner.chunks as chunk (chunk.id)}<span class={chunk.kind} style={chunk.style || undefined}>{#if chunk.kind === 'stdin'}{chunk.text}{:else}{#each linksIn(chunk.text, files) as piece, i (i)}{#if piece.place}<button class="place" title="Open {piece.place.path} at line {piece.place.line}" onclick={() => piece.place && go(piece.place)}>{piece.text}</button>{:else}{piece.text}{/if}{/each}{/if}</span>{/each}</pre>
 	</div>
 	{#if runner.busy}
 		<label class="input" class:waiting>
@@ -97,6 +104,22 @@
 	}
 	.stderr {
 		color: var(--red-high);
+	}
+	.place {
+		display: inline;
+		padding: 0;
+		border: 0;
+		background: none;
+		color: inherit;
+		font: inherit;
+		text-decoration: underline dotted;
+		text-underline-offset: 0.2em;
+		cursor: pointer;
+		user-select: text;
+	}
+	.place:hover {
+		color: var(--accent-high);
+		text-decoration-style: solid;
 	}
 	.stdin {
 		color: var(--accent-high);

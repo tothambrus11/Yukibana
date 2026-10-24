@@ -107,6 +107,18 @@ for (const language of LANGUAGES) {
 	check(osize.length === 2 && osize.every((f) => f.startsWith('"-Osize"')), `swift: a chosen level goes to the program and to the tests (${osize.join(' | ')})`);
 }
 
+// ---- Sanitizers: Download links what Run links
+
+{
+	const cpp = sample('cpp');
+	const linked = (cmake) => /target_link_options\(project_flags INTERFACE ([^)]*)\)/.exec(cmake)?.[1] ?? '';
+	check(linked(exportProject(cpp, cpp.sample).files['CMakeLists.txt']) === '', 'cpp: without a sanitizer, CMake links no sanitizer runtime');
+	const both = exportProject(cpp, { ...cpp.sample, 'compile_flags.txt': `${cpp.sample['compile_flags.txt']}-fsanitize=address,undefined\n` }).files['CMakeLists.txt'];
+	check(linked(both) === '-fsanitize=address,undefined' && both.includes('target_compile_options(project_flags INTERFACE -fno-omit-frame-pointer)'), `cpp: AddressSanitizer and UndefinedBehaviorSanitizer are compiled, linked and given frame pointers (${linked(both)})`);
+	const ubsan = exportProject(cpp, { ...cpp.sample, 'compile_flags.txt': `${cpp.sample['compile_flags.txt']}-fsanitize=undefined\n` }).files['CMakeLists.txt'];
+	check(linked(ubsan) === '-fsanitize=undefined' && !ubsan.includes('-fno-omit-frame-pointer'), 'cpp: UndefinedBehaviorSanitizer alone needs no frame pointers');
+}
+
 // ---- The zip, unpacked by Python's zipfile
 
 const unpack = `

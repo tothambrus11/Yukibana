@@ -13,6 +13,7 @@ import { exportProject } from './export';
 import { zip } from './zip';
 import { chooseTestFramework, detectTestFramework, TESTS_DIR, type TestFramework } from './cpp-tests';
 import { DEFAULT_RUN_OPTIONS, targetById, targetOf, withTarget, type CppTargetId, type RunOptions, type TargetChoice } from './cpp-targets';
+import { describeSanitizers, sanitizersOf, withSanitizers, type SanitizerChoice } from './cpp-sanitizers';
 import { cppLevelOf, defaultLevel, levelsOf, withCppLevel, type LevelChoice } from './optimization';
 import type { Explorer } from './explorer.svelte';
 import { baseName, loadLanguage, loadProject, parentOf, pathOf, pathProblem, ROOT_URI, sampleProject, saveLanguage, saveProject, type Project } from './project';
@@ -87,6 +88,11 @@ export class Workspace {
 	 * null when the project is not C++.
 	 */
 	target = $state<TargetChoice | null>(null);
+	/**
+	 * The sanitizers a C or C++ project has on, as its compile_flags.txt
+	 * says (cpp-sanitizers.ts); null when the project is not C or C++.
+	 */
+	sanitizers = $state<SanitizerChoice | null>(null);
 	/**
 	 * How Run runs a C++ program built for a Linux target; saved with the
 	 * project once changed. The defaults for any other project.
@@ -274,6 +280,33 @@ export class Workspace {
 		this.refreshTarget();
 		const how = target.default ? `no --target line in ${COMPILE_FLAGS}` : `--target=${target.triple} in ${COMPILE_FLAGS}`;
 		this.write('info', `Target: ${target.label} (${how}).${target.runtime === 'linux' ? ' Run compiles for Linux and runs the program under QEMU, and Test its GoogleTest tests (Catch2 and doctest run on WebAssembly only).' : ''}`);
+		this.scheduleSave();
+	}
+
+	/**
+	 * Turns the C or C++ project's sanitizers on or off as `choice` says
+	 * (cpp-sanitizers.ts): compile_flags.txt's -fsanitize= line is
+	 * rewritten (or the file created) as one edit, which Undo takes back,
+	 * then saved; clangd, Run, Test, the views and Download follow the file.
+	 * The output panel says what changed.
+	 */
+	chooseSanitizers(choice: SanitizerChoice): void {
+		if (this.language !== 'cpp') return;
+		const model = this.models.get(COMPILE_FLAGS);
+		const before = model?.getValue();
+		const after = withSanitizers(before, choice);
+		if (model && after !== before) {
+			model.pushStackElement();
+			model.pushEditOperations([], [{ range: model.getFullModelRange(), text: after }], () => null);
+			model.pushStackElement();
+		} else if (!model && after) {
+			this.addModel(COMPILE_FLAGS, after, true);
+			this.files = [...this.models.keys()].sort();
+			// A new model fires no content change, which is how an edit reaches the open views.
+			this.explorer?.edited();
+		}
+		this.refreshTarget();
+		this.write('info', describeSanitizers(choice));
 		this.scheduleSave();
 	}
 
@@ -637,8 +670,11 @@ export class Workspace {
 		this.testFramework = detected.mixed ? 'mixed' : detected.framework;
 	}
 
+	/** The target and the sanitizers, which compile_flags.txt says. */
 	private refreshTarget(): void {
-		this.target = this.language === 'cpp' ? targetOf(this.models.get(COMPILE_FLAGS)?.getValue()) : null;
+		const flags = this.models.get(COMPILE_FLAGS)?.getValue();
+		this.target = this.language === 'cpp' ? targetOf(flags) : null;
+		this.sanitizers = this.language === 'cpp' ? sanitizersOf(flags) : null;
 	}
 
 	private refreshOptimization(): void {

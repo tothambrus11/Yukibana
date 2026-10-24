@@ -16,7 +16,8 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const build = join(here, '..', 'build');
+// BUILD_DIR: another build of the app, such as one in a scratch folder.
+const build = process.env.BUILD_DIR ?? join(here, '..', 'build');
 
 /**
  * Per language: the file to edit, text appended to make an error, a member
@@ -204,6 +205,7 @@ async function run(language, c) {
 	}
 	// After cppTargets, which checks that nothing before it fetched the views.
 	if (language === 'cpp' && existsSync(join(build, 'packs', 'cpp', 'explorer.js'))) await cppOptimization(page, check);
+	if (language === 'cpp' && existsSync(join(build, 'packs', 'cpp', 'sanitizer.js'))) await cppSanitizers(page, check, requests);
 	if ((language === 'swift' || language === 'scala') && existsSync(join(build, 'packs', language, 'runner.js'))) await savedOptimization(page, check, language);
 
 	check(errors.length === 0, `no page errors${errors.length ? ': ' + errors.join('; ') : ''}`);
@@ -357,6 +359,47 @@ async function cppOptimization(page, check) {
 	await page.locator('header button', { hasText: 'Reset project' }).click();
 	const reset = await page.waitForFunction(() => globalThis.monaco.editor.getModels().find((m) => m.uri.path === '/workspace/compile_flags.txt')?.getValue().startsWith('-std='), null, { timeout: 15_000 }).then(() => true, () => false);
 	check(reset && (await picker.inputValue()) === '-O2', `Reset project puts the sample back at -O2 (${await picker.inputValue()})`);
+}
+
+/**
+ * The C++ sanitizers (cpp-sanitizers.ts, packs/cpp README "Sanitizers"):
+ * nothing of them is fetched until one is on; ticking AddressSanitizer
+ * appends its -fsanitize= line; a heap buffer overflow in main.cpp is then
+ * reported in the terminal (sum inlined into main, so named as -gline-tables-only
+ * names it, without parameters, as natively), its frames naming main.cpp's lines as links
+ * that open the file there, and the program exits 1. Ends on the sample,
+ * by Reset project.
+ */
+async function cppSanitizers(page, check, requests) {
+	const fetched = (name) => requests.some((u) => u.endsWith(`/packs/cpp/${name}`));
+	check(!fetched('asan.tar') && !fetched('ubsan.tar') && !fetched('sanitizer.js'), 'nothing of the sanitizers is fetched before one is on');
+	const flags = (await modelText(page, 'compile_flags.txt')) ?? '';
+	const menu = page.locator('header .sanitizers-menu');
+	await menu.locator('button.toggle').click();
+	await menu.locator('label', { hasText: 'AddressSanitizer' }).locator('input').check();
+	await page.keyboard.press('Escape');
+	const text = (await modelText(page, 'compile_flags.txt')) ?? '';
+	check(text === `${flags}-fsanitize=address\n` && (await menu.locator('button.toggle').textContent())?.trim() === 'ASan', `ticking AddressSanitizer appends -fsanitize=address to compile_flags.txt (${JSON.stringify(text)})`);
+
+	const program = ['#include <cstdio>', '', 'int sum(const int *a, int n) {', '    int s = 0;', '    for (int i = 0; i <= n; i++) s += a[i];', '    return s;', '}', '', 'int main() {', '    int *a = new int[4]{1, 2, 3, 4};', '    std::printf("%d\\n", sum(a, 4));', '    delete[] a;', '}', ''].join('\n');
+	await openFile(page, 'main.cpp');
+	await setText(page, 'main.cpp', program);
+	await page.locator('header button.run').click();
+	const ran = await ended(page);
+	check(ran.done && /Exited with code 1 /.test(ran.status) && ran.shown.includes('ERROR: AddressSanitizer: heap-buffer-overflow') && ran.shown.includes('in sum main.cpp:5:39') && ran.shown.includes('in main main.cpp:11:25') && ran.shown.includes('SUMMARY: AddressSanitizer: heap-buffer-overflow main.cpp:5:39 in sum'), `Run reports the overflow at main.cpp:5:39 and exits 1 (${ran.status}): ${ran.shown.split('\n').filter((l) => /#\d|SUMMARY|ERROR/.test(l)).slice(0, 4).join(' | ')}`);
+	check(fetched('asan.tar') && fetched('sanitizer.js') && !fetched('ubsan.tar'), 'the run fetched the AddressSanitizer runtime and nothing of UBSan');
+
+	await openFile(page, 'geometry.h');
+	const link = page.locator('.terminal button.place', { hasText: 'main.cpp:10:14' }).first();
+	const linked = await link.waitFor({ timeout: 5_000 }).then(() => true, () => false);
+	if (linked) await link.click();
+	const at = await page.waitForFunction(() => globalThis.monaco.editor.getEditors().some((e) => e.getModel()?.uri.path === '/workspace/main.cpp' && e.getPosition()?.lineNumber === 10), null, { timeout: 5_000 }).then(() => true, () => false);
+	check(linked && at, 'the allocation frame main.cpp:10:14 is a link that opens main.cpp at line 10');
+
+	page.once('dialog', (d) => void d.accept());
+	await page.locator('header button', { hasText: 'Reset project' }).click();
+	const reset = await page.waitForFunction(() => !/-fsanitize/.test(globalThis.monaco.editor.getModels().find((m) => m.uri.path === '/workspace/compile_flags.txt')?.getValue() ?? '-fsanitize'), null, { timeout: 15_000 }).then(() => true, () => false);
+	check(reset && (await menu.locator('button.toggle').textContent())?.trim() === 'Sanitizers', 'Reset project turns the sanitizers off again');
 }
 
 /**

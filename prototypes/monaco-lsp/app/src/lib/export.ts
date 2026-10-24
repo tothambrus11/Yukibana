@@ -16,6 +16,7 @@ import type { Files, Language, LanguageId } from './languages';
 // With its extension: tests/export.mjs runs this file under Node's type stripping.
 import { detectTestFramework, withoutComments, TEST_FRAMEWORKS, type TestFramework } from './cpp-tests.ts';
 import { targetOf, type CppTarget } from './cpp-targets.ts';
+import { sanitizersOf } from './cpp-sanitizers.ts';
 import { CPP_LEVELS, defaultLevel, SWIFT_LEVELS } from './optimization.ts';
 
 /** What a download contains. */
@@ -316,6 +317,20 @@ export function cmakeLists(files: Files, entry: string): string {
 	if (flags.includes.length) lines.push(`target_include_directories(project_flags INTERFACE ${flags.includes.map(cmakeDir).join(' ')})`);
 	if (flags.definitions.length) lines.push(`target_compile_definitions(project_flags INTERFACE ${flags.definitions.map(cmakeArg).join(' ')})`);
 	if (flags.options.length) lines.push('if(NOT MSVC)', `    target_compile_options(project_flags INTERFACE ${flags.options.map(cmakeArg).join(' ')})`, 'endif()');
+	// A sanitizer (cpp-sanitizers.ts) is a link flag as well: the compiler
+	// driver links its runtime. Its reports name lines with debug
+	// information (a Debug build), and AddressSanitizer's stacks need frame
+	// pointers, as Run compiles for a Linux target.
+	const sanitize = flags.options.filter((o) => /^-f(no-)?sanitize|^-(shared|static)-libsan$/.test(o));
+	if (sanitize.length) {
+		lines.push(
+			'# The sanitizers link their runtimes; build with -DCMAKE_BUILD_TYPE=Debug for file:line in reports.',
+			'if(NOT MSVC)',
+			`    target_link_options(project_flags INTERFACE ${sanitize.map(cmakeArg).join(' ')})`,
+			...(sanitizersOf(files['compile_flags.txt']).address ? ['    target_compile_options(project_flags INTERFACE -fno-omit-frame-pointer)'] : []),
+			'endif()'
+		);
+	}
 	// The level is one of the options when compile_flags.txt has a -O line
 	// (optimization.ts); otherwise Run's default, which the build then uses
 	// too. Either comes after the build type's flags, so it is what applies.
