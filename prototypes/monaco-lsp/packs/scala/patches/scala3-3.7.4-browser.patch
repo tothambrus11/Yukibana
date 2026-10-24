@@ -1,0 +1,488 @@
+diff --git a/compiler/dotty/tools/dotc/ast/Positioned.scala b/compiler/dotty/tools/dotc/ast/Positioned.scala
+index 1396ee9..2d71fe9 100644
+--- a/compiler/dotty/tools/dotc/ast/Positioned.scala
++++ b/compiler/dotty/tools/dotc/ast/Positioned.scala
+@@ -38,7 +38,7 @@ abstract class Positioned(implicit @constructorOnly src: SourceFile) extends Src
+       ids.nn.put(this: @unchecked, ownId)
+       if ownId == debugId then
+         println(s"Debug tree (id=$debugId) creation \n${this: @unchecked}\n")
+-        Thread.dumpStack()
++        new Throwable().printStackTrace() /* yukibana */
+ 
+   allocateId()
+ 
+diff --git a/compiler/dotty/tools/dotc/classpath/DirectoryClassPath.scala b/compiler/dotty/tools/dotc/classpath/DirectoryClassPath.scala
+index 622e074..a00a30a 100644
+--- a/compiler/dotty/tools/dotc/classpath/DirectoryClassPath.scala
++++ b/compiler/dotty/tools/dotc/classpath/DirectoryClassPath.scala
+@@ -119,7 +119,7 @@ trait JFileDirectoryLookup[FileEntryType <: ClassRepresentation] extends Directo
+ 
+   assert(dir.asInstanceOf[JFile | Null] != null, "Directory file in DirectoryFileLookup cannot be null")
+ 
+-  def asURLs: Seq[URL] = Seq(dir.toURI.toURL)
++  def asURLs: Seq[URL] = Seq(new URL(dir.toURI.toString) /* yukibana */)
+   def asClassPathStrings: Seq[String] = Seq(dir.getPath)
+ }
+ 
+@@ -192,7 +192,7 @@ final class JrtClassPath(fs: java.nio.file.FileSystem) extends ClassPath with No
+     if (inPackage.isRoot) ClassPathEntries(packages(inPackage), Nil)
+     else ClassPathEntries(packages(inPackage), classes(inPackage))
+ 
+-  def asURLs: Seq[URL] = Seq(new URI("jrt:/").toURL)
++  def asURLs: Seq[URL] = Seq(new URL("jrt:/") /* yukibana */)
+   // We don't yet have a scheme to represent the JDK modules in our `-classpath`.
+   // java models them as entries in the new "module path", we'll probably need to follow this.
+   def asClassPathStrings: Seq[String] = Nil
+diff --git a/compiler/dotty/tools/dotc/classpath/VirtualDirectoryClassPath.scala b/compiler/dotty/tools/dotc/classpath/VirtualDirectoryClassPath.scala
+index 9ed6994..fe4c48e 100644
+--- a/compiler/dotty/tools/dotc/classpath/VirtualDirectoryClassPath.scala
++++ b/compiler/dotty/tools/dotc/classpath/VirtualDirectoryClassPath.scala
+@@ -35,7 +35,7 @@ case class VirtualDirectoryClassPath(dir: VirtualDirectory) extends ClassPath wi
+   def isPackage(f: AbstractFile): Boolean = f.isPackage
+ 
+   // mimic the behavior of the old nsc.util.DirectoryClassPath
+-  def asURLs: Seq[URL] = Seq(new URI(dir.name).toURL)
++  def asURLs: Seq[URL] = Seq(new URL(new URI(dir.name).toString) /* yukibana */)
+   def asClassPathStrings: Seq[String] = Seq(dir.path)
+ 
+   def findClassFile(className: String): Option[AbstractFile] = {
+diff --git a/compiler/dotty/tools/dotc/classpath/ZipArchiveFileLookup.scala b/compiler/dotty/tools/dotc/classpath/ZipArchiveFileLookup.scala
+index 65a12c5..4f1f92e 100644
+--- a/compiler/dotty/tools/dotc/classpath/ZipArchiveFileLookup.scala
++++ b/compiler/dotty/tools/dotc/classpath/ZipArchiveFileLookup.scala
+@@ -22,7 +22,7 @@ trait ZipArchiveFileLookup[FileEntryType <: ClassRepresentation] extends Efficie
+ 
+   assert(zipFile ne null, "Zip file in ZipArchiveFileLookup cannot be null")
+ 
+-  override def asURLs: Seq[URL] = Seq(zipFile.toURI.toURL)
++  override def asURLs: Seq[URL] = Seq(new java.net.URL(zipFile.toURI.toString) /* yukibana */)
+   override def asClassPathStrings: Seq[String] = Seq(zipFile.getPath)
+ 
+   private val archive = new FileZipArchive(zipFile.toPath, release)
+diff --git a/compiler/dotty/tools/dotc/config/CliCommand.scala b/compiler/dotty/tools/dotc/config/CliCommand.scala
+index 9c1b087..bf2029b 100644
+--- a/compiler/dotty/tools/dotc/config/CliCommand.scala
++++ b/compiler/dotty/tools/dotc/config/CliCommand.scala
+@@ -115,7 +115,9 @@ trait CliCommand:
+ 
+   /** Used for the formatted output of -Xshow-phases */
+   protected def phasesMessage(using Context): String =
+-    val phases = new Compiler().phases
++    // yukibana: the browser build has no JVM backend; list the phases this
++    // compiler was configured with rather than instantiating the full one.
++    val phases = ctx.base.allPhases.toList.map(List(_))
+     val formatter = Columnator("phase name", "description", maxField = 25)
+     formatter(phases.map(mega => mega.map(p => (p.phaseName, p.description))))
+ 
+diff --git a/compiler/dotty/tools/dotc/config/Properties.scala b/compiler/dotty/tools/dotc/config/Properties.scala
+index 02e9bd2..edcd34a 100644
+--- a/compiler/dotty/tools/dotc/config/Properties.scala
++++ b/compiler/dotty/tools/dotc/config/Properties.scala
+@@ -16,7 +16,8 @@ object Properties extends PropertiesTrait {
+ 
+   /** Scala manifest attributes.
+    */
+-  @sharable val ScalaCompilerVersion: AttributeName = new AttributeName("Scala-Compiler-Version")
++  // yukibana: no java.util.jar on Scala.js
++  // @sharable val ScalaCompilerVersion: AttributeName = new AttributeName("Scala-Compiler-Version")
+ }
+ 
+ trait PropertiesTrait {
+@@ -29,7 +30,7 @@ trait PropertiesTrait {
+   /** The loaded properties */
+   @sharable protected lazy val scalaProps: java.util.Properties = {
+     val props = new java.util.Properties
+-    val stream = pickJarBasedOn getResourceAsStream propFilename
++    val stream: java.io.InputStream | Null = null // yukibana: no class path resources on Scala.js
+     if (stream ne null)
+       quietlyDispose(props load stream, stream.close)
+ 
+diff --git a/compiler/dotty/tools/dotc/config/ScalaSettingsProperties.scala b/compiler/dotty/tools/dotc/config/ScalaSettingsProperties.scala
+index b50fe0b..298629d 100644
+--- a/compiler/dotty/tools/dotc/config/ScalaSettingsProperties.scala
++++ b/compiler/dotty/tools/dotc/config/ScalaSettingsProperties.scala
+@@ -14,8 +14,8 @@ object ScalaSettingsProperties:
+     (minTargetVersion to maxTargetVersion).toList.map(_.toString)
+ 
+   def supportedReleaseVersions: List[String] =
+-    if scala.util.Properties.isJavaAtLeast("9") then
+-      val jdkVersion = JDK9Reflectors.runtimeVersionMajor(JDK9Reflectors.runtimeVersion()).intValue()
++    if true then // yukibana: scala.util.Properties reads jar manifests
++      val jdkVersion = 17 // yukibana: the class path bundle is built from a JDK 17+
+       val maxVersion = Math.min(jdkVersion, maxTargetVersion)
+       (minTargetVersion to maxVersion).toList.map(_.toString)
+     else List(minTargetVersion).map(_.toString)
+diff --git a/compiler/dotty/tools/dotc/core/Constants.scala b/compiler/dotty/tools/dotc/core/Constants.scala
+index 63acfbe..e3eaa96 100644
+--- a/compiler/dotty/tools/dotc/core/Constants.scala
++++ b/compiler/dotty/tools/dotc/core/Constants.scala
+@@ -23,8 +23,9 @@ object Constants {
+   inline val ClazzTag   = 12
+ 
+   class Constant(val value: Any, val tag: Int) extends printing.Showable with Product1[Any] {
+-    import java.lang.Double.doubleToRawLongBits
+-    import java.lang.Float.floatToRawIntBits
++    // yukibana: Scala.js has only the canonicalising versions (NaN payloads differ)
++    import java.lang.Double.doubleToLongBits as doubleToRawLongBits
++    import java.lang.Float.floatToIntBits as floatToRawIntBits
+ 
+     def isByteRange: Boolean     = isIntRange && Byte.MinValue <= intValue && intValue <= Byte.MaxValue
+     def isShortRange: Boolean    = isIntRange && Short.MinValue <= intValue && intValue <= Short.MaxValue
+@@ -244,11 +245,11 @@ object Constants {
+           case null            => NullTag
+           case x: Unit         => UnitTag
+           case x: Boolean      => BooleanTag
+-          case x: Byte         => ByteTag
+-          case x: Short        => ShortTag
++          // yukibana: on Scala.js `x: Byte` is true of any small integral
++          // number; callers that mean Byte, Short or Float use the typed
++          // overloads.
+           case x: Int          => IntTag
+           case x: Long         => LongTag
+-          case x: Float        => FloatTag
+           case x: Double       => DoubleTag
+           case x: String       => StringTag
+           case x: Char         => CharTag
+diff --git a/compiler/dotty/tools/dotc/core/MacroClassLoader.scala b/compiler/dotty/tools/dotc/core/MacroClassLoader.scala
+index c4c41a4..38d7799 100644
+--- a/compiler/dotty/tools/dotc/core/MacroClassLoader.scala
++++ b/compiler/dotty/tools/dotc/core/MacroClassLoader.scala
+@@ -12,16 +12,12 @@ object MacroClassLoader {
+ 
+   /** Get the macro class loader */
+   def fromContext(using Context): ClassLoader =
+-    ctx.property(MacroClassLoaderKey).getOrElse(makeMacroClassLoader)
++    ctx.property(MacroClassLoaderKey).getOrElse(makeMacroClassLoader).asInstanceOf[ClassLoader]
+ 
+   /** Context with a cached macro class loader that can be accessed with `macroClassLoader` */
+   def init(ctx: FreshContext): ctx.type =
+-    ctx.setProperty(MacroClassLoaderKey, makeMacroClassLoader(using ctx))
++    ctx.setProperty(MacroClassLoaderKey, makeMacroClassLoader(using ctx).asInstanceOf[ClassLoader])
+ 
+-  private def makeMacroClassLoader(using Context): ClassLoader = trace("new macro class loader") {
+-    val entries = ClassPath.expandPath(ctx.settings.classpath.value, expandStar=true)
+-    val urls = entries.map(cp => java.nio.file.Paths.get(cp).toUri.toURL).toArray
+-    val out = Option(ctx.settings.outputDir.value.toURL) // to find classes in case of suspended compilation
+-    new java.net.URLClassLoader(urls ++ out.toList, getClass.getClassLoader)
+-  }
++  // yukibana: no class loading on Scala.js; macro expansion reports an error instead.
++  private def makeMacroClassLoader(using Context): ClassLoader | Null = null
+ }
+diff --git a/compiler/dotty/tools/dotc/core/unpickleScala2/Scala2Unpickler.scala b/compiler/dotty/tools/dotc/core/unpickleScala2/Scala2Unpickler.scala
+index e97e73d..f6c9131 100644
+--- a/compiler/dotty/tools/dotc/core/unpickleScala2/Scala2Unpickler.scala
++++ b/compiler/dotty/tools/dotc/core/unpickleScala2/Scala2Unpickler.scala
+@@ -424,7 +424,7 @@ class Scala2Unpickler(bytes: Array[Byte], classRoot: ClassDenotation, moduleClas
+               owner.info.decls.checkConsistent()
+               if (slowSearch(name).exists)
+                 System.err.println(i"**** slow search found: ${slowSearch(name)}")
+-              if (ctx.settings.YdebugMissingRefs.value) Thread.dumpStack()
++              if (ctx.settings.YdebugMissingRefs.value) new Throwable().printStackTrace() /* yukibana */
+               newStubSymbol(owner, name, CompilationUnitInfo(source))
+             }
+           }
+diff --git a/compiler/dotty/tools/dotc/interactive/Completion.scala b/compiler/dotty/tools/dotc/interactive/Completion.scala
+index 7b2c597..25be711 100644
+--- a/compiler/dotty/tools/dotc/interactive/Completion.scala
++++ b/compiler/dotty/tools/dotc/interactive/Completion.scala
+@@ -50,7 +50,7 @@ case class Completion(label: String, description: String, symbols: List[Symbol])
+ 
+ object Completion:
+ 
+-  private val logger = Logger.getLogger(this.getClass.getName)
++  private object logger { def warning(msg: String): Unit = () } // yukibana: no java.util.logging
+ 
+   def scopeContext(pos: SourcePosition)(using Context): CompletionResult =
+     val tpdPath = Interactive.pathTo(ctx.compilationUnit.tpdTree, pos.span)
+diff --git a/compiler/dotty/tools/dotc/parsing/Parsers.scala b/compiler/dotty/tools/dotc/parsing/Parsers.scala
+index c9a3f04..56e48c8 100644
+--- a/compiler/dotty/tools/dotc/parsing/Parsers.scala
++++ b/compiler/dotty/tools/dotc/parsing/Parsers.scala
+@@ -1380,7 +1380,12 @@ object Parsers {
+           catch {
+             case ex: FromDigitsException => syntaxErrorOrIncomplete(ex.getMessage.toMessage)
+           }
+-        Literal(Constant(value))
++        Literal((token, value) match { // yukibana: see Constants.Constant.apply(Any)
++          case (INTLIT, v: Int) => Constant(v)
++          case (FLOATLIT, v: Float) => Constant(v)
++          case (DOUBLELIT | DECILIT | EXPOLIT, v: Double) => Constant(v)
++          case _ => Constant(value)
++        })
+       }
+ 
+       if (inStringInterpolation) {
+diff --git a/compiler/dotty/tools/dotc/plugins/Plugins.scala b/compiler/dotty/tools/dotc/plugins/Plugins.scala
+index f3a58cd..e9576ce 100644
+--- a/compiler/dotty/tools/dotc/plugins/Plugins.scala
++++ b/compiler/dotty/tools/dotc/plugins/Plugins.scala
+@@ -26,7 +26,7 @@ trait Plugins {
+    *  test for same-named phases or other problems that are
+    *  filtered from the final list of plugins.
+    */
+-  protected def loadRoughPluginsList(using Context): List[Plugin] = {
++  protected def loadRoughPluginsList(using Context): List[Plugin] = if (true) Nil /* yukibana: no plugins */ else {
+     def asPath(p: String) = ClassPath split p
+     val paths  = ctx.settings.plugin.value filter (_ != "") map (s => asPath(s) map Path.apply)
+     val dirs   = {
+diff --git a/compiler/dotty/tools/dotc/printing/MessageLimiter.scala b/compiler/dotty/tools/dotc/printing/MessageLimiter.scala
+index 24f02f3..98074ac 100644
+--- a/compiler/dotty/tools/dotc/printing/MessageLimiter.scala
++++ b/compiler/dotty/tools/dotc/printing/MessageLimiter.scala
+@@ -33,7 +33,7 @@ class DefaultMessageLimiter extends MessageLimiter:
+   override def recursionLimitExceeded()(using Context): Unit =
+     if ctx.debug then
+       report.warning("Exceeded recursion depth attempting to print.")
+-      Thread.dumpStack()
++      new Throwable().printStackTrace() /* yukibana */
+ 
+ class SummarizeMessageLimiter(depth: Int) extends MessageLimiter:
+   override val recurseLimit = recurseCount + depth
+diff --git a/compiler/dotty/tools/dotc/profile/Profiler.scala b/compiler/dotty/tools/dotc/profile/Profiler.scala
+index a462582..bd85452 100644
+--- a/compiler/dotty/tools/dotc/profile/Profiler.scala
++++ b/compiler/dotty/tools/dotc/profile/Profiler.scala
+@@ -23,13 +23,7 @@ import scala.collection.mutable.UnrolledBuffer
+ 
+ object Profiler {
+   def apply()(using Context): Profiler =
+-    if (!ctx.settings.YprofileEnabled.value) NoOpProfiler
+-    else {
+-      val reporter = if (ctx.settings.YprofileDestination.value != "")
+-        new StreamProfileReporter(new PrintWriter(new FileWriter(ctx.settings.YprofileDestination.value, true)))
+-      else ConsoleProfileReporter
+-      new RealProfiler(reporter)
+-    }
++    NoOpProfiler // yukibana: no JMX, threads or files in the browser
+ 
+   final def NoOp: Profiler = NoOpProfiler
+ 
+diff --git a/compiler/dotty/tools/dotc/report.scala b/compiler/dotty/tools/dotc/report.scala
+index 61bcc9c..60a6d6d 100644
+--- a/compiler/dotty/tools/dotc/report.scala
++++ b/compiler/dotty/tools/dotc/report.scala
+@@ -67,7 +67,7 @@ object report:
+   def error(msg: Message, pos: SrcPos = NoSourcePosition)(using Context): Unit =
+     val fullPos = addInlineds(pos)
+     ctx.reporter.report(new Error(msg, fullPos))
+-    if ctx.settings.YdebugError.value then Thread.dumpStack()
++    if ctx.settings.YdebugError.value then new Throwable().printStackTrace() /* yukibana */
+ 
+   def error(msg: => String, pos: SrcPos)(using Context): Unit =
+     error(msg.toMessage, pos)
+@@ -78,7 +78,7 @@ object report:
+   def error(ex: TypeError, pos: SrcPos)(using Context): Unit =
+     val fullPos = addInlineds(pos)
+     ctx.reporter.report(new StickyError(ex.toMessage, fullPos))
+-    if ctx.settings.YdebugError.value then Thread.dumpStack()
++    if ctx.settings.YdebugError.value then new Throwable().printStackTrace() /* yukibana */
+     if ctx.settings.YdebugTypeError.value then ex.printStackTrace()
+ 
+   def bestEffortError(ex: Throwable, msg: String)(using Context): Unit =
+@@ -163,7 +163,7 @@ object report:
+       "while compiling"    -> ctx.compilationUnit,
+       "during phase"       -> ctx.phase.megaPhase,
+       "mode"               -> ctx.mode,
+-      "library version"    -> scala.util.Properties.versionString,
++      "library version"    -> "version 2.13.16", // yukibana: scala.util.Properties reads jar manifests
+       "compiler version"   -> dotty.tools.dotc.config.Properties.versionString,
+       "settings"           -> settings.map(showSetting).mkString(" "),
+     ))
+diff --git a/compiler/dotty/tools/dotc/reporting/Reporter.scala b/compiler/dotty/tools/dotc/reporting/Reporter.scala
+index af92d0e..65f9885 100644
+--- a/compiler/dotty/tools/dotc/reporting/Reporter.scala
++++ b/compiler/dotty/tools/dotc/reporting/Reporter.scala
+@@ -44,7 +44,7 @@ object Reporter {
+       def loop(): Unit = reader.read match {
+         case 'a' | 'A' =>
+           new Throwable().printStackTrace(writer)
+-          System.exit(1)
++          throw new java.lang.Error("exit(1)") // yukibana: no System.exit on Scala.js
+         case 's' | 'S' =>
+           new Throwable().printStackTrace(writer)
+           writer.println()
+diff --git a/compiler/dotty/tools/dotc/transform/CheckUnused.scala b/compiler/dotty/tools/dotc/transform/CheckUnused.scala
+index b4098ef..b311e8e 100644
+--- a/compiler/dotty/tools/dotc/transform/CheckUnused.scala
++++ b/compiler/dotty/tools/dotc/transform/CheckUnused.scala
+@@ -899,9 +899,7 @@ object CheckUnused:
+             val implName = s"dotty.tools.dotc.ast.Trees$$${unapplied.name}"
+             try
+               import scala.language.unsafeNulls
+-              val clz = Class.forName(implName) // TODO improve to use class path or reflect
+-              val ok = clz.getConstructors.head.getParameters.map(p => termName(p.getName)).toList.init
+-              allowVariableBindings(ok, args)
++              throw new ClassNotFoundException(implName) // yukibana: no reflection on Scala.js
+             catch case _: ClassNotFoundException => ()
+         args.foreach(traverse)
+       case tree => traverseChildren(tree)
+diff --git a/compiler/dotty/tools/dotc/transform/MacroAnnotations.scala b/compiler/dotty/tools/dotc/transform/MacroAnnotations.scala
+index fd90103..eb87d3a 100644
+--- a/compiler/dotty/tools/dotc/transform/MacroAnnotations.scala
++++ b/compiler/dotty/tools/dotc/transform/MacroAnnotations.scala
+@@ -53,6 +53,8 @@ object MacroAnnotations:
+       (List(tree), companion)
+     else
+       debug.println(i"Expanding macro annotations of:\n$tree")
++      report.error("macro annotations are not supported by the in-browser Scala compiler", tree)
++      return (List(tree), companion) // yukibana
+       val macroInterpreter = new Interpreter(tree.srcPos, MacroClassLoader.fromContext)
+ 
+       val prefixedTrees = List.newBuilder[MemberDef]
+diff --git a/compiler/dotty/tools/dotc/transform/MegaPhase.scala b/compiler/dotty/tools/dotc/transform/MegaPhase.scala
+index 86acd00..6c51ea3 100644
+--- a/compiler/dotty/tools/dotc/transform/MegaPhase.scala
++++ b/compiler/dotty/tools/dotc/transform/MegaPhase.scala
+@@ -503,6 +503,7 @@ class MegaPhase(val miniPhases: Array[MiniPhase]) extends Phase {
+   private def defines(phase: MiniPhase, name: String) = {
+     def hasRedefinedMethod(cls: Class[?]): Boolean =
+       if (cls.eq(classOf[MiniPhase])) false
++      else if (true) true // yukibana: no getDeclaredMethods on Scala.js
+       else {
+         var clsMethods = clsMethodsCache.get(cls)
+         if (clsMethods == null) {
+diff --git a/compiler/dotty/tools/dotc/transform/Splicer.scala b/compiler/dotty/tools/dotc/transform/Splicer.scala
+index 9e60ece..6d2adc9 100644
+--- a/compiler/dotty/tools/dotc/transform/Splicer.scala
++++ b/compiler/dotty/tools/dotc/transform/Splicer.scala
+@@ -50,21 +50,8 @@ object Splicer {
+       val macroOwner = newSymbol(owner, nme.MACROkw, Macro | Synthetic, defn.AnyType, coord = tree.span)
+       try
+         val sliceContext = SpliceScope.contextWithNewSpliceScope(splicePos.sourcePos).withOwner(macroOwner)
+-        inContext(sliceContext) {
+-          val oldContextClassLoader = Thread.currentThread().getContextClassLoader
+-          Thread.currentThread().setContextClassLoader(classLoader)
+-          try {
+-            val interpreter = new SpliceInterpreter(splicePos, classLoader)
+-
+-            // Some parts of the macro are evaluated during the unpickling performed in quotedExprToTree
+-            val interpretedExpr = interpreter.interpret[Quotes => scala.quoted.Expr[Any]](tree)
+-            val interpretedTree = interpretedExpr.fold(tree)(macroClosure => PickledQuotes.quotedExprToTree(macroClosure(QuotesImpl())))
+-
+-            checkEscapedVariables(interpretedTree, macroOwner)
+-          } finally {
+-            Thread.currentThread().setContextClassLoader(oldContextClassLoader)
+-          }
+-        }.changeOwner(macroOwner, ctx.owner)
++        // yukibana: macros are compiled JVM code; the browser build cannot run them.
++        throw new StopInterpretation(em"macro expansion is not supported by the in-browser Scala compiler", splicePos)
+       catch {
+         case ex: CompilationUnit.SuspendException =>
+           throw ex
+diff --git a/compiler/dotty/tools/dotc/typer/Typer.scala b/compiler/dotty/tools/dotc/typer/Typer.scala
+index da37367..540e63e 100644
+--- a/compiler/dotty/tools/dotc/typer/Typer.scala
++++ b/compiler/dotty/tools/dotc/typer/Typer.scala
+@@ -1139,7 +1139,8 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
+     record("typedNumber")
+     val digits = tree.digits
+     val target = pt.dealias
+-    def lit(value: Any) = Literal(Constant(value)).withSpan(tree.span)
++    // yukibana: the typed Constant overloads, see Constants.Constant.apply(Any)
++    def lit(c: Constant) = Literal(c).withSpan(tree.span)
+     try {
+       // Special case primitive numeric types
+       if (target.isRef(defn.IntClass) ||
+@@ -1147,12 +1148,12 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
+           target.isRef(defn.ByteClass) ||
+           target.isRef(defn.ShortClass))
+         tree.kind match {
+-          case Whole(radix) => return lit(intFromDigits(digits, radix))
++          case Whole(radix) => return lit(Constant(intFromDigits(digits, radix)))
+           case _ =>
+         }
+       else if (target.isRef(defn.LongClass))
+         tree.kind match {
+-          case Whole(radix) => return lit(longFromDigits(digits, radix))
++          case Whole(radix) => return lit(Constant(longFromDigits(digits, radix)))
+           case _ =>
+         }
+       else if (target.isRef(defn.FloatClass))
+@@ -1162,12 +1163,12 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
+             val float = floatFromDigits(digits)
+             if digits.toIntOption.exists(_ != float.toInt) then
+               report.warning(LossyWideningConstantConversion(defn.IntType, target), tree.srcPos)
+-            return lit(float)
++            return lit(Constant(float))
+         }
+       else if (target.isRef(defn.DoubleClass))
+         tree.kind match {
+           case Whole(16) => // cant parse hex literal as double
+-          case _         => return lit(doubleFromDigits(digits))
++          case _         => return lit(Constant(doubleFromDigits(digits)))
+         }
+       else if Feature.genericNumberLiteralsEnabled
+           && target.isValueType && isFullyDefined(target, ForceDegree.none)
+@@ -1194,16 +1195,16 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
+         }
+       // Otherwise convert to Int or Double according to digits format
+       tree.kind match {
+-        case Whole(radix) => lit(intFromDigits(digits, radix))
+-        case _ => lit(doubleFromDigits(digits))
++        case Whole(radix) => lit(Constant(intFromDigits(digits, radix)))
++        case _ => lit(Constant(doubleFromDigits(digits)))
+       }
+     }
+     catch {
+       case ex: FromDigitsException =>
+         report.error(ex.getMessage.nn, tree.srcPos)
+         tree.kind match {
+-          case Whole(_) => lit(0)
+-          case _ => lit(0.0)
++          case Whole(_) => lit(Constant(0))
++          case _ => lit(Constant(0.0))
+         }
+     }
+   }
+diff --git a/compiler/dotty/tools/dotc/util/SourcePosition.scala b/compiler/dotty/tools/dotc/util/SourcePosition.scala
+index e4f56bd..5d4dc98 100644
+--- a/compiler/dotty/tools/dotc/util/SourcePosition.scala
++++ b/compiler/dotty/tools/dotc/util/SourcePosition.scala
+@@ -85,7 +85,7 @@ extends SrcPos, interfaces.SourcePosition, Showable {
+ }
+ 
+ /** A sentinel for a non-existing source position */
+-@sharable object NoSourcePosition extends SourcePosition(NoSource, NoSpan) {
++@sharable object NoSourcePosition extends SourcePosition(NoSource, NoSpan, null.asInstanceOf[SourcePosition]) { // yukibana
+   override def line: Int = -1
+   override def column: Int = -1
+   override def toString: String = "?"
+diff --git a/compiler/dotty/tools/io/AbstractFile.scala b/compiler/dotty/tools/io/AbstractFile.scala
+index 1bc9c05..3820244 100644
+--- a/compiler/dotty/tools/io/AbstractFile.scala
++++ b/compiler/dotty/tools/io/AbstractFile.scala
+@@ -157,7 +157,7 @@ abstract class AbstractFile extends Iterable[AbstractFile] {
+   /** size of this file if it is a concrete file. */
+   def sizeOption: Option[Int] = None
+ 
+-  def toURL: URL = if (jpath == null) null else jpath.toUri.toURL
++  def toURL: URL = if (jpath == null) null else new java.net.URL(jpath.toUri.toString) // yukibana
+ 
+   /** Returns contents of file (if applicable) in a Char array.
+    *  warning: use `Global.getSourceFile()` to use the proper
+diff --git a/compiler/dotty/tools/io/ClassPath.scala b/compiler/dotty/tools/io/ClassPath.scala
+index 01a3f2c..59b49dd 100644
+--- a/compiler/dotty/tools/io/ClassPath.scala
++++ b/compiler/dotty/tools/io/ClassPath.scala
+@@ -159,7 +159,7 @@ object ClassPath {
+   def specToURL(spec: String, basedir: Directory): Option[URL] =
+     try
+       val uri = new URI(spec)
+-      if uri.isAbsolute() then Some(uri.toURL())
++      if uri.isAbsolute() then Some(new java.net.URL(uri.toString))
+       else
+         Some(basedir.resolve(Path(spec)).toURL)
+     catch
+diff --git a/compiler/dotty/tools/io/Path.scala b/compiler/dotty/tools/io/Path.scala
+index 64137d6..0b0a495 100644
+--- a/compiler/dotty/tools/io/Path.scala
++++ b/compiler/dotty/tools/io/Path.scala
+@@ -81,7 +81,7 @@ class Path private[io] (val jpath: JPath) {
+   def toAbsolute: Path = if (isAbsolute) this else new Path(jpath.toAbsolutePath)
+   def toCanonical: Path = normalize.toAbsolute
+   def toURI: URI = jpath.toUri()
+-  def toURL: URL = toURI.toURL()
++  def toURL: URL = new java.net.URL(toURI.toString) // yukibana
+ 
+   /** If this path is absolute, returns it: otherwise, returns an absolute
+    *  path made up of root / this.

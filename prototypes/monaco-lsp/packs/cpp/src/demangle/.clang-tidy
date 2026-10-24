@@ -1,0 +1,21 @@
+# clang-tidy for the demangler's own sources (demangle.cpp, demangle.h,
+# test-native.cpp); LLVM's headers are not checked (HeaderFilterRegex).
+# test-demangle.mjs runs it and fails on any warning.
+Checks: >
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  cppcoreguidelines-*,
+  misc-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -modernize-use-trailing-return-type,
+  -readability-identifier-length,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -misc-include-cleaner
+# avoid-non-const-global-variables: the test's failure counter is the test.
+# misc-include-cleaner: wants LLVM's internal headers named one by one.
+WarningsAsErrors: '*'
+HeaderFilterRegex: 'demangle\.h$'

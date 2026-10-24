@@ -1,0 +1,52 @@
+# Builds the Haskell pack's GHC root file system (GHC 9.14 for WebAssembly,
+# its libraries as shared libraries, and the pack's GHC API program) with
+# prototypes/monaco-lsp/packs/haskell/ghc/build-rootfs.sh, smoke-tests it in
+# Node, and uploads it as an artifact for the pack's build.sh. GHC's wasm
+# toolchain needs some 3 GB of disk, more than a pack build should ask of a
+# laptop.
+name: Haskell pack GHC root file system
+
+on:
+  push:
+    branches:
+      - claude/project-thread-3ei4fl
+    paths:
+      - prototypes/monaco-lsp/packs/haskell/ghc/**
+      - '!prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh'
+      - '!prototypes/monaco-lsp/packs/haskell/ghc/*.patch'
+      - .github/workflows/haskell-ghc.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rootfs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache GHC's wasm toolchain and the package store
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.ghc-wasm
+            /tmp/yk/store
+          key: ghc-wasm-${{ hashFiles('prototypes/monaco-lsp/packs/haskell/ghc/build-rootfs.sh') }}
+          restore-keys: ghc-wasm-
+
+      - name: Install brotli
+        run: sudo apt-get install -y --no-install-recommends brotli
+
+      - name: Build
+        run: prototypes/monaco-lsp/packs/haskell/ghc/build-rootfs.sh "$RUNNER_TEMP/out"
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: haskell-ghc-rootfs
+          path: ${{ runner.temp }}/out
+          # The pack's build.sh pins a run's artifact, so it is kept as long
+          # as GitHub allows.
+          retention-days: 90

@@ -1,0 +1,18 @@
+[
+    { "name": "no compile_flags.txt", "flags": null, "expect": { "kind": "default", "id": "wasm32-wasi" } },
+    { "name": "no target flag", "flags": "-std=c++20\n-Wall\n", "expect": { "kind": "default", "id": "wasm32-wasi" } },
+    { "name": "--target=aarch64-linux-musl", "flags": "--target=aarch64-linux-musl\n-std=c++20\n", "expect": { "kind": "target", "id": "aarch64-linux" } },
+    { "name": "-target=X is not a clang spelling", "flags": "-target=riscv64-linux-musl\n", "expect": { "kind": "default", "id": "wasm32-wasi" } },
+    { "name": "-target, then the triple on the next line", "flags": "-target\nx86_64-linux-musl\n", "expect": { "kind": "target", "id": "x86_64-linux" } },
+    { "name": "--target with a separate value is not a clang spelling", "flags": "--target\naarch64-linux-musl\n", "expect": { "kind": "default", "id": "wasm32-wasi" } },
+    { "name": "the default's own triple", "flags": "--target=wasm32-wasip1\n", "expect": { "kind": "target", "id": "wasm32-wasi" } },
+    { "name": "the last target flag wins", "flags": "--target=aarch64-linux-musl\n-O2\n--target=x86_64-linux-musl\n", "expect": { "kind": "target", "id": "x86_64-linux" } },
+    { "name": "spaces around a flag and CRLF line ends", "flags": "  --target=riscv64-linux-musl  \r\n-O2\r\n", "expect": { "kind": "target", "id": "riscv64-linux" } },
+    { "name": "empty lines between -target and its value", "flags": "-target\n\n  \naarch64-linux-musl\n", "expect": { "kind": "target", "id": "aarch64-linux" } },
+    { "name": "an unsupported triple", "flags": "--target=armv7-linux-musleabihf\n", "expect": { "kind": "unsupported", "triple": "armv7-linux-musleabihf" } },
+    { "name": "a triple that differs only in case", "flags": "--target=X86_64-linux-musl\n", "expect": { "kind": "unsupported", "triple": "X86_64-linux-musl" } },
+    { "name": "a glibc triple", "flags": "--target=x86_64-linux-gnu\n", "expect": { "kind": "unsupported", "triple": "x86_64-linux-gnu" } },
+    { "name": "-target on the last line, with no value", "flags": "-O2\n-target\n", "expect": { "kind": "unsupported", "triple": "" } },
+    { "name": "--target= with an empty value", "flags": "--target=\n", "expect": { "kind": "unsupported", "triple": "" } },
+    { "name": "a flag that only starts like one", "flags": "--targets=aarch64-linux-musl\n-mtarget=x\n", "expect": { "kind": "default", "id": "wasm32-wasi" } }
+]

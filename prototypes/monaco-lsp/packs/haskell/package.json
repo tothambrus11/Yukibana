@@ -1,0 +1,14 @@
+{
+    "name": "yukibana-pack-haskell",
+    "private": true,
+    "description": "Yukibana Haskell pack: GHC 9.14 (compiled to WebAssembly by GHC's wasm backend) as a language server and a runner in module Web Workers. See build.sh; this file only holds the build's and the test's dependencies.",
+    "type": "module",
+    "scripts": {
+        "build": "./build.sh",
+        "test": "node test.mjs"
+    },
+    "devDependencies": {
+        "esbuild": "0.25.10",
+        "playwright-core": "1.56.1"
+    }
+}

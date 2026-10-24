@@ -1,21 +1,11 @@
 # Adapted from https://github.com/eclipse-theia/theia-ide/blob/74bd976ef60102bdbaf754817c88d00811465e72/.github/workflows/build.yml
 name: Build, package and test
 
+# Off while work happens in prototypes/ (Yukibana Light, prototype-ci.yml
+# checks that): run it by hand from the Actions tab when the IDE changes.
+# To turn it back on, restore the push (main, v* tags) and pull_request
+# (main) triggers, both with paths-ignore "**/*.md" and "**/*.typ".
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - v*
-    paths-ignore:
-      - "**/*.md"
-      - "**/*.typ"
-  pull_request:
-    branches:
-      - main
-    paths-ignore:
-      - "**/*.md"
-      - "**/*.typ"
   workflow_dispatch:
 
 concurrency:

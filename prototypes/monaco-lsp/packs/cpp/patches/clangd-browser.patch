@@ -1,0 +1,98 @@
+--- a/clang-tools-extra/clangd/tool/ClangdMain.cpp
++++ b/clang-tools-extra/clangd/tool/ClangdMain.cpp
+@@ -60,6 +60,45 @@
+ #include <malloc.h>
+ #endif
+ 
++#ifdef __EMSCRIPTEN__
++#include <emscripten/emscripten.h>
++#include <condition_variable>
++#include <cstring>
++
++// A browser has no stdin. clangd's main runs on a thread of its own
++// (-sPROXY_TO_PTHREAD), and the Worker that loaded it hands it the client's
++// messages, framed, by calling clangd_input; the transport reads them through
++// a FILE that waits while there is nothing to read.
++namespace {
++std::mutex InputMu;
++std::condition_variable InputArrived;
++std::string Input;
++size_t InputRead = 0;
++
++ssize_t readInput(void *, char *Buf, size_t Size) {
++  std::unique_lock<std::mutex> Lock(InputMu);
++  InputArrived.wait(Lock, [] { return InputRead < Input.size(); });
++  size_t N = std::min(Size, Input.size() - InputRead);
++  std::memcpy(Buf, Input.data() + InputRead, N);
++  InputRead += N;
++  if (InputRead == Input.size()) {
++    Input.clear();
++    InputRead = 0;
++  }
++  return N;
++}
++} // namespace
++
++extern "C" EMSCRIPTEN_KEEPALIVE void clangd_input(const char *Data,
++                                                  size_t Size) {
++  {
++    std::lock_guard<std::mutex> Lock(InputMu);
++    Input.append(Data, Size);
++  }
++  InputArrived.notify_one();
++}
++#endif
++
+ namespace clang {
+ namespace clangd {
+ 
+@@ -1031,8 +1070,13 @@
+ #endif
+   } else {
+     log("Starting LSP over stdin/stdout");
++#ifdef __EMSCRIPTEN__
++    std::FILE *In = fopencookie(nullptr, "r", {readInput, nullptr, nullptr, nullptr});
++#else
++    std::FILE *In = stdin;
++#endif
+     TransportLayer = newJSONTransport(
+-        stdin, llvm::outs(), InputMirrorStream ? &*InputMirrorStream : nullptr,
++        In, llvm::outs(), InputMirrorStream ? &*InputMirrorStream : nullptr,
+         PrettyPrint, InputStyle);
+   }
+   if (!PathMappingsArg.empty()) {
+--- a/clang-tools-extra/clangd/ClangdLSPServer.cpp
++++ b/clang-tools-extra/clangd/ClangdLSPServer.cpp
+@@ -555,6 +555,15 @@
+     if (const auto &Dir = Params.initializationOptions.compilationDatabasePath)
+       CDBOpts.CompileCommandsDir = Dir;
+     CDBOpts.ContextProvider = Opts.ContextProvider;
++#ifdef __EMSCRIPTEN__
++    // In the browser the file system is in memory and the host writes a
++    // project's compile_flags.txt whenever the editor does, possibly after
++    // clangd has looked for it. Looking again costs a few map lookups, so
++    // never serve a cached answer (by default: 5 s for a file found, 30 s
++    // for one missing).
++    CDBOpts.RevalidateAfter = CDBOpts.RevalidateMissingAfter =
++        std::chrono::steady_clock::duration::zero();
++#endif
+     BaseCDB =
+         std::make_unique<DirectoryBasedGlobalCompilationDatabase>(CDBOpts);
+   }
+--- a/clang-tools-extra/clangd/ClangdServer.cpp
++++ b/clang-tools-extra/clangd/ClangdServer.cpp
+@@ -354,8 +354,14 @@
+       config::Params Params;
+       // Don't reread config files excessively often.
+       // FIXME: when we see a config file change event, use the event timestamp?
++#ifdef __EMSCRIPTEN__
++      // An in-memory file system: rereading .clangd is cheap, and an edit
++      // to it must apply to the next parse, not one 5 s later.
++      Params.FreshTime = std::chrono::steady_clock::now();
++#else
+       Params.FreshTime =
+           std::chrono::steady_clock::now() - std::chrono::seconds(5);
++#endif
+       llvm::SmallString<256> PosixPath;
+       if (!File.empty()) {
+         assert(llvm::sys::path::is_absolute(File));

@@ -1,0 +1,124 @@
+# Keeps the Haskell pack's two CI inputs after their artifacts expire: the
+# "haskell-ghc-rootfs" artifact of the haskell-ghc.yml run that
+# prototypes/monaco-lsp/packs/haskell/build.sh pins (ROOTFS_RUN) and the
+# "haskell-ghc-tools" artifact of the haskell-ghc-tools.yml run it pins
+# (TOOLS_RUN) are checked against build.sh's sha256 pins, zipped and
+# attached to a GitHub release named as build.sh's INPUTS_RELEASE says.
+# build.sh downloads them from there when it is given no artifact, so the
+# pack still builds after GitHub's 90 days.
+#
+# Run by hand only (Actions, "Run workflow", on the branch whose build.sh
+# holds the pins): a release is public and stays, so making one is a
+# person's decision. With "draft" (the default) the release is made as a
+# draft, which nobody else sees and build.sh cannot download from yet;
+# publishing it is one click on its page. A release of that name that
+# exists already is left alone, and the run fails saying so.
+#
+# Pushing the tag that build.sh's INPUTS_RELEASE names, on the commit whose
+# build.sh holds the pins, publishes the release (not a draft). This is the
+# way in while the workflow exists only on a branch, where "Run workflow"
+# cannot see it (GitHub dispatches only workflows on the default branch).
+name: Haskell pack inputs release
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: Make the release a draft (publish it from its page afterwards)
+        type: boolean
+        default: true
+  push:
+    tags:
+      - haskell-inputs-*
+
+permissions:
+  contents: write # the release
+  actions: read # the pinned runs' artifacts
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Pins
+        id: pins
+        working-directory: prototypes/monaco-lsp/packs/haskell
+        run: |
+          pin() { sed -n "s/^$1=\([0-9a-f]*\)$/\1/p" build.sh; }
+          rootfs=$(pin ROOTFS_RUN) tools=$(pin TOOLS_RUN)
+          [ -n "$rootfs" ] && [ -n "$tools" ] || { echo "build.sh pins no ROOTFS_RUN or TOOLS_RUN" >&2; exit 1; }
+          {
+            echo "rootfs-run=$rootfs"
+            echo "rootfs-sums=$(pin SUMS_SHA256)"
+            echo "tools-run=$tools"
+            echo "tools-sums=$(pin TOOLS_SUMS_SHA256)"
+            # INPUTS_RELEASE is written in terms of the two runs.
+            echo "tag=$(ROOTFS_RUN=$rootfs TOOLS_RUN=$tools bash -c "$(grep '^INPUTS_RELEASE=' build.sh); echo \"\$INPUTS_RELEASE\"")"
+          } >> "$GITHUB_OUTPUT"
+          tag=$(sed -n 's/^tag=//p' "$GITHUB_OUTPUT")
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "$tag" ]; then
+            echo "::error::tag $GITHUB_REF_NAME is not the release build.sh pins ($tag)" >&2
+            exit 1
+          fi
+
+      - name: Is there a release already?
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pins.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::release $TAG exists already; nothing to do" >&2
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: haskell-ghc-rootfs
+          run-id: ${{ steps.pins.outputs.rootfs-run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/rootfs
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: haskell-ghc-tools
+          run-id: ${{ steps.pins.outputs.tools-run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/tools
+
+      # What build.sh checks, before anything is published: the SHA256SUMS
+      # it pins, and every file against it.
+      - name: Check and zip
+        env:
+          ROOTFS_SUMS: ${{ steps.pins.outputs.rootfs-sums }}
+          TOOLS_SUMS: ${{ steps.pins.outputs.tools-sums }}
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "$ROOTFS_SUMS  rootfs/SHA256SUMS" | sha256sum -c -
+          echo "$TOOLS_SUMS  tools/SHA256SUMS" | sha256sum -c -
+          (cd rootfs && sha256sum -c --quiet SHA256SUMS && zip -q -r -X ../haskell-ghc-rootfs.zip .)
+          (cd tools && sha256sum -c --quiet SHA256SUMS && zip -q -r -X ../haskell-ghc-tools.zip .)
+          ls -la ./*.zip
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pins.outputs.tag }}
+          DRAFT: ${{ inputs.draft }}
+          ROOTFS_RUN: ${{ steps.pins.outputs.rootfs-run }}
+          TOOLS_RUN: ${{ steps.pins.outputs.tools-run }}
+        working-directory: ${{ runner.temp }}
+        run: |
+          cat > notes.md <<EOF
+          Inputs of the Haskell pack of Yukibana Light (prototypes/monaco-lsp/packs/haskell), kept past the 90 days of their CI artifacts:
+
+          * \`haskell-ghc-rootfs.zip\`: the "haskell-ghc-rootfs" artifact of [run $ROOTFS_RUN]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$ROOTFS_RUN) (haskell-ghc.yml): GHC's root file system for WebAssembly and libyuki.so.
+          * \`haskell-ghc-tools.zip\`: the "haskell-ghc-tools" artifact of [run $TOOLS_RUN]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$TOOLS_RUN) (haskell-ghc-tools.yml): ormolu and hlint.
+
+          build.sh checks each file against the sha256 it pins. The licences of everything in them are inside (LICENSE-*.txt).
+          EOF
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Haskell pack inputs (runs $ROOTFS_RUN, $TOOLS_RUN)" --notes-file notes.md \
+            $([ "$DRAFT" = true ] && echo --draft) \
+            haskell-ghc-rootfs.zip haskell-ghc-tools.zip

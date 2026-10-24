@@ -1,0 +1,74 @@
+Test Suite 'All tests' started at DATE
+Test Suite 'BUNDLE.xctest' started at DATE
+Test Suite 'Assertions' started at DATE
+Test Case 'Assertions.testPassing' started at DATE
+Test Case 'Assertions.testPassing' passed (T seconds)
+Test Case 'Assertions.testFailing' started at DATE
+Behaviour.swift:28: error: Assertions.testFailing : XCTAssertTrue failed - 
+Behaviour.swift:29: error: Assertions.testFailing : XCTAssertTrue failed - true
+Behaviour.swift:30: error: Assertions.testFailing : XCTAssertFalse failed - 
+Behaviour.swift:31: error: Assertions.testFailing : XCTAssertEqual failed: ("2") is not equal to ("3") - two and three
+Behaviour.swift:32: error: Assertions.testFailing : XCTAssertEqual failed: ("a") is not equal to ("b") - 
+Behaviour.swift:33: error: Assertions.testFailing : XCTAssertNotEqual failed: ("1") is equal to ("1") - 
+Behaviour.swift:34: error: Assertions.testFailing : XCTAssertEqual failed: ("1.0") is not equal to ("1.5") +/- ("0.1") - 
+Behaviour.swift:35: error: Assertions.testFailing : XCTAssertNotEqual failed: ("1.0") is equal to ("1.05") +/- ("0.1") - 
+Behaviour.swift:36: error: Assertions.testFailing : XCTAssertEqual failed: ("10") is not equal to ("13") +/- ("2") - 
+Behaviour.swift:37: error: Assertions.testFailing : XCTAssertGreaterThan failed: ("1") is not greater than ("2") - 
+Behaviour.swift:38: error: Assertions.testFailing : XCTAssertGreaterThanOrEqual failed: ("1") is less than ("2") - 
+Behaviour.swift:39: error: Assertions.testFailing : XCTAssertLessThan failed: ("2") is not less than ("1") - 
+Behaviour.swift:40: error: Assertions.testFailing : XCTAssertLessThanOrEqual failed: ("2") is greater than ("1") - 
+Behaviour.swift:41: error: Assertions.testFailing : XCTAssertNil failed: "5" - 
+Behaviour.swift:42: error: Assertions.testFailing : XCTAssertNotNil failed - 
+Behaviour.swift:43: error: Assertions.testFailing : XCTAssertIdentical failed: ("main.Box") is not identical to ("nil") - 
+Behaviour.swift:45: error: Assertions.testFailing : XCTAssertNotIdentical failed: ("main.Box") is identical to ("main.Box") - 
+Behaviour.swift:46: error: Assertions.testFailing : failed - 
+Behaviour.swift:47: error: Assertions.testFailing : failed - by hand
+Test Case 'Assertions.testFailing' failed (T seconds)
+Test Case 'Assertions.testThrowingExpressions' started at DATE
+Behaviour.swift:52: error: Assertions.testThrowingExpressions : XCTAssertEqual threw error "oops" - 
+Behaviour.swift:53: error: Assertions.testThrowingExpressions : XCTAssertNoThrow failed: threw error "oops" - 
+Behaviour.swift:54: error: Assertions.testThrowingExpressions : XCTAssertThrowsError failed: did not throw error - 
+Behaviour.swift:56: error: Assertions.testThrowingExpressions : XCTAssertThrowsError threw error "oops" - handler throws
+Test Case 'Assertions.testThrowingExpressions' failed (T seconds)
+Test Case 'Assertions.testUnwrap' started at DATE
+Behaviour.swift:61: error: Assertions.testUnwrap : XCTUnwrap failed: expected non-nil value of type "String" - nothing there
+Test Case 'Assertions.testUnwrap' failed (T seconds)
+Test Case 'Assertions.testThrows' started at DATE
+<EXPR>:0: error: Assertions.testThrows : threw error "oops"
+Test Case 'Assertions.testThrows' failed (T seconds)
+Test Suite 'Assertions' failed at DATE
+	 Executed 5 tests, with 25 failures (3 unexpected) in T (T) seconds
+Test Suite 'Lifecycle' started at DATE
+Test Case 'Lifecycle.testOrder' started at DATE
+Test Case 'Lifecycle.testOrder' passed (T seconds)
+Test Case 'Lifecycle.testAsync' started at DATE
+Test Case 'Lifecycle.testAsync' passed (T seconds)
+Test Case 'Lifecycle.testSkipped' started at DATE
+Behaviour.swift:97: Lifecycle.testSkipped : Test skipped: required true value but got false - not today
+Test Case 'Lifecycle.testSkipped' skipped (T seconds)
+Test Case 'Lifecycle.testSkippedUnless' started at DATE
+Behaviour.swift:102: Lifecycle.testSkippedUnless : Test skipped: required false value but got true
+Test Case 'Lifecycle.testSkippedUnless' skipped (T seconds)
+Test Case 'Lifecycle.testSkip' started at DATE
+Behaviour.swift:106: Lifecycle.testSkip : Test skipped - thrown
+Test Case 'Lifecycle.testSkip' skipped (T seconds)
+class setUp, setUp async, setUpWithError, setUp, test Lifecycle.testOrder, teardown block 2, teardown block 1, tearDown, tearDownWithError, tearDown async, setUp async, setUpWithError, setUp, async test, tearDown, tearDownWithError, tearDown async, setUp async, setUpWithError, setUp, tearDown, tearDownWithError, tearDown async, setUp async, setUpWithError, setUp, tearDown, tearDownWithError, tearDown async, setUp async, setUpWithError, setUp, tearDown, tearDownWithError, tearDown async, class tearDown
+Test Suite 'Lifecycle' passed at DATE
+	 Executed 5 tests, with 3 tests skipped and 0 failures (0 unexpected) in T (T) seconds
+Test Suite 'FailingSetUp' started at DATE
+Test Case 'FailingSetUp.testNeverRuns' started at DATE
+<EXPR>:0: error: FailingSetUp.testNeverRuns : threw error "oops"
+<unknown>:0: FailingSetUp.testNeverRuns : Test skipped: threw error "oops"
+Test Case 'FailingSetUp.testNeverRuns' failed (T seconds)
+Test Suite 'FailingSetUp' failed at DATE
+	 Executed 1 test, with 1 test skipped and 1 failure (1 unexpected) in T (T) seconds
+Test Suite 'SkippingSetUp' started at DATE
+Test Case 'SkippingSetUp.testNeverRuns' started at DATE
+Behaviour.swift:116: SkippingSetUp.testNeverRuns : Test skipped - whole class
+Test Case 'SkippingSetUp.testNeverRuns' skipped (T seconds)
+Test Suite 'SkippingSetUp' passed at DATE
+	 Executed 1 test, with 1 test skipped and 0 failures (0 unexpected) in T (T) seconds
+Test Suite 'BUNDLE.xctest' failed at DATE
+	 Executed 12 tests, with 5 tests skipped and 26 failures (4 unexpected) in T (T) seconds
+Test Suite 'All tests' failed at DATE
+	 Executed 12 tests, with 5 tests skipped and 26 failures (4 unexpected) in T (T) seconds

@@ -1,0 +1,33 @@
+diff -ru a/lld/tools/lld/CMakeLists.txt b/lld/tools/lld/CMakeLists.txt
+--- a/lld/tools/lld/CMakeLists.txt	2026-10-23 13:38:22.215877278 +0000
++++ b/lld/tools/lld/CMakeLists.txt	2026-10-23 13:38:22.241563404 +0000
+@@ -27,10 +27,6 @@
+ lld_target_link_libraries(lld
+   PRIVATE
+   lldCommon
+-  lldCOFF
+-  lldELF
+-  lldMachO
+-  lldMinGW
+   lldWasm
+   )
+ 
+diff -ru a/lld/tools/lld/lld.cpp b/lld/tools/lld/lld.cpp
+--- a/lld/tools/lld/lld.cpp	2026-10-23 13:38:22.215841322 +0000
++++ b/lld/tools/lld/lld.cpp	2026-10-23 13:38:22.241458192 +0000
+@@ -66,11 +66,11 @@
+   return v;
+ }
+ 
+-LLD_HAS_DRIVER(coff)
+-LLD_HAS_DRIVER(elf)
+-LLD_HAS_DRIVER(mingw)
+-LLD_HAS_DRIVER(macho)
++// Yukibana: only wasm-ld is linked into the browser toolchain; the other
++// flavours would add megabytes nobody can use (the only target is wasm32).
+ LLD_HAS_DRIVER(wasm)
++#undef LLD_ALL_DRIVERS
++#define LLD_ALL_DRIVERS {{lld::Wasm, &lld::wasm::link}}
+ 
+ int lld_main(int argc, char **argv, const llvm::ToolContext &) {
+   sys::Process::UseANSIEscapeCodes(true);

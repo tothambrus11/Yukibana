@@ -1,0 +1,314 @@
+/*
+ * The palette follows the Hylo playground (Starlight "rapide"): warm greys
+ * from oklch, a green accent, a dark and a light set keyed on data-theme.
+ */
+:root {
+	--hue-base: 17;
+	--hue-accent: 164;
+	--font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', 'Noto Sans', Arial, sans-serif;
+	--font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	--nav-height: 3.5rem;
+	--tab-bar-height: 2.35rem;
+
+	--white: oklch(90% 0.008 var(--hue-base));
+	--gray-1: oklch(80% 0.018 var(--hue-base));
+	--gray-2: oklch(80% 0.018 var(--hue-base));
+	--gray-3: oklch(65% 0.013 var(--hue-base));
+	--gray-4: oklch(48% 0.009 var(--hue-base));
+	--gray-5: oklch(29% 0.005 var(--hue-base));
+	--gray-6: oklch(23% 0.004 var(--hue-base));
+	--gray-7: oklch(20.5% 0.002 var(--hue-base));
+	--black: oklch(18% 0.002 var(--hue-base));
+	--accent-low: oklch(26% 0.04 var(--hue-accent));
+	--accent: oklch(50% 0.085 var(--hue-accent));
+	--accent-high: oklch(61% 0.085 var(--hue-accent));
+	--red-low: oklch(22% 0.03 13);
+	--red-high: oklch(70% 0.14 13);
+	--orange-high: oklch(80% 0.12 84);
+	--blue-high: oklch(75% 0.1 274);
+	--header-bg: oklch(18% 0.002 var(--hue-base) / 0.8);
+	/*
+	 * The terminal's 16 ANSI colours (SGR 30–37, 90–97 and their
+	 * backgrounds; see lib/ansi.ts), tuned per theme so each reads on the
+	 * terminal's background: 0–7 normal, 8–15 bright. "Black" and "white"
+	 * are the dim and bright ends of the text greys, never the background.
+	 */
+	--ansi-0: oklch(48% 0.009 var(--hue-base));
+	--ansi-1: oklch(70% 0.15 22);
+	--ansi-2: oklch(74% 0.14 148);
+	--ansi-3: oklch(82% 0.13 88);
+	--ansi-4: oklch(70% 0.12 258);
+	--ansi-5: oklch(72% 0.13 330);
+	--ansi-6: oklch(76% 0.1 205);
+	--ansi-7: oklch(84% 0.008 var(--hue-base));
+	--ansi-8: oklch(62% 0.01 var(--hue-base));
+	--ansi-9: oklch(76% 0.15 22);
+	--ansi-10: oklch(82% 0.15 148);
+	--ansi-11: oklch(88% 0.13 95);
+	--ansi-12: oklch(78% 0.11 258);
+	--ansi-13: oklch(80% 0.12 330);
+	--ansi-14: oklch(84% 0.09 205);
+	--ansi-15: oklch(97% 0.004 var(--hue-base));
+	--ansi-default-fg: var(--white);
+	--ansi-default-bg: var(--black);
+	color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+	--white: oklch(30% 0.015 var(--hue-base));
+	--gray-1: oklch(36% 0.018 var(--hue-base));
+	--gray-2: oklch(36% 0.018 var(--hue-base));
+	--gray-3: oklch(44% 0.013 var(--hue-base));
+	--gray-4: oklch(66% 0.013 var(--hue-base));
+	--gray-5: oklch(88% 0.009 var(--hue-base));
+	--gray-6: oklch(93% 0.004 var(--hue-base));
+	--gray-7: oklch(96% 0.003 var(--hue-base));
+	--black: oklch(98.5% 0.002 var(--hue-base));
+	--hue-accent: 160;
+	--accent-low: oklch(94% 0.03 var(--hue-accent));
+	--accent: oklch(53% 0.1197 var(--hue-accent));
+	--accent-high: oklch(46% 0.104 var(--hue-accent));
+	--red-low: oklch(95% 0.02 13);
+	--red-high: oklch(50% 0.17 13);
+	--orange-high: oklch(55% 0.13 70);
+	--blue-high: oklch(45% 0.12 274);
+	--header-bg: oklch(98% 0.002 var(--hue-base) / 0.7);
+	--ansi-0: oklch(25% 0.01 var(--hue-base));
+	--ansi-1: oklch(52% 0.18 22);
+	--ansi-2: oklch(52% 0.14 148);
+	--ansi-3: oklch(58% 0.13 75);
+	--ansi-4: oklch(50% 0.15 260);
+	--ansi-5: oklch(52% 0.18 330);
+	--ansi-6: oklch(54% 0.1 210);
+	--ansi-7: oklch(62% 0.01 var(--hue-base));
+	--ansi-8: oklch(58% 0.01 var(--hue-base));
+	--ansi-9: oklch(58% 0.2 22);
+	--ansi-10: oklch(58% 0.15 148);
+	--ansi-11: oklch(64% 0.13 85);
+	--ansi-12: oklch(56% 0.16 260);
+	--ansi-13: oklch(58% 0.18 330);
+	--ansi-14: oklch(58% 0.1 205);
+	--ansi-15: oklch(72% 0.008 var(--hue-base));
+	color-scheme: light;
+}
+
+@media (width >= 50em) {
+	:root {
+		--nav-height: 4rem;
+	}
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	height: 100%;
+	margin: 0;
+}
+
+body {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	background: var(--black);
+	color: var(--white);
+	font: 15px/1.5 var(--font);
+}
+
+.monaco-editor {
+	font-variant-ligatures: none;
+}
+
+/* dockview, themed like the playground's "dockview-theme-hylo". */
+.dockview-theme-yukibana {
+	--dv-overlay-z-index: 999;
+	--dv-tab-font-size: inherit;
+	--dv-border-radius: 0px;
+	--dv-tab-margin: 0;
+	--dv-spacing-padding: 0px;
+	--dv-tab-border-radius: 0px;
+	--dv-sash-border-radius: 0px;
+	--dv-dropdown-border-radius: 0.35rem;
+	--dv-tab-close-icon-size: inherit;
+	--dv-floating-group-border: none;
+	--dv-active-sash-transition-duration: 0.1s;
+	--dv-active-sash-transition-delay: 0.3s;
+	--dv-group-view-background-color: var(--black);
+	--dv-tabs-and-actions-container-background-color: var(--gray-7);
+	--dv-tabs-and-actions-container-height: var(--tab-bar-height);
+	--dv-tabs-and-actions-container-font-size: 0.8rem;
+	--dv-activegroup-visiblepanel-tab-background-color: transparent;
+	--dv-activegroup-hiddenpanel-tab-background-color: transparent;
+	--dv-inactivegroup-visiblepanel-tab-background-color: transparent;
+	--dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
+	--dv-activegroup-visiblepanel-tab-color: var(--white);
+	--dv-activegroup-hiddenpanel-tab-color: var(--gray-3);
+	--dv-inactivegroup-visiblepanel-tab-color: var(--gray-2);
+	--dv-inactivegroup-hiddenpanel-tab-color: var(--gray-3);
+	--dv-tab-divider-color: transparent;
+	--dv-separator-border: var(--gray-5);
+	--dv-paneview-header-border-color: var(--gray-5);
+	--dv-sash-color: transparent;
+	--dv-active-sash-color: var(--accent);
+	--dv-drag-over-background-color: color-mix(in srgb, var(--accent) 18%, transparent);
+	--dv-drag-over-border-color: var(--accent);
+	--dv-drag-over-border: 1px solid var(--accent);
+	--dv-icon-hover-background-color: var(--gray-5);
+	--dv-tabs-container-scrollbar-color: var(--gray-4);
+	--dv-scrollbar-background-color: var(--gray-4);
+	--dv-context-menu-background-color: var(--gray-6);
+	--dv-context-menu-color: var(--white);
+	--dv-dnd-compass-color: var(--accent);
+	--dv-edge-dock-indicator-color: var(--accent);
+	height: 100%;
+}
+
+.dockview-theme-yukibana .dv-tabs-and-actions-container {
+	border-bottom: 1px solid var(--gray-5);
+}
+
+.dockview-theme-yukibana .dv-tab {
+	padding-block: 0.25rem 0;
+}
+
+.dockview-theme-yukibana .dv-groupview {
+	border-left: 1px solid var(--gray-5);
+}
+
+.dock-tab {
+	display: flex;
+	align-items: center;
+	gap: 0.3rem;
+	height: 100%;
+	padding: 0 0.75rem;
+	border-bottom: 2px solid transparent;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.dock-tab:has(.dock-tab-close) {
+	padding-right: 0.35rem;
+	font-family: var(--font-mono);
+	font-size: 0.78rem;
+}
+
+.dv-active-tab .dock-tab {
+	border-bottom-color: var(--accent-high);
+}
+
+.dv-inactive-group .dv-active-tab .dock-tab {
+	border-bottom-color: var(--gray-4);
+}
+
+.dock-tab-close {
+	display: inline-grid;
+	place-items: center;
+	width: 1.2rem;
+	height: 1.2rem;
+	padding: 0;
+	border: 0;
+	border-radius: 0.25rem;
+	background: none;
+	color: inherit;
+	cursor: pointer;
+	opacity: 0.6;
+}
+
+.dock-tab-close:hover,
+.dock-tab-close:focus-visible {
+	background: var(--gray-5);
+	color: var(--white);
+	opacity: 1;
+}
+
+.dock-tab-close svg {
+	width: 0.75rem;
+	height: 0.75rem;
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 2px;
+	stroke-linecap: round;
+}
+
+.dock-panel,
+.dock-editor {
+	height: 100%;
+	overflow: hidden;
+}
+
+/* The Preview panel (preview.ts): the page on white, as a browser shows it. */
+.dock-preview {
+	display: flex;
+	flex-direction: column;
+}
+.preview-frame {
+	flex: 1;
+	width: 100%;
+	border: 0;
+	background: #fff;
+}
+.preview-empty {
+	margin: 1rem;
+	color: var(--gray-3);
+	font-size: 0.85rem;
+}
+
+/*
+ * The dialog Monaco's services ask through (workspace-edits.ts), such as
+ * whether to undo a rename across all files; styled as the Offline dialog.
+ */
+.app-dialog {
+	width: min(30rem, calc(100vw - 2rem));
+	padding: 0;
+	border: 1px solid var(--gray-5);
+	border-radius: 0.5rem;
+	background: var(--gray-7);
+	color: var(--white);
+	font-size: 0.9rem;
+}
+.app-dialog::backdrop {
+	background: rgb(0 0 0 / 0.45);
+}
+.app-dialog-body {
+	padding: 1rem;
+}
+.app-dialog-message {
+	margin: 0;
+	line-height: 1.4;
+	overflow-wrap: anywhere;
+}
+.app-dialog-detail {
+	margin: 0.5rem 0 0;
+	color: var(--gray-2);
+	line-height: 1.4;
+}
+.app-dialog footer {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 0.5rem;
+	margin-top: 1rem;
+}
+.app-dialog-button {
+	height: 1.9rem;
+	padding: 0 0.7rem;
+	border: 1px solid var(--gray-5);
+	border-radius: 0.35rem;
+	background: var(--gray-6);
+	color: var(--gray-2);
+	font: inherit;
+	font-size: 0.8rem;
+	cursor: pointer;
+}
+.app-dialog-button:hover,
+.app-dialog-button:focus-visible {
+	border-color: var(--gray-4);
+	color: var(--white);
+}
+.app-dialog-button.primary {
+	border-color: var(--accent);
+	color: var(--white);
+	font-weight: 600;
+}

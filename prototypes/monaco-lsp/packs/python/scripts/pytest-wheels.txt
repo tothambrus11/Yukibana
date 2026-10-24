@@ -1,0 +1,9 @@
+# The pytest bundle (see make-pytest-zip.py): pytest and what it imports on
+# Python 3.14, as published on PyPI, pinned by sha256. exceptiongroup, tomli
+# and colorama are pytest dependencies only before 3.11 or on Windows.
+# file sha256 url
+pytest-9.0.2-py3-none-any.whl 711ffd45bf766d5264d487b917733b453d917afd2b0ad65223959f59089f875b https://files.pythonhosted.org/packages/3b/ab/b3226f0bd7cdcf710fbede2b3548584366da3b19b5021e74f5bde2a8fa3f/pytest-9.0.2-py3-none-any.whl
+pluggy-1.6.0-py3-none-any.whl e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746 https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl
+iniconfig-2.3.0-py3-none-any.whl f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12 https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl
+packaging-26.1-py3-none-any.whl 5d9c0669c6285e491e0ced2eee587eaf67b670d94a19e94e3984a481aba6802f https://files.pythonhosted.org/packages/7a/c2/920ef838e2f0028c8262f16101ec09ebd5969864e5a64c4c05fad0617c56/packaging-26.1-py3-none-any.whl
+pygments-2.21.0-py3-none-any.whl 2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9 https://files.pythonhosted.org/packages/71/46/17f022dd3e953bf20a04a028a21ec746d942f8d2af30fa0f124fa0e6a684/pygments-2.21.0-py3-none-any.whl
