@@ -12,6 +12,7 @@ on:
       - claude/project-thread-3ei4fl
     paths:
       - prototypes/monaco-lsp/packs/haskell/ghc/**
+      - '!prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh'
       - .github/workflows/haskell-ghc.yml
   workflow_dispatch:
 
@@ -45,34 +46,4 @@ jobs:
         with:
           name: haskell-ghc-rootfs
           path: ${{ runner.temp }}/out
-          retention-days: 30
-
-  # ormolu and hlint as WebAssembly commands (ghc/build-tools.sh), for the
-  # language server's formatting and hints.
-  tools:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 180
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Cache GHC's wasm toolchain and the tools' package store
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.ghc-wasm
-            /tmp/yk/tools-store
-          key: ghc-wasm-tools-${{ hashFiles('prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh') }}
-          restore-keys: ghc-wasm-tools-
-
-      - name: Install alex and happy
-        run: sudo apt-get install -y --no-install-recommends alex happy
-
-      - name: Build
-        run: prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh "$RUNNER_TEMP/tools"
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: haskell-ghc-tools
-          path: ${{ runner.temp }}/tools
           retention-days: 30

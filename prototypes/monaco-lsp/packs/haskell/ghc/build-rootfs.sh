@@ -102,10 +102,13 @@ for p in "${UNUSED[@]}"; do
     rm -rf "$ROOT$HS_SEARCHDIR/$p"-[0-9]* "$ROOT$HS_SEARCHDIR/libHS$p"-[0-9]*
 done
 $GHC_PKG --no-user-package-db --global-package-db="$ROOT/tmp/hslib/lib/package.conf.d" recache
-# GHC's own shared libraries as GHC links its others (WASM_SO_OPT): the
-# bindist's keep their DWARF and are not size-optimised (libHSghc.so 170 MB
-# before, about 135 after). The C libraries only lose their debug info.
-find "$ROOT/tmp/hslib/lib" -name '*.so' -print0 | xargs -0 -P "$(nproc)" -I{} sh -c 'wasm-opt $WASM_SO_OPT "$1" -o "$1"' _ {}
+# The bindist's shared libraries keep their DWARF (libHSghc.so is 170 MB
+# with it); stripping it is what makes them as small as GHC's own browser
+# build. Not -Oz, as WASM_SO_OPT does for what GHC links here: on
+# libHSghc.so that takes more memory than a CI runner has (the runner was
+# shut down), and gains little over stripping. Two at a time, for the same
+# reason.
+find "$ROOT/tmp/hslib/lib" -name '*.so' -print0 | xargs -0 -P 2 -I{} wasm-opt --strip-dwarf --strip-producers {} -o {}
 find "$ROOT/tmp/clib" -name '*.so' -print0 | xargs -0 -P "$(nproc)" -I{} wasm-opt --strip-dwarf --strip-producers {} -o {}
 # The ghc package's own interface files (36 MB) serve only a program that
 # imports the GHC API; libyuki.so needs its shared library, not them.

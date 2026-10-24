@@ -1,0 +1,48 @@
+# Builds the Haskell pack's formatter and linter, ormolu and hlint, as
+# WebAssembly commands with
+# prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh, and uploads them
+# as an artifact for the pack's build.sh. Apart from haskell-ghc.yml:
+# ghc-lib-parser takes most of an hour to build, and only a change to
+# build-tools.sh needs it built again.
+name: Haskell pack formatter and linter
+
+on:
+  push:
+    branches:
+      - claude/project-thread-3ei4fl
+    paths:
+      - prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh
+      - .github/workflows/haskell-ghc-tools.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tools:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache GHC's wasm toolchain and the tools' package store
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ghc-wasm
+            /tmp/yk/tools-store
+          key: ghc-wasm-tools-${{ hashFiles('prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh') }}
+          restore-keys: ghc-wasm-tools-
+
+      - name: Install alex and happy
+        run: sudo apt-get install -y --no-install-recommends alex happy
+
+      - name: Build
+        run: prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh "$RUNNER_TEMP/tools"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: haskell-ghc-tools
+          path: ${{ runner.temp }}/tools
+          retention-days: 30
