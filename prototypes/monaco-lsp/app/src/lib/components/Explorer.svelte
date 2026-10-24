@@ -5,7 +5,6 @@
 -->
 <script lang="ts">
 	import { monaco } from '../monaco';
-	import { languageOf } from '../languages';
 	import { baseName, parentOf } from '../project';
 	import type { Workspace } from '../workspace.svelte';
 
@@ -149,7 +148,7 @@
 
 <div class="explorer">
 	<div class="toolbar">
-		<span class="title">{languageOf(workspace.language).label} project</span>
+		<span class="spacer"></span>
 		<button title="New file" aria-label="New file" onclick={() => startCreate('file')}>
 			<svg viewBox="0 0 16 16"><path d="M9 1.5H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5.5zM9 1.5v4h4M8 8v4M6 10h4" /></svg>
 		</button>
@@ -232,11 +231,8 @@
 		padding: 0.4rem 0.5rem 0.3rem 0.85rem;
 		color: var(--gray-3);
 	}
-	.title {
+	.spacer {
 		flex: 1;
-		font-size: 0.7rem;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
 	}
 	button {
 		display: inline-grid;
