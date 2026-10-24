@@ -14,6 +14,7 @@
 	import { monaco } from '../lib/monaco';
 	import { projectLanguageOf } from '../lib/project';
 	import { TEST_FRAMEWORKS, type TestFramework } from '../lib/cpp-tests';
+	import { TARGETS, type CppTargetId } from '../lib/cpp-targets';
 
 	const workspace = new Workspace();
 	let dockElement: HTMLElement;
@@ -59,6 +60,9 @@
 	const warnings = $derived(workspace.problems.filter((p) => p.marker.severity === monaco.MarkerSeverity.Warning).length);
 	const percent = $derived(workspace.progress && workspace.progress.total > 0 ? Math.min(100, (100 * workspace.progress.loaded) / workspace.progress.total) : null);
 	const language = $derived(languageOf(workspace.language));
+	/** A C++ project on a Linux target: Run options apply, Test does not (yet). */
+	const linuxTarget = $derived(workspace.target?.kind === 'target' && workspace.target.target.runtime === 'linux');
+	const targetValue = $derived(!workspace.target ? '' : workspace.target.kind === 'unsupported' ? 'other' : workspace.target.target.id);
 	const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
 
 	function reset() {
@@ -92,7 +96,7 @@
 			<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7-4.5z" /></svg>Run
 		</button>
 		{#if language.tests}
-			<button class="button" onclick={() => workspace.run('test')} title="Run the project's tests (Ctrl+Shift+Enter)">Test</button>
+			<button class="button test" onclick={() => workspace.run('test')} disabled={linuxTarget} title={linuxTarget ? 'Tests run on the WebAssembly target only, for now' : "Run the project's tests (Ctrl+Shift+Enter)"}>Test</button>
 		{/if}
 		{#if language.mutates}
 			<button class="button" onclick={() => workspace.run('mutate')} title="Mutation testing: change the code in small ways and check that the tests notice">Mutate</button>
@@ -118,6 +122,37 @@
 			</select>
 			<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>
 		</label>
+		<!-- The target is compile_flags.txt's --target line (cpp-targets.ts): choosing one rewrites it; a hand-edited one is shown as it is. -->
+		<label class="select target" title="Target: what the code is compiled for and runs on. Choosing one rewrites the --target line of compile_flags.txt">
+			<span class="sr-only">Target</span>
+			<select
+				value={targetValue}
+				onchange={(e) => {
+					if (e.currentTarget.value !== 'other') workspace.chooseTarget(e.currentTarget.value as CppTargetId);
+					e.currentTarget.value = targetValue;
+				}}
+			>
+				{#each TARGETS as t (t.id)}
+					<option value={t.id}>{t.label}</option>
+				{/each}
+				{#if workspace.target?.kind === 'unsupported'}
+					<option value="other" disabled>Other ({workspace.target.triple || 'no triple'})</option>
+				{/if}
+			</select>
+			<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>
+		</label>
+		{#if linuxTarget}
+			<!-- Loaded the first time a project is on a Linux target: most sessions never need it. -->
+			{#await import('../lib/components/RunOptions.svelte') then { default: RunOptions }}
+				<span class="run-options"><RunOptions {workspace} /></span>
+			{/await}
+		{/if}
+	{/if}
+	{#if language.explores?.includes('llvm-ir')}
+		<button class="button view" onclick={() => void workspace.showView('llvm-ir')} title="Show the LLVM IR of the active C or C++ file">IR</button>
+	{/if}
+	{#if language.explores?.includes('asm')}
+		<button class="button view" onclick={() => void workspace.showView('asm')} title="Show the assembly of the active C or C++ file">Asm</button>
 	{/if}
 
 	<button class="button" onclick={() => void workspace.download()} title="Download the project as a zip, with the build files an IDE needs">Download</button>
@@ -174,6 +209,9 @@
 
 <style>
 	.bar {
+		/* Above the layout, so a menu opened from the bar (Run options) is not drawn under the panels. */
+		position: relative;
+		z-index: 10;
 		display: flex;
 		align-items: center;
 		gap: 0.75rem;
@@ -264,7 +302,8 @@
 		border-color: var(--accent);
 		color: var(--accent-high);
 	}
-	.run:disabled {
+	.run:disabled,
+	.button:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
 	}
@@ -389,7 +428,9 @@
 		}
 		.product,
 		.button:not(.run, .update),
-		.framework {
+		.framework,
+		.target,
+		.run-options {
 			display: none;
 		}
 	}

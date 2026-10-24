@@ -13,7 +13,10 @@
 // twice: cold (empty browser cache) and warm (cached downloads and compiled
 // wasm), with timings. C++ exceptions, caught and uncaught, and the
 // sample's tests ({ type: 'test' }) in GoogleTest, doctest and Catch2,
-// passing and failing, and tests that mix two frameworks.
+// passing and failing, and tests that mix two frameworks. The default
+// target fetches exactly the files it fetched before the Linux targets
+// existed; a target flag that names no target, a Test on a Linux target and
+// a Linux run without the emulator (vm.js) are refused with their messages.
 
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
@@ -38,8 +41,13 @@ const ISOLATION = {
 // browser accepts brotli, as the app's host does; cacheable, so the second
 // run measures a warm cache.
 let bytesSent = 0;
+/** The paths requested, in order; and paths the server answers 404 for. */
+const requested = [];
+const hidden = new Set();
 const server = createServer(async (req, res) => {
     const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    requested.push(path);
+    if (hidden.has(path)) return res.writeHead(404).end();
     if (path === '/__test.html') {
         res.writeHead(200, { 'content-type': 'text/html', ...ISOLATION });
         res.end('<!doctype html><link rel=icon href="data:,"><title>cpp runner test</title>');
@@ -343,8 +351,14 @@ try {
 
     // 1. The sample, cold then warm.
     bytesSent = 0;
+    requested.length = 0;
     const cold = await run(SAMPLE);
     const coldBytes = bytesSent;
+    // What the default target fetched before targets existed, and nothing
+    // more: no cc-cross, targets/, runner-linux.js, vm.js, explorer.js or demangle.
+    const urls = [...new Set(requested)].sort();
+    const before = ['/packs/cpp/cc.js', '/packs/cpp/cc.wasm', '/packs/cpp/runner.js', '/packs/cpp/sysroot.tar.gz', '/packs/cpp/wasi-sysroot.tar.gz'];
+    check('the default target fetches exactly the files it always did', JSON.stringify(urls) === JSON.stringify(before), urls.join(' '));
     check(
         'sample project (cold): prints the distance and the norm, exits 0',
         cold.code === 0 && cold.stdout === '5.000000\n5.000000\n',
@@ -559,6 +573,48 @@ TEST_CASE("throws something else") {
         refused.code === 1 && /could not start: .*could not allocate memory/.test(refused.stderr),
         `code=${refused.code} ${JSON.stringify(refused.stderr.trim())} ${refused.ms} ms`
     );
+
+    // Targets (README, "Targets"): refusals that need no compiler.
+    const armv7 = await run({ ...SAMPLE, 'compile_flags.txt': '--target=armv7-linux-musleabihf\n-std=c++20\n' });
+    check(
+        'an unsupported --target: the message lists the supported triples, exit 1, nothing downloaded',
+        armv7.code === 1 && /^Unsupported target "armv7-linux-musleabihf" in compile_flags.txt; supported: wasm32-wasip1, x86_64-linux-musl, aarch64-linux-musl, riscv64-linux-musl \(or no --target\)\.\n$/.test(armv7.stderr) && Object.keys(armv7.loading).length === 0,
+        JSON.stringify(armv7.stderr)
+    );
+    const linuxTests = await testRun({ ...SAMPLE, 'compile_flags.txt': '-target\naarch64-linux-musl\n' });
+    check(
+        'Test on a Linux target: refused, naming why (the frameworks are wasm32), exit 1',
+        linuxTests.code === 1 && /^Tests run on the WebAssembly target only, for now: the test frameworks are built for wasm32 only\.\n$/.test(linuxTests.stderr),
+        JSON.stringify(linuxTests.stderr)
+    );
+    // A Linux run with the emulator missing (vm.js answered 404): compiled
+    // and linked, then the message. Needs cc-cross and targets/x86_64.
+    let haveCross = true;
+    try {
+        await stat(join(STATIC, 'packs/cpp/cc-cross.wasm'));
+    } catch {
+        haveCross = false;
+    }
+    if (haveCross) {
+        hidden.add('/packs/cpp/vm.js');
+        requested.length = 0;
+        const novm = await run({ ...SAMPLE, 'compile_flags.txt': `--target=x86_64-linux-musl\n${SAMPLE['compile_flags.txt']}` });
+        hidden.clear();
+        const fetched = [...new Set(requested)].filter((u) => u.startsWith('/packs/')).sort();
+        check(
+            'Linux target without vm.js: compiled for x86_64-linux-musl, linked, then "not installed", exit 1',
+            novm.code === 1 && novm.stderr === 'Running on x86-64 Linux is not installed (packs/cpp/vm.js)\n' &&
+                novm.phases.some(([t]) => t === 'Compiling geometry.cpp (1/2) for x86_64-linux-musl') && novm.phases.some(([t]) => t === 'Linking'),
+            `${JSON.stringify(novm.stderr)} ${timeline(novm)}`
+        );
+        check(
+            'a Linux target fetches cc-cross and its own arch only, never cc.wasm or wasi-sysroot',
+            // runner.js and sysroot.tar.gz come from the browser's cache,
+            // fetched by the runs before.
+            JSON.stringify(fetched) === JSON.stringify(['/packs/cpp/cc-cross.js', '/packs/cpp/cc-cross.wasm', '/packs/cpp/runner-linux.js', '/packs/cpp/targets/x86_64/include.tar', '/packs/cpp/targets/x86_64/lib.tar', '/packs/cpp/vm.js']),
+            fetched.join(' ')
+        );
+    } else console.log('SKIP  Linux target without vm.js (no cc-cross.wasm: run build-cross.sh)');
 
     // 4. A program that never ends: the page terminates the worker.
     const t = Date.now();

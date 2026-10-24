@@ -1,0 +1,806 @@
+--- a/configure
++++ b/configure
+@@ -515,6 +515,7 @@
+     CPU_CFLAGS="-m64 -mcx16"
+     ;;
+   wasm32)
++    host_arch=wasm32
+     CPU_CFLAGS="-m32" ;;
+ esac
+ 
+@@ -804,7 +805,7 @@
+ 
+ if [ -n "$host_arch" ] && [ -d "$source_path/common-user/host/$host_arch" ]; then
+     if [ "$linux_user" != no ]; then
+-        if [ "$targetos" = linux ]; then
++        if [ "$targetos" = linux ] || [ "$cpu" = wasm32 ]; then
+             linux_user=yes
+         elif [ "$linux_user" = yes ]; then
+             error_exit "linux-user not supported on this architecture"
+--- a/meson.build
++++ b/meson.build
+@@ -2914,7 +2914,7 @@
+ foreach target : target_dirs
+   config_target = { 'TARGET_NAME': target.split('-')[0] }
+   if target.endswith('linux-user')
+-    if targetos != 'linux'
++    if targetos not in ['linux', 'emscripten', 'bogus']
+       if default_targets
+         continue
+       endif
+--- a/common-user/meson.build
++++ b/common-user/meson.build
+@@ -8,3 +8,6 @@
+   'safe-syscall.S',
+   'safe-syscall-error.c',
+ ))
++if host_arch == 'wasm32'
++  user_ss.add(files('host/wasm32/wasm-host.c'))
++endif
+--- a/gdbstub/user-target.c
++++ b/gdbstub/user-target.c
+@@ -11,7 +11,7 @@
+ #include "exec/gdbstub.h"
+ #include "qemu.h"
+ #include "internals.h"
+-#ifdef CONFIG_LINUX
++#if defined(CONFIG_LINUX) || defined(CONFIG_LINUX_USER)
+ #include "linux-user/loader.h"
+ #include "linux-user/qemu.h"
+ #endif
+--- a/linux-user/main.c
++++ b/linux-user/main.c
+@@ -18,6 +18,9 @@
+  */
+ 
+ #include "qemu/osdep.h"
++#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
++#include "../tcg/wasm32.h"
++#endif
+ #include "qemu/help-texts.h"
+ #include "qemu/units.h"
+ #include "qemu/accel.h"
+@@ -667,8 +670,15 @@
+     return optind;
+ }
+ 
++#ifdef EMSCRIPTEN
++/* Wasm only maps main(argc, argv) to the entry point; envp is environ. */
++int main(int argc, char **argv)
++{
++    char **envp = environ;
++#else
+ int main(int argc, char **argv, char **envp)
+ {
++#endif
+     struct target_pt_regs regs1, *regs = &regs1;
+     struct image_info info1, *info = &info1;
+     struct linux_binprm bprm;
+@@ -820,6 +830,12 @@
+         /* MAX_RESERVED_VA + 1 is a large power of 2, so is aligned. */
+         reserved_va = max_reserved_va;
+     }
++#ifdef EMSCRIPTEN
++    /* Guest memory is one allocation in Wasm linear memory: keep it modest. */
++    if (reserved_va == 0) {
++        reserved_va = 256 * MiB - 1;
++    }
++#endif
+ 
+     /*
+      * Temporarily disable
+@@ -1011,6 +1027,10 @@
+     qemu_semihosting_guestfd_init();
+ #endif
+ 
++#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
++    /* Per-thread state of the Wasm TB compiler (system mode does this per vCPU thread). */
++    init_wasm32();
++#endif
+     cpu_loop(env);
+     /* never exits */
+     return 0;
+--- a/linux-user/syscall.c
++++ b/linux-user/syscall.c
+@@ -18,6 +18,9 @@
+  */
+ #define _ATFILE_SOURCE
+ #include "qemu/osdep.h"
++#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
++#include "../tcg/wasm32.h"
++#endif
+ #include "qemu/cutils.h"
+ #include "qemu/path.h"
+ #include "qemu/memfd.h"
+@@ -6532,6 +6535,10 @@
+     /* Wait until the parent has finished initializing the tls state.  */
+     pthread_mutex_lock(&clone_lock);
+     pthread_mutex_unlock(&clone_lock);
++#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
++    /* Per-thread state of the Wasm TB compiler (system mode does this per vCPU thread). */
++    init_wasm32();
++#endif
+     cpu_loop(env);
+     /* never exits */
+     return NULL;
+--- a/linux-user/elfload.c
++++ b/linux-user/elfload.c
+@@ -3093,11 +3093,34 @@
+         }
+     }
+ 
++#ifdef EMSCRIPTEN
++    /*
++     * A Wasm host has one linear memory, no address hints and no
++     * MAP_FIXED, so the whole guest address space [0, reserved_va] is one
++     * zeroed allocation (wasm_guest_region_alloc); host mmap() of addresses
++     * inside it is emulated by wasm_mmap() (common-user/host/wasm32/wasm-host.c).
++     */
++    {
++        void *p;
++        if (!reserved_va) {
++            error_report("%s: an Emscripten host needs -R <size>", image_name);
++            exit(EXIT_FAILURE);
++        }
++        p = wasm_guest_region_alloc(reserved_va + 1, align);
++        if (!p) {
++            error_report("%s: cannot allocate %lu bytes of guest memory",
++                         image_name, reserved_va + 1);
++            exit(EXIT_FAILURE);
++        }
++        guest_base = (uintptr_t)p;
++    }
++#else
+     if (have_guest_base) {
+         pgb_fixed(image_name, guest_loaddr, guest_hiaddr, align);
+     } else {
+         pgb_dynamic(image_name, guest_loaddr, guest_hiaddr, align);
+     }
++#endif
+ 
+     /* Reserve and initialize the commpage. */
+     if (!init_guest_commpage()) {
+--- a/linux-user/signal.c
++++ b/linux-user/signal.c
+@@ -706,6 +706,15 @@
+         .sa_handler = SIG_DFL,
+     };
+ 
++#ifdef EMSCRIPTEN
++    /*
++     * A Wasm process cannot die of a signal: exit with the status a shell
++     * reports for one (128 + signal), after recording the signal where the
++     * embedder can tell it from a program's own exit(128 + n).
++     */
++    wasm_host_exit_signal(host_sig);
++#endif
++
+     /*
+      * The proper exit code for dying from an uncaught signal is -<signal>.
+      * The kernel doesn't allow exit() or _exit() to pass a negative value.
+@@ -742,12 +751,17 @@
+     trace_user_dump_core_and_abort(env, target_sig, host_sig);
+     gdb_signalled(env, target_sig);
+ 
+-    /* dump core if supported by target binary format */
++    /*
++     * dump core if supported by target binary format; not on a Wasm host,
++     * where it would walk and write the whole guest address space.
++     */
++#ifndef EMSCRIPTEN
+     if (core_dump_signal(target_sig) && (ts->bprm->core_dump != NULL)) {
+         stop_all_tasks();
+         core_dumped =
+             ((*ts->bprm->core_dump)(target_sig, env) == 0);
+     }
++#endif
+     if (core_dumped) {
+         /* we already dumped the core of target process, we don't want
+          * a coredump of qemu itself */
+--- a/tcg/wasm32.c
++++ b/tcg/wasm32.c
+@@ -227,7 +227,17 @@
+ 
+ int get_core_nums()
+ {
++#ifdef CONFIG_USER_ONLY
++    /*
++     * Every guest thread is a host thread with its own slot in each TB's
++     * export and counter vectors, so size them for guest threads, not host
++     * cores (and do not ask the browser per translation). Slots are not
++     * recycled, so the 32nd guest thread ever started still fails.
++     */
++    return 32;
++#else
+     return emscripten_num_logical_cores();
++#endif
+ }
+ 
+ EM_JS(void, init_wasm32_js, (int tb_ptr_ptr, int cur_core_num, int to_remove_instance_ptr, int to_remove_instance_idx_ptr, int instance_garbage_collected_ptr), {
+@@ -510,6 +520,17 @@
+ 
+ static uint64_t tlb_load(CPUArchState *env, uint64_t taddr, MemOp mop, uint64_t* ptr, bool is_ld)
+ {
++#ifdef CONFIG_USER_ONLY
++    /* No TLB in user mode: in-range, aligned accesses go straight to g2h. */
++    {
++        unsigned ua_mask = (unsigned)((uint64_t *)ptr)[3];
++        unsigned us_mask = (1u << (mop & MO_SIZE)) - 1;
++        if (taddr > reserved_va - us_mask || (taddr & ua_mask)) {
++            return 0;
++        }
++        return guest_base + taddr;
++    }
++#endif
+     uint64_t *data64 = (uint64_t*)ptr;
+     unsigned a_mask = (unsigned)data64[3];
+     int mask_ofs = (int)data64[4];
+--- a/tcg/wasm32/tcg-target.c.inc
++++ b/tcg/wasm32/tcg-target.c.inc
+@@ -2193,6 +2193,44 @@
+ 
+ static uint8_t tcg_wasm_out_tlb_load(TCGContext *s, TCGReg addr, MemOpIdx oi, bool is_ld)
+ {
++#ifdef CONFIG_USER_ONLY
++    {
++        /*
++         * User mode has no TLB: guest memory is [guest_base, guest_base +
++         * reserved_va] in linear memory. The fast path is a plain add; an
++         * address outside that range or misaligned for the access returns
++         * base 0, which sends the access to the helper (and so to the same
++         * checks as TCI).
++         */
++        extern unsigned long reserved_va;
++        MemOp uopc = get_memop(oi);
++        TCGAtomAlign uaa = atom_and_align_for_opc(s, uopc, MO_ATOM_IFALIGN, false);
++        unsigned ua_mask = (1u << uaa.align) - 1;
++        unsigned us_mask = (1u << (uopc & MO_SIZE)) - 1;
++
++        tcg_wasm_out_op_global_get_r(s, addr);
++        tcg_wasm_out_op_i64_const(s, (int64_t)guest_base);
++        tcg_wasm_out_op_i64_add(s);
++        tcg_wasm_out_op_local_set(s, TMP64_0_IDX);
++
++        tcg_wasm_out_op_global_get_r(s, addr);
++        tcg_wasm_out_op_i64_const(s, (int64_t)(reserved_va - us_mask));
++        tcg_wasm_out_op_i64_gt_u(s);
++        if (ua_mask) {
++            tcg_wasm_out_op_global_get_r(s, addr);
++            tcg_wasm_out_op_i64_const(s, ua_mask);
++            tcg_wasm_out_op_i64_and(s);
++            tcg_wasm_out_op_i64_eqz(s);
++            tcg_wasm_out_op_i32_eqz(s);
++            tcg_wasm_out_op_i32_or(s);
++        }
++        tcg_wasm_out_op_if_noret(s);
++        tcg_wasm_out_op_i64_const(s, 0);
++        tcg_wasm_out_op_local_set(s, TMP64_0_IDX);
++        tcg_wasm_out_op_end(s);
++        return TMP64_0_IDX;
++    }
++#endif
+     MemOp opc = get_memop(oi);
+     TCGAtomAlign aa;
+     unsigned a_mask;
+--- /dev/null
++++ b/common-user/host/wasm32/safe-syscall.inc.S
+@@ -0,0 +1 @@
++/* wasm32: safe_syscall_base is C, in wasm-host.c (no host signals interrupt a Wasm call). */
+--- /dev/null
++++ b/common-user/host/wasm32/wasm-host.c
+@@ -0,0 +1,490 @@
++/*
++ * Host side of linux-user on an Emscripten (wasm32) host.
++ *
++ * linux-user forwards guest syscalls to host syscalls by number. Emscripten
++ * has no syscall instruction: its libc calls __syscall_<name>() imports
++ * implemented in JS (FS, stdio) or C. This file is the narrow seam: it
++ * provides safe_syscall_base() (no asynchronous host signal can interrupt
++ * a Wasm call, so the race the assembly versions close does not exist),
++ * wasm_host_syscall6(), which maps host syscall numbers onto those functions,
++ * the guest's standard input (wasm_host_stdin), and the guest address space
++ * (wasm_guest_region_alloc, wasm_mmap and friends).
++ */
++#include "qemu/osdep.h"
++#include "qemu/thread.h"
++#include "user/safe-syscall.h"
++#include "special-errno.h"
++#include <stdarg.h>
++#include <stdatomic.h>
++#include <emscripten/emscripten.h>
++#include <emscripten/threading.h>
++#include <sys/uio.h>
++#include <sys/ioctl.h>
++#include <dirent.h>
++#include <linux/futex.h>
++
++char safe_syscall_start[1];
++char safe_syscall_end[1];
++
++long safe_syscall_base(int *pending, long number, ...)
++{
++    va_list ap;
++    long a, b, c, d, e, f, ret;
++
++    if (*pending) {
++        return safe_syscall_set_errno_tail(QEMU_ERESTARTSYS);
++    }
++    va_start(ap, number);
++    a = va_arg(ap, long); b = va_arg(ap, long); c = va_arg(ap, long);
++    d = va_arg(ap, long); e = va_arg(ap, long); f = va_arg(ap, long);
++    va_end(ap);
++    ret = wasm_host_syscall6(number, a, b, c, d, e, f);
++    if (ret < 0 && ret > -4096) {
++        return safe_syscall_set_errno_tail(-ret);
++    }
++    return ret;
++}
++
++/* The libc entry point linux-user's _syscallN() wrappers expand to. */
++long syscall(long n, ...)
++{
++    va_list ap;
++    long a, b, c, d, e, f, ret;
++
++    va_start(ap, n);
++    a = va_arg(ap, long); b = va_arg(ap, long); c = va_arg(ap, long);
++    d = va_arg(ap, long); e = va_arg(ap, long); f = va_arg(ap, long);
++    va_end(ap);
++    ret = wasm_host_syscall6(n, a, b, c, d, e, f);
++    if (ret < 0 && ret > -4096) {
++        errno = -ret;
++        return -1;
++    }
++    return ret;
++}
++
++/*
++ * The guest's standard input: a byte ring in linear memory that the embedder
++ * fills from its own thread and the guest thread reading fd 0 drains,
++ * sleeping on a futex in between. Emscripten's own stdin (FS.init's input
++ * callback, a TTY's get_char) runs on the embedder's thread and cannot wait
++ * there without stopping every proxied file system call, so it is bypassed:
++ * read() and readv() of fd 0 come here (until the guest closes fd 0); every
++ * other call on fd 0 (isatty, fstat, ioctl) still goes to Emscripten's FS.
++ *
++ * Protocol (src/vm/user.js is the embedder and relies on these offsets,
++ * checked below): the embedder writes bytes at data[head % WASM_STDIN_SIZE]
++ * and then advances head, or records an end of file by storing head in
++ * eof_at[eof_written % WASM_STDIN_EOFS] and then advancing eof_written; after
++ * either it increments seq and wakes seq's waiters. The reader advances tail
++ * and eof_read. The embedder must not write more than WASM_STDIN_SIZE - (head
++ * - tail) bytes, nor more than WASM_STDIN_EOFS unread ends of file. Counters
++ * wrap at 2^32.
++ */
++#define WASM_STDIN_SIZE 65536u
++#define WASM_STDIN_EOFS 16u
++
++struct wasm_host_stdin {
++    _Atomic uint32_t seq;          /*  0: bumped by the embedder after each change */
++    _Atomic uint32_t head;         /*  4: bytes written, ever */
++    _Atomic uint32_t tail;         /*  8: bytes read, ever */
++    _Atomic uint32_t eof_written;  /* 12: ends of file recorded, ever */
++    _Atomic uint32_t eof_read;     /* 16: ends of file the guest has read */
++    _Atomic uint32_t enabled;      /* 20: 1 while fd 0 is this ring */
++    _Atomic int32_t exit_signal;   /* 24: the host signal that ended the guest, or 0 */
++    uint32_t size;                 /* 28: WASM_STDIN_SIZE, for the embedder */
++    uint32_t eof_at[WASM_STDIN_EOFS]; /* 32: head at each end of file */
++    uint8_t data[WASM_STDIN_SIZE]; /* 96 */
++};
++QEMU_BUILD_BUG_ON(offsetof(struct wasm_host_stdin, exit_signal) != 24);
++QEMU_BUILD_BUG_ON(offsetof(struct wasm_host_stdin, eof_at) != 32);
++QEMU_BUILD_BUG_ON(offsetof(struct wasm_host_stdin, data) != 96);
++
++static struct wasm_host_stdin wasm_stdin = { .size = WASM_STDIN_SIZE };
++static QemuMutex wasm_stdin_lock;
++
++static void __attribute__((constructor)) wasm_stdin_init(void)
++{
++    qemu_mutex_init(&wasm_stdin_lock);
++}
++
++/*
++ * The ring's address, for the embedder (exported to JS as
++ * Module._wasm_host_stdin). Valid for the life of the module.
++ */
++EMSCRIPTEN_KEEPALIVE void *wasm_host_stdin(void)
++{
++    return &wasm_stdin;
++}
++
++/*
++ * Reads up to len (> 0) bytes of standard input into buf, waiting until there
++ * is at least one byte or an end of file. Like a terminal in canonical mode,
++ * a read returns at most one line, and an end of file is a read of 0 that
++ * input after it does not undo. Guest threads reading at once take turns.
++ */
++static long stdin_read(uint8_t *buf, size_t len)
++{
++    long got = -1;
++
++    qemu_mutex_lock(&wasm_stdin_lock);
++    while (got < 0) {
++        uint32_t seq = atomic_load(&wasm_stdin.seq);
++        uint32_t tail = atomic_load(&wasm_stdin.tail);
++        uint32_t limit = atomic_load(&wasm_stdin.head);
++        uint32_t er = atomic_load(&wasm_stdin.eof_read);
++
++        if (er != atomic_load(&wasm_stdin.eof_written)) {
++            uint32_t at = wasm_stdin.eof_at[er % WASM_STDIN_EOFS];
++            if (at == tail) {
++                atomic_store(&wasm_stdin.eof_read, er + 1);
++                got = 0;
++                break;
++            }
++            limit = at; /* the bytes before that end of file come first */
++        }
++        if (limit != tail) {
++            size_t n = 0;
++            while (n < len && tail + n != limit) {
++                uint8_t ch = wasm_stdin.data[(tail + n) % WASM_STDIN_SIZE];
++                buf[n++] = ch;
++                if (ch == '\n') {
++                    break;
++                }
++            }
++            atomic_store(&wasm_stdin.tail, tail + (uint32_t)n);
++            got = (long)n;
++            break;
++        }
++        emscripten_futex_wait(&wasm_stdin.seq, seq, INFINITY);
++    }
++    qemu_mutex_unlock(&wasm_stdin_lock);
++    return got;
++}
++
++/* readv() of fd 0: fills the first non-empty buffer only (a short read). */
++static long stdin_readv(const struct iovec *iov, int cnt)
++{
++    for (int i = 0; i < cnt; i++) {
++        if (iov[i].iov_len > 0) {
++            return stdin_read(iov[i].iov_base, iov[i].iov_len);
++        }
++    }
++    return 0;
++}
++
++static bool is_stdin(long fd)
++{
++    return fd == 0 && atomic_load(&wasm_stdin.enabled);
++}
++
++/*
++ * Ends the process for a guest killed by host signal sig: records sig for the
++ * embedder (wasm_host_stdin()->exit_signal), then exit(128 + sig), the status
++ * a shell reports. A Wasm process cannot die of a signal.
++ */
++void wasm_host_exit_signal(int sig)
++{
++    atomic_store(&wasm_stdin.exit_signal, sig);
++    exit(128 + sig);
++}
++
++/*
++ * Map a host syscall number (asm-generic numbering, see
++ * wasm-host-syscall.h) onto Emscripten's libc. Returns the result or a
++ * negative errno, like the raw kernel ABI. Anything not listed is -ENOSYS,
++ * which linux-user reports to the guest unchanged: the honest answer for a
++ * host with no processes, signals or kernel objects.
++ */
++#define R(expr) ({ long r_ = (long)(expr); r_ < 0 ? -(long)errno : r_; })
++
++/* Must match host_sigcontext in linux-user/include/host/wasm32/host-signal.h. */
++typedef struct { sigset_t uc_sigmask; } wasm_sigcontext;
++
++/*
++ * Deliver a signal to the calling thread the way a kernel would: call the
++ * SA_SIGINFO handler (QEMU's host_signal_handler) with a real siginfo and
++ * a context whose mask the handler may change, then apply that mask as a
++ * sigreturn would. Emscripten's raise() passes a NULL context, which QEMU
++ * writes through.
++ */
++static long self_signal(int sig)
++{
++    struct sigaction sa;
++    if (sigaction(sig, NULL, &sa)) {
++        return -(long)errno;
++    }
++    if ((sa.sa_flags & SA_SIGINFO) && sa.sa_sigaction) {
++        siginfo_t info;
++        wasm_sigcontext uc;
++        memset(&info, 0, sizeof(info));
++        info.si_signo = sig;
++        info.si_code = SI_TKILL;
++        info.si_pid = getpid();
++        pthread_sigmask(SIG_BLOCK, NULL, &uc.uc_sigmask);
++        sa.sa_sigaction(sig, &info, &uc);
++        pthread_sigmask(SIG_SETMASK, &uc.uc_sigmask, NULL);
++        return 0;
++    }
++    return R(raise(sig));
++}
++
++long wasm_host_syscall6(long n, long a, long b, long c, long d, long e, long f)
++{
++    (void)f;
++    switch (n) {
++    case __NR_read:     return is_stdin(a) ? (c > 0 ? stdin_read((uint8_t *)b, c) : 0)
++                                           : R(read(a, (void *)b, c));
++    case __NR_write:    return R(write(a, (const void *)b, c));
++    case __NR_readv:    return is_stdin(a) ? stdin_readv((const struct iovec *)b, c)
++                                           : R(readv(a, (const struct iovec *)b, c));
++    case __NR_writev:   return R(writev(a, (const struct iovec *)b, c));
++    case __NR_preadv:   return R(preadv(a, (const struct iovec *)b, c,
++                                        (off_t)(((uint64_t)e << 32) | (uint32_t)d)));
++    case __NR_pwritev:  return R(pwritev(a, (const struct iovec *)b, c,
++                                         (off_t)(((uint64_t)e << 32) | (uint32_t)d)));
++    case __NR_openat:   return R(openat(a, (const char *)b, c, (mode_t)d));
++    case __NR_close:
++        if (is_stdin(a)) {
++            atomic_store(&wasm_stdin.enabled, 0); /* a later fd 0 is a file */
++        }
++        return R(close(a));
++    case __NR_ioctl:    return R(ioctl(a, b, c));
++    case __NR_fcntl64:  return R(fcntl(a, b, c));
++    case __NR_getcwd:   return getcwd((char *)a, b) ? (long)strlen((char *)a) + 1
++                                                    : -(long)errno;
++    case __NR_getdents64: return R(getdents(a, (struct dirent *)b, c));
++    case __NR_utimensat: return R(utimensat(a, (const char *)b,
++                                            (const struct timespec *)c, d));
++    case __NR_renameat2: return d ? -ENOSYS
++                                  : R(renameat(a, (const char *)b, c, (const char *)e));
++    case __NR_gettid:   return gettid();
++    /*
++     * Signals to this thread are raised in-process: Emscripten calls the
++     * handler QEMU installed (host_signal_handler) synchronously, which
++     * queues the guest signal. Other threads and processes: ENOSYS.
++     */
++    case __NR_tgkill:   return (a == getpid() && b == gettid()) ? self_signal(c) : -ENOSYS;
++    case __NR_tkill:    return a == gettid() ? self_signal(b) : -ENOSYS;
++    case __NR_kill:     return a == getpid() ? self_signal(b) : -ENOSYS;
++    /* exit(), not _exit(): the embedder hears of it through Module.onExit. */
++    case __NR_exit_group: exit(a);
++    case __NR_nanosleep: return R(nanosleep((const struct timespec *)a,
++                                            (struct timespec *)b));
++    case __NR_clock_nanosleep: {
++        int r = clock_nanosleep(a, b, (const struct timespec *)c,
++                                (struct timespec *)d);
++        return r ? -r : 0;
++    }
++    case __NR_getrandom: {
++        size_t done = 0;
++        while (done < (size_t)b) {
++            size_t chunk = MIN((size_t)b - done, 256);
++            if (getentropy((char *)a + done, chunk)) {
++                return -(long)errno;
++            }
++            done += chunk;
++        }
++        return done;
++    }
++    case __NR_futex:
++    case __NR_futex_time64: {
++        /*
++         * Guest futex words are host addresses (g2h), so Wasm atomics apply.
++         * Host struct timespec has a 64-bit time_t on Emscripten, so both
++         * numbers take the same argument. WAIT is relative, WAIT_BITSET
++         * absolute (CLOCK_MONOTONIC unless FUTEX_CLOCK_REALTIME); bitsets
++         * other than "all" are treated as "all", which only wakes more.
++         */
++        int op = b & FUTEX_CMD_MASK;
++        if (op == FUTEX_WAIT || op == FUTEX_WAIT_BITSET) {
++            const struct timespec *ts = (const struct timespec *)d;
++            double ms = INFINITY;
++            int r;
++            if (ts) {
++                ms = ts->tv_sec * 1e3 + ts->tv_nsec / 1e6;
++                if (op == FUTEX_WAIT_BITSET) {
++                    struct timespec now;
++                    clock_gettime(b & FUTEX_CLOCK_REALTIME ? CLOCK_REALTIME
++                                                           : CLOCK_MONOTONIC, &now);
++                    ms -= now.tv_sec * 1e3 + now.tv_nsec / 1e6;
++                    if (ms < 0) {
++                        ms = 0;
++                    }
++                }
++            }
++            r = emscripten_futex_wait((void *)a, c, ms);
++            return r == -EWOULDBLOCK ? -EAGAIN : r;
++        }
++        if (op == FUTEX_WAKE || op == FUTEX_WAKE_BITSET) {
++            return emscripten_futex_wake((void *)a, c);
++        }
++        return -ENOSYS;
++    }
++    default:
++        return -ENOSYS;
++    }
++}
++
++/*
++ * libc functions linux-user references that Emscripten does not provide.
++ * Each fails with ENOSYS, which linux-user passes to the guest. Their
++ * parameters are unused by design.
++ */
++#define NOSYS(ret, name, ...) \
++    ret name(__VA_ARGS__) { errno = ENOSYS; return (ret)-1; }
++#include <sys/inotify.h>
++#include <sys/ipc.h>
++#include <sys/msg.h>
++#include <sys/sem.h>
++#include <sys/shm.h>
++#include <mqueue.h>
++#include <sys/sysinfo.h>
++#include <sys/timex.h>
++#include <sys/signalfd.h>
++#include <sys/prctl.h>
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wunused-parameter"
++/* mount, personality, setfsuid, ...: Emscripten's headers do not declare them either. */
++#pragma GCC diagnostic ignored "-Wmissing-prototypes"
++NOSYS(int, adjtimex, struct timex *t)
++NOSYS(int, inotify_add_watch, int fd, const char *p, uint32_t m)
++NOSYS(int, inotify_init, void)
++NOSYS(int, inotify_init1, int fl)
++NOSYS(int, inotify_rm_watch, int fd, int wd)
++NOSYS(int, memfd_create, const char *n, unsigned fl)
++NOSYS(int, mount, const char *s, const char *t, const char *ty, unsigned long fl, const void *d)
++NOSYS(int, umount2, const char *t, int fl)
++NOSYS(int, mq_getattr, mqd_t q, struct mq_attr *a)
++NOSYS(mqd_t, mq_open, const char *n, int fl, ...)
++NOSYS(int, mq_setattr, mqd_t q, const struct mq_attr *a, struct mq_attr *o)
++NOSYS(int, mq_unlink, const char *n)
++NOSYS(int, msgctl, int q, int cmd, struct msqid_ds *b)
++NOSYS(int, msgget, key_t k, int fl)
++NOSYS(int, semctl, int s, int n, int cmd, ...)
++NOSYS(int, semget, key_t k, int n, int fl)
++NOSYS(void *, shmat, int id, const void *a, int fl)
++NOSYS(int, shmctl, int id, int cmd, struct shmid_ds *b)
++NOSYS(int, shmdt, const void *a)
++NOSYS(int, shmget, key_t k, size_t s, int fl)
++NOSYS(int, personality, unsigned long p)
++NOSYS(int, prctl, int o, ...)
++NOSYS(ssize_t, readahead, int fd, off_t o, size_t c)
++NOSYS(int, sched_rr_get_interval, pid_t p, struct timespec *t)
++NOSYS(int, setfsgid, gid_t g)
++NOSYS(int, setfsuid, uid_t u)
++NOSYS(int, sethostname, const char *n, size_t l)
++NOSYS(int, settimeofday, const struct timeval *t, const struct timezone *z)
++NOSYS(int, signalfd, int fd, const sigset_t *m, int fl)
++NOSYS(int, sigsuspend, const sigset_t *m)
++NOSYS(int, swapoff, const char *p)
++NOSYS(int, swapon, const char *p, int fl)
++NOSYS(int, sysinfo, struct sysinfo *i)
++NOSYS(int, timer_create, clockid_t c, struct sigevent *e, timer_t *t)
++NOSYS(int, timer_delete, timer_t t)
++NOSYS(int, timer_getoverrun, timer_t t)
++NOSYS(int, timer_gettime, timer_t t, struct itimerspec *v)
++NOSYS(int, timer_settime, timer_t t, int fl, const struct itimerspec *v, struct itimerspec *o)
++NOSYS(int, vhangup, void)
++#pragma GCC diagnostic pop
++
++#undef mmap
++#undef mmap64
++#undef munmap
++#undef mprotect
++#undef madvise
++#undef mremap
++void *mmap(void *, size_t, int, int, int, off_t);
++int munmap(void *, size_t);
++
++static uintptr_t guest_lo, guest_hi;
++
++/*
++ * Allocates the guest address space: size bytes aligned to align, zeroed,
++ * recorded for wasm_mmap(). Returns NULL if linear memory cannot grow that far.
++ * It comes from sbrk(), not malloc() and memset(): memory past the break has
++ * never been used (sbrk only moves forward, and Wasm memory starts and grows
++ * zeroed), so it is zero already, and the browser commits only the pages the
++ * guest touches instead of all of them up front.
++ */
++void *wasm_guest_region_alloc(size_t size, size_t align)
++{
++    uintptr_t raw = (uintptr_t)sbrk(size + align);
++    uintptr_t base;
++
++    if (raw == (uintptr_t)-1) {
++        return NULL;
++    }
++    base = ROUND_UP(raw, align);
++    guest_lo = base;
++    guest_hi = base + size;
++    return (void *)base;
++}
++
++static bool in_guest(void *addr, size_t len)
++{
++    uintptr_t a = (uintptr_t)addr;
++    return guest_lo && a >= guest_lo && a <= guest_hi && len <= guest_hi - a;
++}
++
++void *wasm_mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
++{
++    if (addr && in_guest(addr, len)) {
++        /* Private copy semantics only: MAP_SHARED writes never reach fd. */
++        memset(addr, 0, len);
++        if (!(flags & MAP_ANONYMOUS) && fd >= 0) {
++            size_t done = 0;
++            while (done < len) {
++                ssize_t r = pread(fd, (char *)addr + done, len - done, off + done);
++                if (r < 0) {
++                    return MAP_FAILED;
++                }
++                if (r == 0) {
++                    break;
++                }
++                done += r;
++            }
++        }
++        return addr;
++    }
++    if (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) {
++        errno = ENOMEM;
++        return MAP_FAILED;
++    }
++    return mmap(NULL, len, prot, flags, fd, off);
++}
++
++int wasm_munmap(void *addr, size_t len)
++{
++    if (in_guest(addr, len)) {
++        return 0;
++    }
++    return munmap(addr, len);
++}
++
++/* Wasm memory has no protection: guest page permissions are QEMU's page flags alone. */
++int wasm_mprotect(void *addr, size_t len, int prot)
++{
++    (void)addr;
++    (void)len;
++    (void)prot;
++    return 0;
++}
++
++int wasm_madvise(void *addr, size_t len, int advice)
++{
++    if (advice == MADV_DONTNEED && in_guest(addr, len)) {
++        memset(addr, 0, len);
++    }
++    return 0;
++}
++
++void *wasm_mremap(void *old, size_t old_len, size_t new_len, int flags, ...)
++{
++    (void)old;
++    (void)old_len;
++    (void)new_len;
++    (void)flags;
++    errno = ENOSYS;
++    return MAP_FAILED;
++}
+--- /dev/null
++++ b/linux-user/include/host/wasm32/host-signal.h
+@@ -0,0 +1,22 @@
++/*
++ * host-signal.h for an Emscripten (wasm32) host.
++ *
++ * A Wasm host never delivers a synchronous SIGSEGV/SIGBUS for a guest
++ * memory access, and has no machine context to rewrite, so these accessors
++ * exist only to satisfy linux-user/signal.c. They must never be reached by
++ * a real fault: host_signal_handler() is not installed for SEGV/BUS on
++ * this host.
++ */
++#ifndef WASM32_HOST_SIGNAL_H
++#define WASM32_HOST_SIGNAL_H
++
++#include <signal.h>
++
++typedef struct { sigset_t uc_sigmask; } host_sigcontext;
++
++static inline uintptr_t host_signal_pc(host_sigcontext *uc) { return 0; }
++static inline void host_signal_set_pc(host_sigcontext *uc, uintptr_t pc) { }
++static inline void *host_signal_mask(host_sigcontext *uc) { return &uc->uc_sigmask; }
++static inline bool host_signal_write(siginfo_t *info, host_sigcontext *uc) { return false; }
++
++#endif

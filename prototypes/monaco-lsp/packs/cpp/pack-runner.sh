@@ -15,7 +15,6 @@ WASI_RT_SHA256=1aaf34d5f30227206d9d6dd3aa0d8af4019a201a1d73fc64a44fe0a6058c54c3
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="$(cd "$HERE/../.." && pwd)/app/static/packs/cpp"
 CACHE="${PACK_CACHE:-$HOME/.cache/yukibana-packs}/cpp"
-B="$CACHE/build-wasm-cc"
 mkdir -p "$CACHE/wasi" "$OUT"
 cd "$CACHE/wasi"
 
@@ -117,20 +116,47 @@ cp "$EH/LICENSE-googletest.txt" "$OUT/LICENSE-googletest.txt"
 cp "$TESTFW/LICENSE-catch2.txt" "$OUT/LICENSE-catch2.txt"
 cp "$TESTFW/LICENSE-doctest.txt" "$OUT/LICENSE-doctest.txt"
 
-step "runner"
-if [ -f "$B/bin/llvm.wasm" ]; then
-  cp "$B/bin/llvm.wasm" "$OUT/cc.wasm"
-  cp "$B/bin/llvm.js" "$OUT/cc.js"
-fi
+step "compilers (from the stamped artifacts)"
+# Only from $CACHE/artifacts, which build-runner.sh and build-cross.sh stamp
+# (README, Build): never from a build tree, which may have been reconfigured
+# for the other compiler since.
+# A file that did not change keeps its time, so its .br/.gz are not redone.
+ART="$CACHE/artifacts"
+put() { cmp -s "$1" "$2" || cp -p "$1" "$2"; }
+for c in cc cc-cross; do
+  if [ -f "$ART/$c/llvm.wasm" ]; then
+    put "$ART/$c/llvm.wasm" "$OUT/$c.wasm"
+    put "$ART/$c/llvm.js" "$OUT/$c.js"
+  fi
+done
+
+step "runner.js, explorer.js"
 (cd "$HERE" && [ -d node_modules/esbuild ] || npm ci --no-audit --no-fund >/dev/null)
-"$HERE/node_modules/.bin/esbuild" "$HERE/src/runner.js" --bundle --outfile="$OUT/runner.js" --format=esm --minify \
-  --target=es2022 --external:./cc.js --define:CC_WASM_SIZE="$(stat -c %s "$OUT/cc.wasm" 2>/dev/null || echo 0)" \
-  --define:WASI_SYSROOT_SIZE="$(stat -c %s "$OUT/wasi-sysroot.tar.gz")" \
-  --define:GTEST_SIZE="$(stat -c %s "$OUT/gtest.tar")" \
-  --define:CATCH2_SIZE="$(stat -c %s "$OUT/catch2.tar")" \
-  --define:DOCTEST_SIZE="$(stat -c %s "$OUT/doctest.tar")" \
-  --define:SYSROOT_SIZE="$(stat -c %s "$OUT/sysroot.tar.gz")" --log-level=warning
-files=("$OUT/runner.js" "$OUT/gtest.tar" "$OUT/catch2.tar" "$OUT/doctest.tar")
+size() { stat -c %s "$1" 2>/dev/null || echo 0; }
+# The decoded sizes of the per-target files, for progress (a host that sends
+# .br gives a compressed Content-Length).
+target_sizes="{$(cd "$OUT" && for f in targets/*/*.tar; do [ -f "$f" ] && printf '"%s":%s,' "$f" "$(size "$f")"; done | sed 's/,$//')}"
+defines=(--define:CC_WASM_SIZE="$(size "$OUT/cc.wasm")" --define:CC_CROSS_WASM_SIZE="$(size "$OUT/cc-cross.wasm")"
+  --define:WASI_SYSROOT_SIZE="$(size "$OUT/wasi-sysroot.tar.gz")" --define:SYSROOT_SIZE="$(size "$OUT/sysroot.tar.gz")"
+  --define:GTEST_SIZE="$(size "$OUT/gtest.tar")" --define:CATCH2_SIZE="$(size "$OUT/catch2.tar")"
+  --define:DOCTEST_SIZE="$(size "$OUT/doctest.tar")" --define:DEMANGLE_WASM_SIZE="$(size "$OUT/demangle.wasm")"
+  --define:TARGET_SIZES="$target_sizes")
+# runner-linux.js (linking and running for a Linux target) and vm.js (the
+# emulator's bundle, build-vm.sh) are imported by runner.js only for a Linux
+# target, so they stay separate files; the compilers' and the demangler's
+# glue are imported by URL at run time.
+for worker in runner runner-linux explorer; do
+  "$HERE/node_modules/.bin/esbuild" "$HERE/src/$worker.js" --bundle --outfile="$OUT/$worker.js" --format=esm --minify \
+    --target=es2022 --external:./runner-linux.js --external:./vm.js --external:./cc.js --external:./cc-cross.js \
+    "${defines[@]}" --log-level=warning
+done
+files=("$OUT/runner.js" "$OUT/runner-linux.js" "$OUT/explorer.js" "$OUT/gtest.tar" "$OUT/catch2.tar" "$OUT/doctest.tar")
 [ -f "$OUT/cc.wasm" ] && files+=("$OUT/cc.js" "$OUT/cc.wasm")
-node "$HERE/compress.mjs" "${files[@]}"
-ls -la "$OUT"/runner.js "$OUT"/cc.* "$OUT"/wasi-sysroot.tar.gz "$OUT"/{gtest,catch2,doctest}.tar* 2>/dev/null || true
+[ -f "$OUT/cc-cross.wasm" ] && files+=("$OUT/cc-cross.js" "$OUT/cc-cross.wasm")
+# Brotli at quality 11 takes minutes on a compiler: only when the file changed.
+compress=()
+for f in "${files[@]}"; do
+  if [ ! -f "$f.br" ] || [ ! -f "$f.gz" ] || [ "$f" -nt "$f.br" ]; then compress+=("$f"); fi
+done
+[ ${#compress[@]} -eq 0 ] || node "$HERE/compress.mjs" "${compress[@]}"
+ls -la "$OUT"/runner.js "$OUT"/runner-linux.js "$OUT"/explorer.js "$OUT"/cc.* "$OUT"/cc-cross.* "$OUT"/wasi-sysroot.tar.gz "$OUT"/{gtest,catch2,doctest}.tar* 2>/dev/null || true

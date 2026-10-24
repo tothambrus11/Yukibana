@@ -1,10 +1,19 @@
 // The C/C++ pack's runner (../../CONTRACT.md, "Running a program"): compiles
-// every .c/.cpp of the project with clang 21, links them with wasm-ld into a
-// wasm32-wasip1 program, and runs that program in this worker on the small
-// WASI host in wasi.js. Everything happens here, in the browser:
+// every .c/.cpp of the project with clang 21 for the project's target
+// (src/targets.js: the --target line of compile_flags.txt, README "Targets").
+//
+// On the default target, wasm32-wasip1, it links them with wasm-ld into a
+// WebAssembly program and runs that program in this worker on the small
+// WASI host in wasi.js. On a Linux target (x86_64, aarch64, riscv64) it
+// compiles with cc-cross, and runner-linux.js, imported only then, links a
+// static ELF with ld.lld and hands it to vm.js (the emulator's bundle,
+// QEMU-Wasm; P/vm/README.md). Everything happens here, in the browser:
 //
 //   cc.wasm              clang + wasm-ld, one Emscripten binary (LLVM's
 //                        multi-call driver), built by build-runner.sh
+//   cc-cross.wasm        clang + ld.lld for the Linux targets (build-cross.sh)
+//   targets/<arch>/      a Linux target's musl bits/ headers and libraries
+//                        (build-targets.sh)
 //   sysroot.tar.gz       the language server's headers; the runner takes
 //                        libc++'s headers and clang's own from it (same URL,
 //                        so the browser downloads it once for both workers)
@@ -18,15 +27,20 @@
 //   doctest.tar          the same for doctest (<doctest/...>): its
 //                        implementation and main, prebuilt
 //
-// Each tool call gets a fresh instance of cc.wasm (compiled once): clang and
-// lld keep global state, and a browser cannot fork. Files go from one
-// instance to the next as bytes.
+// Each tool call gets a fresh instance of the compiler (compiled once; see
+// toolchain.js): clang and lld keep global state, and a browser cannot fork.
+// Files go from one instance to the next as bytes.
 
 import { createWasi, ProcExit } from './wasi.js';
+import { createToolchain, compileArgs, withSourceNames } from './toolchain.js';
+import { targetOf, unsupportedMessage, DEFAULT_TARGET } from './targets.js';
 
-/* global CC_WASM_SIZE, WASI_SYSROOT_SIZE, SYSROOT_SIZE, GTEST_SIZE, CATCH2_SIZE, DOCTEST_SIZE */
+// A Linux target's files (targets/<arch>/*.tar) report a total of 0
+// (unknown): their sizes would cost the default target's runner.js bytes.
+/* global CC_WASM_SIZE, CC_CROSS_WASM_SIZE, WASI_SYSROOT_SIZE, SYSROOT_SIZE, GTEST_SIZE, CATCH2_SIZE, DOCTEST_SIZE */
 const SIZES = {
     'cc.wasm': typeof CC_WASM_SIZE === 'number' ? CC_WASM_SIZE : 0,
+    'cc-cross.wasm': typeof CC_CROSS_WASM_SIZE === 'number' ? CC_CROSS_WASM_SIZE : 0,
     'wasi-sysroot.tar.gz': typeof WASI_SYSROOT_SIZE === 'number' ? WASI_SYSROOT_SIZE : 0,
     'sysroot.tar.gz': typeof SYSROOT_SIZE === 'number' ? SYSROOT_SIZE : 0,
     'gtest.tar': typeof GTEST_SIZE === 'number' ? GTEST_SIZE : 0,
@@ -34,15 +48,10 @@ const SIZES = {
     'doctest.tar': typeof DOCTEST_SIZE === 'number' ? DOCTEST_SIZE : 0,
 };
 
-const TARGET = ['--target=wasm32-wasip1', '--sysroot=/wasi', '-resource-dir=/usr/lib/clang/21'];
-// C++ exceptions, as WebAssembly exception handling in its standard form
-// (exnref, try_table), the form libc++, libc++abi, libunwind and GoogleTest
-// in the sysroot are built with (build-cxx-runtime.sh). Without -mllvm the
-// compiler would emit the legacy instructions.
-const EXCEPTIONS = ['-fwasm-exceptions', '-mllvm', '-wasm-use-legacy-eh=false'];
 const CXX = /\.(cpp|cc|cxx|c\+\+|C)$/;
 const C = /\.c$/;
 const OBJ = '.yukibana/obj/';
+const WASM = DEFAULT_TARGET;
 const LIB = '/wasi/lib/wasm32-wasip1';
 /** Where a project keeps its tests (type 'test'); left out of a plain run. */
 const TESTS = /^tests\//;
@@ -116,180 +125,12 @@ class UserError extends Error {}
 const post = (msg) => self.postMessage(msg);
 const phase = (text) => post({ type: 'phase', text });
 const stderr = (text) => post({ type: 'stderr', text });
-const decoder = new TextDecoder();
+/** When the current request arrived, for the 'mark' timings (runner-linux.js). */
+let started = 0;
 
-// ---- downloads
+// ---- the toolchain (toolchain.js)
 
-async function download(name) {
-    const response = await fetch(new URL(name, import.meta.url));
-    if (!response.ok || !response.body) throw new Error(`${name}: HTTP ${response.status}`);
-    const total = SIZES[name] ?? 0;
-    let loaded = 0;
-    post({ type: 'loading', label: name, loaded, total });
-    // Count bytes on a copy; the original response goes to compileStreaming
-    // untouched, so the browser can reuse its cached compiled code next run.
-    const counted = response.clone();
-    const reader = counted.body.getReader();
-    (async () => {
-        for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            loaded += value.length;
-            post({ type: 'loading', label: name, loaded, total: Math.max(total, loaded) });
-        }
-    })().catch(() => {});
-    return response;
-}
-
-/** Entries of a ustar archive, gzipped or already decoded by the host. */
-async function untar(response) {
-    let tar = new Uint8Array(await response.arrayBuffer());
-    if (tar[0] === 0x1f && tar[1] === 0x8b)
-        tar = new Uint8Array(await new Response(new Response(tar).body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
-    const field = (at, length) => {
-        const end = tar.indexOf(0, at);
-        return decoder.decode(tar.subarray(at, end < 0 || end > at + length ? at + length : end));
-    };
-    const files = [];
-    for (let at = 0; at + 512 <= tar.length && tar[at] !== 0; ) {
-        const name = field(at, 100);
-        const prefix = field(at + 345, 155);
-        const size = parseInt(field(at + 124, 12).trim() || '0', 8);
-        const type = String.fromCharCode(tar[at + 156] || 48);
-        at += 512;
-        if (type === '0') files.push(['/' + (prefix ? `${prefix}/${name}` : name), tar.subarray(at, at + size)]);
-        at += Math.ceil(size / 512) * 512;
-    }
-    return files;
-}
-
-// ---- the toolchain
-
-let toolchain = null;
-
-/** Starts all downloads at once; resolves when clang can run. */
-function load() {
-    toolchain ??= (async () => {
-        const [{ default: createCC }, wasm, wasiTar, serverTar] = await Promise.all([
-            import('./cc.js'),
-            download('cc.wasm'),
-            download('wasi-sysroot.tar.gz'),
-            download('sysroot.tar.gz'),
-        ]);
-        const [module, wasi, server] = await Promise.all([
-            WebAssembly.compileStreaming(wasm),
-            untar(wasiTar),
-            untar(serverTar),
-        ]);
-        // From the server's sysroot: libc++'s headers, laid under the WASI
-        // sysroot where clang's WASI driver looks for them, and clang's own
-        // headers. Not its musl headers: the target is WASI, not Linux.
-        // The test frameworks' headers too (a few hundred small files).
-        const files = [];
-        for (const [path, bytes] of server) {
-            if (path.startsWith('/usr/include/c++/v1/'))
-                files.push(['/wasi/include/wasm32-wasip1/c++/v1/' + path.slice('/usr/include/c++/v1/'.length), bytes]);
-            else if (/^\/usr\/include\/(gtest|catch2|doctest)\//.test(path)) files.push(['/wasi/include/' + path.slice('/usr/include/'.length), bytes]);
-            else if (path.startsWith('/usr/lib/clang/')) files.push([path, bytes]);
-        }
-        files.push(...wasi); // after: its __config_site replaces the musl one
-        return { createCC, module, files };
-    })();
-    return toolchain;
-}
-
-const frameworks = {};
-
-/** Adds a test framework's libraries to the toolchain's files (once each). */
-function loadFramework(id) {
-    frameworks[id] ??= (async () => {
-        const [{ files }, tar] = await Promise.all([load(), download(FRAMEWORKS[id].archive)]);
-        files.push(...(await untar(tar)));
-    })();
-    return frameworks[id];
-}
-
-/**
- * Runs one tool (argv[0] picks it: "clang" or "wasm-ld") in a fresh instance
- * with the sysroot and the given files under /workspace. Resolves to the
- * exit code and the files the tool wrote that `outputs` names.
- */
-async function tool(argv0, args, inputs, outputs, rewrite = (text) => text) {
-    const { createCC, module, files } = await load();
-    let code = null;
-    const lines = [];
-    // Emscripten waits for done() and has no way to hear that instantiation
-    // failed (say, the 64 MB initial memory was refused), so createCC alone
-    // would never settle and the run would never post 'exit'. The failure
-    // rejects this one instead, and run()'s caller reports it.
-    let failed;
-    const failure = new Promise((_, reject) => (failed = reject));
-    const cc = await Promise.race([
-        createCC({
-            thisProgram: `/usr/bin/${argv0}`,
-            instantiateWasm(imports, done) {
-                WebAssembly.instantiate(module, imports).then(
-                    (instance) => done(instance, module),
-                    (error) => failed(new Error(`${argv0} could not start: ${error?.message ?? error}`))
-                );
-                return {};
-            },
-            print: (line) => lines.push(line),
-            printErr: (line) => lines.push(line),
-            onExit: (status) => (code = status),
-            onAbort: (reason) => lines.push(`${argv0} aborted: ${reason}`),
-        }),
-        failure,
-    ]);
-    const { FS } = cc;
-    const dirs = new Set();
-    const put = (path, bytes) => {
-        const dir = path.slice(0, path.lastIndexOf('/'));
-        if (!dirs.has(dir)) {
-            FS.mkdirTree(dir);
-            dirs.add(dir);
-        }
-        FS.writeFile(path, bytes, { canOwn: true });
-    };
-    for (const [path, bytes] of files) put(path, bytes);
-    for (const [path, content] of Object.entries(inputs)) put(`/workspace/${path}`, content);
-    // Clang's WASI driver adds the target's libc++ directory only when this
-    // generic one exists (wasi-sdk ships it empty too).
-    FS.mkdirTree('/wasi/include/c++/v1');
-    for (const path of outputs) FS.mkdirTree(`/workspace/${path}`.replace(/\/[^/]*$/, ''));
-    FS.chdir('/workspace');
-    try {
-        const r = cc.callMain(args);
-        code ??= r;
-    } catch (error) {
-        if (error?.name === 'ExitStatus') code = error.status;
-        else {
-            lines.push(`${argv0} crashed: ${error?.message ?? error}`);
-            code = 70;
-        }
-    }
-    const out = {};
-    for (const path of outputs) {
-        try {
-            out[path] = FS.readFile(`/workspace/${path}`);
-        } catch {
-            // not written: the tool failed and said why
-        }
-    }
-    if (lines.length) stderr(rewrite(lines.join('\n') + '\n'));
-    return { code: code ?? 0, out };
-}
-
-/** compile_flags.txt, one flag per line, as clangd reads it. A -std= that
- * names the other language is left out, so one file serves C and C++. */
-function flagsFor(files, cxx) {
-    const lines = (files['compile_flags.txt'] ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    return lines.filter((flag) => {
-        const std = /^-std=(.*)$/.exec(flag);
-        if (!std) return true;
-        return /\+\+/.test(std[1]) === cxx;
-    });
-}
+const toolchain = createToolchain({ base: new URL('./', import.meta.url), post, sizes: SIZES });
 
 // ---- running the program, or its tests
 
@@ -298,7 +139,12 @@ function flagsFor(files, cxx) {
  * type 'test': the project's sources without the program's main (the entry
  * file, and any other file that defines main) plus tests/**, linked with
  * the test framework they include (GoogleTest, doctest or Catch2) and,
- * unless a test file has its own main, that framework's main.
+ * unless a test file has its own main, that framework's main. On the
+ * WebAssembly target only: the frameworks' libraries are built for wasm32.
+ *
+ * The target is the project's (compile_flags.txt, src/targets.js); a target
+ * flag that names no supported target is refused before anything is
+ * downloaded. Resolves to the exit status.
  */
 async function run(request) {
     try {
@@ -310,11 +156,17 @@ async function run(request) {
     }
 }
 
-async function build({ type, files, entry, stdin }) {
+async function build({ type, files, entry, stdin, options }) {
+    const which = targetOf(files);
+    if (which.kind === 'unsupported') throw new UserError(unsupportedMessage(which.triple));
+    const target = which.target;
+    const linux = target.runtime === 'linux';
+    const testing = type === 'test';
+    if (linux && testing)
+        throw new UserError('Tests run on the WebAssembly target only, for now: the test frameworks are built for wasm32 only.\n');
     const all = Object.keys(files)
         .filter((p) => CXX.test(p) || C.test(p))
         .sort();
-    const testing = type === 'test';
     let sources;
     if (testing) {
         const tests = all.filter((p) => TESTS.test(p));
@@ -333,44 +185,45 @@ async function build({ type, files, entry, stdin }) {
     // What the compiled sources include decides the framework, and so do
     // tests/' headers, which only the sources that include them compile.
     const scanned = [...sources, ...(testing ? Object.keys(files).filter((p) => TESTS.test(p) && !sources.includes(p)) : [])];
-    const framework = frameworkOf(files, scanned);
+    // A Linux target links no framework: their libraries are wasm32 only.
+    const framework = linux ? null : frameworkOf(files, scanned);
     const ownMain = sources.some((p) => definesMain(files[p]));
     if (testing && !framework && !ownMain)
         throw new UserError('No test framework: the files in tests/ include none of <gtest/gtest.h>, <doctest/doctest.h> or <catch2/...>, and none defines main.\n');
     const fw = framework ? FRAMEWORKS[framework] : null;
     const cxxProgram = sources.some((p) => CXX.test(p));
     phase('Loading the compiler');
-    await (framework ? Promise.all([load(), loadFramework(framework)]) : load());
+    // Every download at once: a Linux target's libraries too, for the link.
+    const archives = framework ? [FRAMEWORKS[framework].archive] : [];
+    await Promise.all([toolchain.load(target, { link: linux }), ...archives.map(toolchain.archive)]);
 
     const objects = {};
     for (const [i, source] of sources.entries()) {
-        phase(`Compiling ${source} (${i + 1}/${sources.length})`);
-        const cxx = CXX.test(source);
+        phase(`Compiling ${source} (${i + 1}/${sources.length})${linux ? ` for ${target.triple}` : ''}`);
         // Named after its source, so the linker's "defined in" names the
-        // student's file (the prefix is taken out of its messages below).
+        // student's file (the prefix is taken out of its messages).
         const object = `${OBJ}${source}.o`;
-        const flags = flagsFor(files, cxx);
-        const optimise = flags.some((f) => /^-O/.test(f)) ? [] : ['-O2'];
-        // A project's -fno-exceptions in compile_flags.txt comes later and wins.
-        const exceptions = cxx ? EXCEPTIONS : [];
-        // libc++'s "fast" hardening: vector/string/span/array operator[],
-        // front(), back() and the like check their bounds and stop the
-        // program (a trap, "unreachable") instead of corrupting memory
-        // silently, the most common student bug. libc++'s message would need
-        // its experimental assertion semantics, so the crash hint names the
-        // likely cause instead. Plain arrays and pointers stay unchecked.
-        // A project that sets its own mode in compile_flags.txt keeps it.
-        const hardening = cxx && !flags.some((f) => f.includes('_LIBCPP_HARDENING_MODE'))
-            ? ['-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST']
-            : [];
-        const { code, out } = await tool(
+        // The target's flags, -O2 unless the project gives a -O, exceptions
+        // and libc++'s fast hardening for C++, then compile_flags.txt
+        // (toolchain.js compileArgs, which the explorer's views use too).
+        // On WebAssembly the hardening's trap reads "unreachable", so the
+        // crash hint below names the likely cause.
+        const { code, out } = await toolchain.tool(
+            target,
             'clang',
-            [...TARGET, ...optimise, ...exceptions, ...hardening, ...flags, '-fno-color-diagnostics', '-c', source, '-o', object],
+            [...compileArgs(target, files, source), '-fno-color-diagnostics', '-c', source, '-o', object],
             files,
-            [object]
+            [object],
+            { archives }
         );
         if (code !== 0 || !out[object]) return code || 1;
         objects[object] = out[object];
+    }
+    if (linux) {
+        // Linking and running for Linux are in runner-linux.js, fetched only
+        // for a Linux target, so the default target's runner stays small.
+        const { runOnLinux } = await import('./runner-linux.js');
+        return runOnLinux({ toolchain, target, objects, cxx: cxxProgram, stdin, options, post, started });
     }
 
     phase('Linking');
@@ -380,7 +233,8 @@ async function build({ type, files, entry, stdin }) {
     // pull an archive member: -u does. doctest's is also its implementation,
     // which a project that implements doctest itself already has.
     const frameworkMain = fw && !ownMain && !(framework === 'doctest' && sources.some((p) => implementsDoctest(files[p])));
-    const { code, out } = await tool(
+    const { code, out } = await toolchain.tool(
+        WASM,
         'wasm-ld',
         [
             '-m', 'wasm32', '-L' + lib, lib + '/crt1-command.o',
@@ -410,7 +264,7 @@ async function build({ type, files, entry, stdin }) {
         ],
         objects,
         ['.yukibana/program.wasm'],
-        (text) => text.replace(/\.yukibana\/obj\/(\S+?)\.o\b/g, '$1')
+        { rewrite: withSourceNames, archives }
     );
     if (code !== 0 || !out['.yukibana/program.wasm']) return code || 1;
 
@@ -486,6 +340,7 @@ async function build({ type, files, entry, stdin }) {
 
 self.onmessage = ({ data }) => {
     if (data?.type !== 'run' && data?.type !== 'test') return;
+    started = performance.now();
     run(data)
         .catch((error) => {
             stderr(`${error?.message ?? error}\n`);

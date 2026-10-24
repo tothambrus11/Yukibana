@@ -53,27 +53,52 @@ source emsdk/emsdk_env.sh >/dev/null 2>&1
 ldflags="-sMODULARIZE -sEXPORT_ES6 -sEXPORT_NAME=createCC -sENVIRONMENT=worker \
   -sINVOKE_RUN=0 -sEXIT_RUNTIME=1 -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,callMain \
   -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB -sMAXIMUM_MEMORY=4GB -sSTACK_SIZE=8MB"
+# Every setting that build-cross.sh changes is spelled out here too, at its
+# default (the lld source next to llvm/, no default unwind library), so a
+# tree that was configured for cc-cross is put back by this configure and
+# not left half one and half the other: CMake keeps a cached value that is
+# not passed again.
+cmake_args=(-G Ninja
+  -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_EXE_LINKER_FLAGS="$ldflags"
+  -DCMAKE_EXE_LINKER_FLAGS_MINSIZEREL="-Oz"
+  -DLLVM_ENABLE_PROJECTS="clang;lld" -DLLVM_TARGETS_TO_BUILD=WebAssembly
+  -DLLVM_EXTERNAL_LLD_SOURCE_DIR="$SRC/llvm/../lld"
+  -DLLVM_TOOL_LLVM_DRIVER_BUILD=ON -DLLVM_DISTRIBUTION_COMPONENTS="clang;lld"
+  -DLLVM_HOST_TRIPLE=wasm32-unknown-emscripten -DLLVM_DEFAULT_TARGET_TRIPLE=wasm32-wasip1
+  -DCLANG_DEFAULT_CXX_STDLIB=libc++ -DCLANG_DEFAULT_RTLIB=compiler-rt -DCLANG_DEFAULT_UNWINDLIB=
+  -DCLANG_DEFAULT_LINKER=lld
+  -DLLVM_NATIVE_TOOL_DIR="$CACHE/build-native/bin"
+  -DLLVM_TABLEGEN="$CACHE/build-native/bin/llvm-tblgen" -DCLANG_TABLEGEN="$CACHE/build-native/bin/clang-tblgen"
+  -DLLVM_ENABLE_THREADS=OFF -DLLVM_ENABLE_PIC=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF
+  -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_LIBEDIT=OFF -DLLVM_ENABLE_LIBPFM=OFF -DLLVM_ENABLE_CURL=OFF
+  -DLLVM_ENABLE_BACKTRACES=OFF -DLLVM_ENABLE_CRASH_OVERRIDES=OFF -DLLVM_ENABLE_UNWIND_TABLES=OFF
+  -DLLVM_ENABLE_PLUGINS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF
+  -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_UTILS=OFF -DLLVM_BUILD_UTILS=OFF -DLLVM_INCLUDE_DOCS=OFF
+  -DCLANG_ENABLE_STATIC_ANALYZER=OFF -DCLANG_ENABLE_OBJC_REWRITER=OFF -DCLANG_PLUGIN_SUPPORT=OFF
+  -DCLANG_INCLUDE_TESTS=OFF -DCLANG_INCLUDE_DOCS=OFF)
+# The artifact, cc.{js,wasm}, is kept in artifacts/cc with a STAMP: the
+# SHA-256 of the LLVM version, Emscripten's version, the cmake arguments and
+# the lld patch. pack-runner.sh copies cc.* from there and from nowhere else,
+# so a build tree reconfigured for something else (build-cross.sh can use
+# this one) never leaks into cc.wasm, and the LLVM step is skipped while the
+# stamp matches.
+ART="$CACHE/artifacts/cc"
+stamp=$({ echo "llvm $LLVM_VERSION"; emcc --version | head -1; printf '%s\n' "${cmake_args[@]}";
+          cat "$HERE/patches/wasm-ld-only.patch"; } | sha256sum | cut -d' ' -f1)
+if [ "${PRINT_STAMP:-}" = 1 ]; then echo "$stamp"; exit 0; fi
 B=build-wasm-cc
-if [ ! -f $B/build.ninja ]; then
-  $NICE emcmake cmake -S "$SRC/llvm" -B $B -G Ninja \
-    -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_EXE_LINKER_FLAGS="$ldflags" \
-    -DCMAKE_EXE_LINKER_FLAGS_MINSIZEREL="-Oz" \
-    -DLLVM_ENABLE_PROJECTS="clang;lld" -DLLVM_TARGETS_TO_BUILD=WebAssembly \
-    -DLLVM_TOOL_LLVM_DRIVER_BUILD=ON -DLLVM_DISTRIBUTION_COMPONENTS="clang;lld" \
-    -DLLVM_HOST_TRIPLE=wasm32-unknown-emscripten -DLLVM_DEFAULT_TARGET_TRIPLE=wasm32-wasip1 \
-    -DCLANG_DEFAULT_CXX_STDLIB=libc++ -DCLANG_DEFAULT_RTLIB=compiler-rt -DCLANG_DEFAULT_LINKER=lld \
-    -DLLVM_NATIVE_TOOL_DIR="$CACHE/build-native/bin" \
-    -DLLVM_TABLEGEN="$CACHE/build-native/bin/llvm-tblgen" -DCLANG_TABLEGEN="$CACHE/build-native/bin/clang-tblgen" \
-    -DLLVM_ENABLE_THREADS=OFF -DLLVM_ENABLE_PIC=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF \
-    -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_LIBEDIT=OFF -DLLVM_ENABLE_LIBPFM=OFF -DLLVM_ENABLE_CURL=OFF \
-    -DLLVM_ENABLE_BACKTRACES=OFF -DLLVM_ENABLE_CRASH_OVERRIDES=OFF -DLLVM_ENABLE_UNWIND_TABLES=OFF \
-    -DLLVM_ENABLE_PLUGINS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF \
-    -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_UTILS=OFF -DLLVM_BUILD_UTILS=OFF -DLLVM_INCLUDE_DOCS=OFF \
-    -DCLANG_ENABLE_STATIC_ANALYZER=OFF -DCLANG_ENABLE_OBJC_REWRITER=OFF -DCLANG_PLUGIN_SUPPORT=OFF \
-    -DCLANG_INCLUDE_TESTS=OFF -DCLANG_INCLUDE_DOCS=OFF \
-    >/dev/null
+if [ "$(cat "$ART/STAMP" 2>/dev/null)" = "$stamp" ] && [ -f "$ART/llvm.wasm" ] && [ -f "$ART/llvm.js" ]; then
+  echo "cc.wasm is up to date (artifacts/cc/STAMP $stamp)"
+else
+  # Configured on every build, so a changed flag reaches it instead of being
+  # shadowed by an old cache.
+  $NICE emcmake cmake -S "$SRC/llvm" -B $B "${cmake_args[@]}" >/dev/null
+  $NICE ninja -C $B -j"$JOBS" llvm-driver
+  mkdir -p "$ART"
+  rm -f "$ART/STAMP"
+  cp $B/bin/llvm.js $B/bin/llvm.wasm "$ART/"
+  echo "$stamp" > "$ART/STAMP"
 fi
-$NICE ninja -C $B -j"$JOBS" llvm-driver
 
 # The sysroot, runner.js and compressed siblings.
 "$HERE/pack-runner.sh"

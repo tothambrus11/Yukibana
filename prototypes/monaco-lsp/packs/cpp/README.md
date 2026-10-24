@@ -23,7 +23,7 @@ Tests).
 
 | file | what | raw | gzip | brotli |
 | --- | --- | --- | --- | --- |
-| `server.js` | the worker: transport, file mirroring, loader (esbuild-minified) | 5.4 KB | 2.7 KB | 2.4 KB |
+| `server.js` | the worker: transport, file mirroring, loader, a Linux target's `bits/` headers on demand (esbuild-bundled and minified, with `targets.js`) | 6.6 KB | 3.1 KB | 2.8 KB |
 | `clangd.js` | Emscripten glue, ES module | 76 KB | 20 KB | 18 KB |
 | `clangd.wasm` | clangd 21.1.8, `-Oz` | 24.0 MB | 8.5 MB | 6.0 MB |
 | `sysroot.tar.gz` | 2139 headers: musl, libc++, clang freestanding, GoogleTest, Catch2, doctest | 2.1 MB (gzip, unpacked in the worker) | | |
@@ -207,7 +207,8 @@ Does not, or differently from native clangd:
 * **No clang-tidy checks** (`CLANGD_TIDY_CHECKS=OFF`, to keep the binary
   small); clang's own warnings and errors are all there.
 * No x86 intrinsics headers (`immintrin.h` and friends, 8 MB), no POSIX
-  beyond musl's headers, no other targets (only `X86` is built). Nothing is
+  beyond musl's headers. Only `X86` is built, which parsing does not need:
+  a project on a Linux target (see Targets) parses for that target. Nothing is
   compiled or run by the language server; running is the runner's job (see Running).
 
 ## Build
@@ -398,7 +399,7 @@ against the directory of `compile_flags.txt`).
 
 | file | what | raw | gzip | brotli |
 | --- | --- | --- | --- | --- |
-| `runner.js` | the worker, with `wasi.js` (esbuild-minified) | 11.2 KB | 5.2 KB | 4.8 KB |
+| `runner.js` | the worker, with `wasi.js` and `toolchain.js` (esbuild-minified) | 14.0 KB | 6.3 KB | 5.8 KB |
 | `cc.js` | Emscripten glue, ES module | 74 KB | 20 KB | 18 KB |
 | `cc.wasm` | clang + wasm-ld 21.1.8, `-Oz` | 42.4 MB | 15.7 MB | 11.3 MB |
 | `wasi-sysroot.tar.gz` | 234 files: wasi-libc headers, libs (libc++ with exceptions), crt1, builtins | 0.99 MB (gzip, unpacked in the worker) | | |
@@ -634,6 +635,378 @@ Time on this machine (4 cores shared with another agent's clangd build,
 `-j3`, `nice`): **102 minutes** for the LLVM step, about 3 minutes for the
 rest (mostly brotli on `cc.wasm`). The build tree `build-wasm-cc` is
 449 MB.
+
+## Targets
+
+A project runs on **WebAssembly (WASI)** unless its `compile_flags.txt`
+names a Linux target with clang's own flag. The table is
+`src/targets.json`; `src/targets.js` reads the flag, for clangd
+(`server.js`), Run (`runner.js`) and the compiler output views
+(`explorer.js`) alike, so the three agree on the target.
+
+| target | `compile_flags.txt` | runs on | compiler |
+| --- | --- | --- | --- |
+| WebAssembly (WASI), the default | no target flag, or `--target=wasm32-wasip1` | the runner's WASI host | `cc.wasm` |
+| x86-64 Linux | `--target=x86_64-linux-musl` | QEMU-Wasm (`vm.js`) | `cc-cross.wasm` |
+| AArch64 Linux | `--target=aarch64-linux-musl` | QEMU-Wasm | `cc-cross.wasm` |
+| RISC-V 64 Linux | `--target=riscv64-linux-musl` | QEMU-Wasm | `cc-cross.wasm` |
+
+**The flag** is read as clang reads it: `--target=X`, or `-target` with X
+on the next line; the last one wins. `-target=X` and `--target X` are not
+target flags, because clang refuses both ("unknown argument"), so such a
+project fails to compile on the default target with clang's message. A
+triple that is not in the table (`armv7-linux-musleabihf`, a different
+case, a glibc triple) is refused before anything is downloaded:
+`Unsupported target "armv7-linux-musleabihf" in compile_flags.txt;
+supported: wasm32-wasip1, x86_64-linux-musl, aarch64-linux-musl,
+riscv64-linux-musl (or no --target).` The cases are
+`tests/fixtures/target-cases.json`, which the app's copy of the rule must
+pass too.
+
+**What a Linux target is.** A static musl 1.2.5 program, linked with LLVM's
+runtimes (libc++, libc++abi, libunwind, compiler-rt) by ld.lld, exactly as
+`clang --target=<triple> -static` links on a Linux machine with those
+runtimes installed. Nothing in the triple, the include paths or the link
+line is ours: clang's Linux driver picks them.
+
+* **One compiler for the three, `cc-cross.wasm`** (`build-cross.sh`):
+  clang 21.1.8 and ld.lld from the same LLVM tarball and the same cmake
+  arguments as `cc.wasm`, except `LLVM_TARGETS_TO_BUILD=X86;AArch64;RISCV`,
+  `LLVM_DEFAULT_TARGET_TRIPLE=x86_64-linux-musl` and the LLVM runtimes as
+  clang's defaults (`CLANG_DEFAULT_CXX_STDLIB=libc++`, `RTLIB=compiler-rt`,
+  `UNWINDLIB=libunwind`, `LINKER=lld`, the configuration Alpine's clang
+  has). `cc.wasm` is not touched: a project on the default target
+  downloads exactly what it did before (`test-run.mjs` checks the URL set).
+  One compiler for the three targets rather than three compilers is the
+  bundle-size choice: it is 4.4 MB (brotli) more than `cc.wasm`, where a
+  compiler per target would cost about 12 MB each, and a student switching
+  between Linux targets downloads only the new target's files.
+* **Patch `patches/elf-ld-only.patch`**: lld's tool links only its ELF
+  flavour (`ld.lld`), as `wasm-ld-only.patch` does for `cc.wasm`. The
+  patched copy of `lld/` is `$CACHE/lld-elf-21.1.8`; `cc`'s copy is never
+  touched.
+* **Headers.** `sysroot.tar.gz`, the language server's archive, already has
+  musl's headers for x86-64, libc++'s and clang's. Each target adds
+  `targets/<arch>/include.tar`, the arch's musl `bits/` headers in
+  `/usr/include/<multiarch>` (`x86_64-linux-gnu`, `aarch64-linux-gnu`,
+  `riscv64-linux-gnu`: clang's Linux driver uses the Debian multiarch names
+  for musl triples too), which clang searches before `/usr/include`
+  (checked with `-v` for each target in `test-targets.mjs`). The other
+  musl headers are the same for the three arches (`build-targets.sh`
+  checks it). About 10 KB each with brotli. clangd (`server.js`) fetches a target's
+  `include.tar` when `compile_flags.txt` first names it, holding its LSP
+  messages meanwhile, for at most 30 s. If that fetch fails or times out,
+  clangd goes on with the default x86-64 `bits/`, says so in the Output
+  panel (`window/showMessage`), and tries again on the next change to
+  `compile_flags.txt`.
+* **Libraries**, `targets/<arch>/lib.tar`, fetched only to link (Run):
+  musl's `crt1.o`, `crti.o`, `crtn.o`, `libc.a` and its empty stubs, libc++
+  (with libc++abi merged in, so the driver's `-lc++` brings both),
+  libunwind and compiler-rt's builtins and `crtbegin`/`crtend`. They are
+  **Alpine v3.23's packages**, pinned by SHA-256, stripped of debug info.
+  `build-targets.sh` checks that their libc++ is configured as our headers
+  are (Alpine's `__config_site` is byte-identical to ours, ABI version 1),
+  that musl is 1.2.5, that x86-64's `bits/` match `sysroot.tar.gz`'s, and
+  that libc++abi's objects are in the merged `libc++.a`.
+
+**What does not match, and what does not work**
+
+* Alpine's runtimes are LLVM **21.1.2**, the headers 21.1.8. libc++
+  guarantees ABI stability within a major version with the same
+  `__config_site`, which is checked; a patch release can still add an
+  inline function whose out-of-line copy only the newer library has (none
+  of the tests found one). Building the runtimes from our own tarball is
+  phase 2.
+* Alpine's musl headers carry Alpine's patches (`dirent.h`, `elf.h` differ
+  from upstream 1.2.5; `libintl.h` is only in ours). The headers used are
+  ours, the libraries Alpine's.
+* **Test** is refused on a Linux target: "Tests run on the WebAssembly
+  target only, for now: the test frameworks are built for wasm32 only."
+  (`test-run.mjs`).
+* No 32-bit targets (armv7, i386, riscv32): none was asked for, and each
+  costs a backend in `cc-cross.wasm`, a `lib.tar` and the emulator's
+  kernel. They are refused by name.
+* Without a target flag clangd still parses as `x86_64-linux-musl`
+  (Running, "Execution target vs. editor target"); with one, the editor and
+  the program agree exactly (same triple, same headers).
+
+**Running** is `vm.js`'s (the emulator, built by `build-vm.sh` from `vm/`): `runner.js`
+compiles each source with `cc-cross` (`clang --target=<triple> -c`), then
+`runner-linux.js`, loaded only for a Linux target, links with
+`toolchain.js`'s `linkLinux`: `clang -### --target=<triple> -static
+<objects> -o a.out` prints the `ld.lld` command line clang's driver builds,
+and `ld.lld` runs with exactly those arguments (a browser cannot spawn the
+linker from clang). The ELF goes to `vm.js` `runLinux`, which runs it under
+QEMU-Wasm. Without `vm.js` the runner says so: "Running on x86-64 Linux is
+not installed (packs/cpp/vm.js)".
+
+**Files** (fetched only for a project on that target):
+
+| file | what | raw | gzip | brotli |
+| --- | --- | --- | --- | --- |
+| `cc-cross.js` | Emscripten glue, ES module (also loads in Node, for the tests) | 75 KB | 20 KB | 18 KB |
+| `cc-cross.wasm` | clang + ld.lld 21.1.8 for x86-64, AArch64, RISC-V 64, `-Oz` | 67.2 MB | 22.1 MB | 15.7 MB |
+| `runner-linux.js` | the runner's link-and-run step for a Linux target, loaded only for one | 1.6 KB | 1.0 KB | 0.9 KB |
+| `targets/x86_64/include.tar` | musl `bits/` for x86-64 (35 headers) | 92 KB | 14 KB | 10.6 KB |
+| `targets/x86_64/lib.tar` | crt files, libc, libc++ (+abi), libunwind, compiler-rt | 6.15 MB | 1.31 MB | 0.94 MB |
+| `targets/aarch64/include.tar` | musl `bits/` for AArch64 | 82 KB | 13 KB | 9.5 KB |
+| `targets/aarch64/lib.tar` | as for x86-64 | 6.46 MB | 1.31 MB | 0.91 MB |
+| `targets/riscv64/include.tar` | musl `bits/` for RISC-V 64 | 82 KB | 12 KB | 8.9 KB |
+| `targets/riscv64/lib.tar` | as for x86-64 | 9.39 MB | 1.81 MB | 1.26 MB |
+
+A first Run on a Linux target downloads `cc-cross.wasm`, `sysroot.tar.gz`
+and the target's two tars, plus the emulator's files:
+18.75 MB with brotli for x86-64 (18.72 MB AArch64, 19.07 MB RISC-V 64) for compiling and linking, of which `sysroot.tar.gz` (2.1 MB) is shared with the language server and `cc-cross.wasm` (15.7 MB) with every other Linux target, so switching between Linux targets costs about 1 MB. The editor fetches only `include.tar` (about 10 KB), the
+first time `compile_flags.txt` names the target; `server.js` holds clangd's
+messages until it is unpacked, so the first parse already sees the target's
+headers.
+
+**Build.** `build.sh` runs `build-cross.sh`, `build-targets.sh` and
+`build-demangle.sh` before `build-runner.sh` (whose `pack-runner.sh` copies
+both compilers and bundles the three workers). Both compilers are kept in
+`$CACHE/artifacts/{cc,cc-cross}` with a `STAMP`, the SHA-256 of the LLVM
+and Emscripten versions, the cmake arguments and the patch
+(`PRINT_STAMP=1 ./build-runner.sh` prints `cc`'s); each LLVM step is skipped
+while its stamp matches, and `pack-runner.sh` copies compilers only from
+there, so building one never changes the other (`cc.wasm` is
+byte-identical to before targets existed). `build-cross.sh` can reuse any
+LLVM tree (`CROSS_BUILD_DIR`), but switching a tree between the two
+configurations is a **full rebuild**, not a relink: the default triple and
+the native target are in `llvm-config.h`, which 2,274 of the 2,531 objects
+include. Here it reused `build-wasm-cc` (with `JOBS=4`, `nice`, 4 cores
+shared with two other agents' builds): **51 minutes** (137 CPU-minutes),
+then 3 minutes of brotli in `pack-runner.sh`; a later `./build-runner.sh`
+for `cc` then rebuilds that tree too (about 100 minutes), so a machine that
+builds both often should give each a tree (`build-wasm-cross`, about
+450 MB). `build-targets.sh` takes about 70 s (downloads cached in
+`$CACHE/targets/dl`), `build-demangle.sh` about 20 s.
+
+**Where the Alpine packages come from.** Alpine replaces a package in place
+when it publishes a new revision (a musl fix would turn `musl-dev-1.2.5-r24`
+into `-r25`), so a pinned revision can disappear from its CDN and the pin
+alone would only make the build fail safely. `build-targets.sh` therefore
+tries `$ALPINE_MIRROR/<arch>/<package>.apk` first when that is set (a
+directory or a URL), then Alpine's CDN, and the SHA-256 pin decides either
+way. A copy of all 15 pinned packages is on the project share,
+`/mnt/project-files/monaco-lsp/alpine-v3.23/` (72 MB); building with
+`ALPINE_MIRROR` set to it and the network cut off gives byte-identical
+`targets/` files. The same build also leaves
+`$CACHE/targets/sysroot/<arch>`, the musl sysroot `vm/cc.sh` builds the
+VM's strace and test programs with, so the guest's tools and users'
+programs link the same pinned musl.
+
+**How the toolchain is driven.** Nothing is re-decided in JavaScript:
+`compileArgs` adds `--target=<triple> -resource-dir=/usr/lib/clang/21` and
+the defaults Run always had; clang's Linux driver finds the multiarch
+headers and libraries itself. For the link, `linkLinux` asks the driver
+(`clang -### -no-canonical-prefixes --target=<triple> -static ...`) and
+runs the `ld.lld` line it prints. Two things make the driver in a wasm
+module behave as an installed one: `-no-canonical-prefixes`, so its
+InstalledDir is `argv[0]`'s directory (`/usr/bin`) rather than the
+executable's own path, which a wasm module does not have; and empty
+executables `/usr/bin/{clang,clang++,ld.lld}` in the instance's file
+system, so that it finds `ld.lld` there (otherwise it prints plain `ld`).
+
+**On QEMU-Wasm** (`test-run-linux.mjs`, the emulator's test, all 24 checks
+passing with this compiler): the sample takes 11.1 s cold on x86-64 (14.7 s
+AArch64, 10.1 s RISC-V 64): about 5 s to compile and link in the browser,
+0.2 s to load the VM, about 5 s to boot the guest (system mode), then the
+program. User mode (one CPU, no kernel) runs `hello` 4.1 to 5.0 s after
+Run, nearly all of it compiling.
+
+**Tested** (`node --test test-targets.mjs`, `node test.mjs` session 3,
+`node test-run.mjs`). The aarch64 and riscv64 programs run under the host's
+QEMU user mode as an oracle (`qemu-aarch64-static`, `qemu-riscv64-static`
+from Debian/Ubuntu's `qemu-user-static`, found in `PATH` or
+`QEMU_USER_DIR`); without them those tests fail, naming what to install,
+unless `ALLOW_SKIP=1`, which skips them instead:
+
+```text
+ok 1 - compile_flags.txt names the target the way clang reads it: every case of target-cases.json
+ok 2 - a target nobody built is refused by name, with the list of those there are
+ok 3 - every target row is complete, and the triples are the ones clang normalises to the multiarch names
+ok 4 - the default target compiles exactly as it did before targets existed
+ok 5 - a Linux target compiles with its triple, the same optimisation and hardening, and the views only add line tables
+ok 6 - x86-64 Linux: clang searches libc++'s headers, then the target's bits/, musl's, and clang's own
+ok 7 - x86-64 Linux: the sample links into a static ELF for the right machine, which prints the distances
+ok 8 - x86-64 Linux: a C program links with clang, not clang++, and reads stdin
+ok 9 - x86-64 Linux: an exception is caught by its handler, and an uncaught one aborts with libc++abi's message
+ok 10 - x86-64 Linux: four threads count to 400000
+ok 11 - x86-64 Linux: the views' flags change no byte of the code or data clang emits, at -O0 and -O2
+ok 12 - x86-64 Linux: libc++'s hardening stops an out-of-range vector index
+ok 13 - AArch64 Linux: clang searches libc++'s headers, then the target's bits/, musl's, and clang's own
+ok 14 - AArch64 Linux: the sample links into a static ELF for the right machine, which prints the distances
+ok 15 - AArch64 Linux: a C program links with clang, not clang++, and reads stdin
+ok 16 - AArch64 Linux: an exception is caught by its handler, and an uncaught one aborts with libc++abi's message
+ok 17 - AArch64 Linux: four threads count to 400000
+ok 18 - AArch64 Linux: the views' flags change no byte of the code or data clang emits, at -O0 and -O2
+ok 19 - AArch64 Linux: libc++'s hardening stops an out-of-range vector index
+ok 20 - RISC-V 64 Linux: clang searches libc++'s headers, then the target's bits/, musl's, and clang's own
+ok 21 - RISC-V 64 Linux: the sample links into a static ELF for the right machine, which prints the distances
+ok 22 - RISC-V 64 Linux: a C program links with clang, not clang++, and reads stdin
+ok 23 - RISC-V 64 Linux: an exception is caught by its handler, and an uncaught one aborts with libc++abi's message
+ok 24 - RISC-V 64 Linux: four threads count to 400000
+ok 25 - RISC-V 64 Linux: the views' flags change no byte of the code or data clang emits, at -O0 and -O2
+ok 26 - RISC-V 64 Linux: libc++'s hardening stops an out-of-range vector index
+ok 27 - WebAssembly: the views' flags change none of the code or data clang emits, at -O0 and -O2
+ok 28 - the explorer shows IR and assembly for every target, demangled, and only answers the newest request
+# pass 28
+# fail 0
+# skipped 0
+
+-- session 3: compile_flags.txt names a Linux target
+PASS  sessions 1 and 2 (the default target) fetched no targets/ file  []
+PASS  an aarch64 project parses with the aarch64 headers (__aarch64__, LP64, no error)  []
+PASS  targets/aarch64/include.tar is fetched once, and no library  ["/packs/cpp/targets/aarch64/include.tar"]
+PASS  a change of target to riscv64 reparses with its headers (__riscv, xlen 64)  []
+PASS  and fetches targets/riscv64/include.tar, once  ["/packs/cpp/targets/aarch64/include.tar","/packs/cpp/targets/riscv64/include.tar"]
+PASS  and without a target flag the same file does not compile  ["4: \"not compiled for riscv64\""]
+PASS  session 3: shutdown answers  ""
+PASS  session 3: the worker raised no errors  []
+
+PASS  the default target fetches exactly the files it always did  /packs/cpp/cc.js /packs/cpp/cc.wasm /packs/cpp/runner.js /packs/cpp/sysroot.tar.gz /packs/cpp/wasi-sysroot.tar.gz
+PASS  an unsupported --target: the message lists the supported triples, exit 1, nothing downloaded  "Unsupported target \"armv7-linux-musleabihf\" in compile_flags.txt; supported: wasm32-wasip1, x86_64-linux-musl, aarch64-linux-musl, riscv6
+PASS  Test on a Linux target: refused, naming why (the frameworks are wasm32), exit 1  "Tests run on the WebAssembly target only, for now: the test frameworks are built for wasm32 only.\n"
+PASS  Linux target without vm.js: compiled for x86_64-linux-musl, linked, then "not installed", exit 1  "Running on x86-64 Linux is not installed (packs/cpp/vm.js)\n" Loading the compiler@6, Compiling geometry.cpp (1/2) for x86_64-linux-mus
+PASS  a Linux target fetches cc-cross and its own arch only, never cc.wasm or wasi-sysroot  /packs/cpp/cc-cross.js /packs/cpp/cc-cross.wasm /packs/cpp/runner-linux.js /packs/cpp/targets/x86_64/include.tar /packs/cpp/targets/x86_64/lib.tar /
+```
+
+## Compiler output views
+
+The app's **LLVM IR** and **Assembly** views come from a third worker,
+`explorer.js` (protocol: `../CONTRACT.md`, "Showing compiler output"). It
+compiles the active source with exactly the arguments Run uses
+(`toolchain.js` `compileArgs`, shared by both), plus
+`-gline-tables-only -fno-discard-value-names`, and `-S` or
+`-S -emit-llvm`; for x86-64 `-masm=intel` on request. Compile only: a Linux
+target fetches its `include.tar`, not its libraries. Each target's compiler
+is the one Run uses, so the views show what runs, on every target,
+WebAssembly included. The views' flags do not change the code, checked
+twice: `test-targets.mjs` compiles every sample file live with and without
+them, for every target at `-O0` and `-O2`, and every allocated ELF section
+(code, data, read-only data, exception tables) and every relocation
+against one is byte-for-byte the same (for WebAssembly, every line of
+every function and data section of the assembly, once what line tables
+add around them is taken out); and `test-emit.mjs` compares the filtered
+outputs of the checked-in fixtures.
+
+**Filtering** (`src/emit-filter.js`, pure functions, as Compiler Explorer
+filters):
+
+* Assembly: `.loc`/`.file` give each instruction its source line; then
+  `.loc`, `.file`, `.cfi_*`, `.addrsig*`, `.ident`, comment-only lines,
+  whole `.debug_*` sections, and local labels nothing refers to
+  (`.Ltmp3`, `.Lfunc_begin0`, an unused `.LBB0_2`) go. With **directives**
+  off (the default) every other directive goes too, except the data
+  (`.asciz`, `.quad`, ...) under a label something refers to: each data line
+  belongs to the label above it, and the labels referred to are a fixpoint
+  (a string literal main loads stays; an exception table nothing shown uses
+  goes).
+* IR: every `!dbg` attachment, `#dbg_*` record, `DI*` node, `!llvm.dbg.cu`
+  and the two debug module flags go, and then every metadata node,
+  attribute group and comdat nothing shown refers to any more.
+* **Library functions** (off by default): a function none of whose lines
+  maps to a project file (`std::swap<int>` at `-O0`, a `std::vector`
+  member) is hidden, with its `; Function Attrs:` comment.
+* **Mapping**: code inlined from a header maps to the innermost place in the
+  project it was inlined into (the `.loc` comment's inline chain, the IR's
+  `inlinedAt`), so `std::vector`'s construction inlined into `main` maps to
+  the line of `main` that constructs the vector: the line the cursor is on.
+* **Demangling** (on by default for assembly): LLVM's own Itanium
+  demangler, `llvm::itaniumDemangle` from the same 21.1.8 tarball (the code
+  `llvm::demangle`, and so `llvm-cxxfilt`, runs for a `_Z` name, chosen by
+  the same test), compiled alone to `demangle.wasm` (`build-demangle.sh`,
+  `-Oz`, 27 KB brotli) and called once per view with every distinct name.
+  The Microsoft, Rust and D demanglers are left out: the views' targets
+  only produce Itanium names, and leaving them out makes the file 37%
+  smaller (44 KB brotli with them). `test-demangle.mjs` checks it on cases
+  checked against `llvm-cxxfilt`, and builds the same source natively with
+  `-Wall -Wextra -Wpedantic -Werror`, AddressSanitizer and
+  UndefinedBehaviorSanitizer, and runs clang-tidy on it.
+
+Only the newest request of each kind is answered: one that a newer request
+replaced while it waited or compiled gets no answer, so typing never queues
+compiles. One compile per view: IR and assembly are two compiles when both
+views are open (a single `-save-temps` compile could give both; not done,
+since each view is usually open alone).
+
+**Files** (fetched the first time a view opens):
+
+| file | what | raw | gzip | brotli |
+| --- | --- | --- | --- | --- |
+| `explorer.js` | the worker, with `toolchain.js` and `emit-filter.js` (esbuild-minified) | 13.3 KB | 6.1 KB | 5.6 KB |
+| `demangle.js` | Emscripten glue for the demangler | 10.3 KB | 3.5 KB | 3.2 KB |
+| `demangle.wasm` | `llvm::itaniumDemangle` (LLVMDemangle 21.1.8, `ItaniumDemangle.cpp` only), `-Oz`, emmalloc | 82 KB | 33 KB | 28 KB |
+
+The views use the target's compiler and headers, the same files Run uses:
+the first view of a project downloads `cc.wasm` and the two sysroots
+(14.4 MB) on the default target, or `cc-cross.wasm`, `sysroot.tar.gz` and
+the target's `include.tar` (17.9 MB) on a Linux one, plus the 37 KB above;
+after a Run, only those 37 KB. On the default target that includes all of
+`wasi-sysroot.tar.gz` (0.99 MB gzip), libraries too, although a view never
+links: about 0.85 MB of it is `lib/`. That is accepted rather than
+splitting the archive: the views are mostly opened after a Run, which has
+fetched it anyway, and a separate headers archive would be a second copy
+of the same headers to download then.
+
+**Memory and failures.** The worker holds the compiled compiler of the
+current target only: when the target moves between WebAssembly and Linux
+it drops the other one and its files (`toolchain.release()`), and the app
+stops the worker when the last view closes, so neither compiler stays in
+memory beside a Linux Run's. A download that fails (a network blip, an
+HTTP error) is not remembered: the next request tries it again, and a
+demangler that fails to start gives an error result rather than a view
+stuck on "Updating".
+
+**Tested** (`node --test test-emit.mjs`, on the fixtures in
+`tests/fixtures/`, which `tests/fixtures/gen.mjs` compiles with the shipped
+compilers; `node test-demangle.mjs`; the explorer section of
+`test-targets.mjs` in headless Chromium):
+
+```text
+ok 1 - every output line has exactly one mapping, a project line, a header line or none
+ok 2 - the views do not change the code: with line tables and without, the filtered output is the same
+ok 3 - the call to distance in main maps to main.cpp line 8, in the assembly and the IR of every target
+ok 4 - a function maps to its own lines: Point::norm to geometry.cpp 5, distance to geometry.cpp 8
+ok 5 - debug info, line directives and call frame information never show
+ok 6 - directives show only when asked, and data under a used label always shows
+ok 7 - the IR keeps the module flags that are not debug info, and drops metadata only debug info used
+ok 8 - a function from a library header is hidden, unless library functions are asked for
+ok 9 - the wasm target ends functions with end_function and the x86-64 one can show Intel syntax
+ok 10 - names in the output demangle to the C++ a student wrote
+ok 11 - paths clang prints become project paths, and other files stay absolute
+ok 12 - the filters never throw, on empty input and on garbage
+# pass 12
+# fail 0
+# skipped 0
+
+PASS  demangle.wasm instantiates  3 ms
+PASS  wasm: _Z8distanceRK5PointS1_  distance(Point const&, Point const&)
+PASS  wasm: _ZNK5Point4normEv  Point::norm() const
+PASS  wasm: _Znwm  operator new(unsigned long)
+PASS  wasm: _ZdlPvm  operator delete(void*, unsigned long)
+PASS  wasm: _ZNSt3__16vectorI5PointNS_9allocatorIS1_EEEixB8fe210108Em  std::__1::vector<Point, std::__1::allocator<Point>>::operator[][abi:fe210108](unsigned long)
+PASS  wasm: _ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEC2B8fe210108ILi0EEEPKc  std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>::basic_string[abi:fe210108]<0>(char const*)
+PASS  wasm: _ZTVSt12length_error  vtable for std::length_error
+PASS  wasm: _ZTISt9exception  typeinfo for std::exception
+PASS  wasm: _ZN3foo3barIiEEvT_  void foo::bar<int>(int)
+PASS  wasm: _ZZ4mainENK3$_0clEv  main::$_0::operator()() const
+PASS  wasm: _ZL6squarei  square(int)
+PASS  wasm: __Z8distanceRK5PointS1_  distance(Point const&, Point const&)
+PASS  wasm: _RNvC6_123foo3bar  _RNvC6_123foo3bar
+PASS  wasm: main  main
+PASS  wasm: printf  printf
+PASS  wasm: hypot  hypot
+PASS  wasm: every case in one batch, in order  16 names in 0.1 ms
+PASS  demangleLines: names in assembly demangled, line count kept, .L labels left alone  "\tcallq\tdistance(Point const&, Point const&)@PLT\nPoint::norm() const:  # @Point::norm() const\n\tcall\tprintf\n\tbl .L_Znot_a_name"
+PASS  demangleLines: one batched call for every distinct name
+PASS  native build with clang++-18, -Wall -Wextra -Wpedantic -Werror, ASan + UBSan
+PASS  native test-native.cpp on the same cases, no sanitizer report  25 checks; all passed
+PASS  clang-tidy is clean (src/demangle/.clang-tidy)
+all passed
+PASS  clang-tidy is clean (src/demangle/.clang-tidy)
+all passed
+```
 
 ## Prior art
 

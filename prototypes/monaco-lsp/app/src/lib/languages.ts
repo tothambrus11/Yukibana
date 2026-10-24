@@ -53,7 +53,16 @@ export interface Language {
 	 * reloaded as files change) instead of running `entry` in the terminal.
 	 */
 	preview?: string;
+	/**
+	 * The compiler output views the pack's `explorer.js` serves
+	 * (packs/CONTRACT.md, "Showing compiler output"): LLVM IR, assembly. The
+	 * top bar offers a button for each.
+	 */
+	explores?: readonly ExploreKind[];
 }
+
+/** A compiler output view: the LLVM IR or the assembly of the active source. */
+export type ExploreKind = 'llvm-ir' | 'asm';
 
 /** The pack directory of a language. */
 export function packOf(language: Language): string {
@@ -441,6 +450,7 @@ export class Counter {
 		extension: '.cpp',
 		runs: true,
 		tests: true,
+		explores: ['llvm-ir', 'asm'],
 		sample: {
 			'main.cpp': `#include <cstdio>
 #include <vector>

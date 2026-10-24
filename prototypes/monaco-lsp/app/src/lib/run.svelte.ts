@@ -5,6 +5,7 @@
  */
 import { AnsiStream } from './ansi';
 import type { Files } from './languages';
+import type { RunOptions } from './cpp-targets';
 
 /**
  * One stretch of terminal text in one style; consecutive text of one kind
@@ -14,12 +15,18 @@ import type { Files } from './languages';
  */
 export interface Chunk {
 	id: number;
-	kind: 'stdout' | 'stderr' | 'stdin' | 'info';
+	/** `trace`: system calls the program made (strace, on a Linux target), interleaved with its output. */
+	kind: 'stdout' | 'stderr' | 'stdin' | 'info' | 'trace';
 	text: string;
 	/** Inline CSS for the program's colours (SGR escapes), '' for the stream's own style. */
 	style: string;
 }
 
+/**
+ * `waiting`: the program is blocked reading its input (a runner asked with a
+ * plain `stdin`); a runner that streams input (`stdin` with `streaming`, an
+ * emulated machine) takes lines while running without ever setting it.
+ */
 export type RunState =
 	| { kind: 'idle' }
 	| { kind: 'loading'; label: string; loaded: number; total: number }
@@ -31,8 +38,20 @@ type FromRunner =
 	| { type: 'loading'; label: string; loaded: number; total: number }
 	| { type: 'phase'; text: string }
 	| { type: 'stdout' | 'stderr'; text: string }
-	| { type: 'stdin' }
-	| { type: 'exit'; code: number };
+	| { type: 'stdin'; streaming?: boolean }
+	| { type: 'exit'; code: number }
+	| { type: 'trace' | 'kernel'; text: string }
+	| { type: 'mark'; name: string; ms: number };
+
+/**
+ * Where a runner's messages that are not the program's own go: the guest
+ * kernel's console and QEMU's messages (`kernel`, one line at a time,
+ * without its newline) and timings, for the Output panel.
+ */
+export interface RunnerLog {
+	kernel(line: string): void;
+	mark(name: string, ms: number): void;
+}
 
 /**
  * What a runner is asked to do: run the program, run its tests, or
@@ -57,11 +76,22 @@ export class Runner {
 	/** Lines typed before the program asked for them, oldest first. */
 	private typedAhead: string[] = [];
 	/**
+	 * The runner has asked for input (stored 1 in the state word) and has had
+	 * no answer yet. Separate from `state.waiting`, which is what the terminal
+	 * shows: a streaming request is outstanding while the program runs.
+	 */
+	private asked = false;
+	/**
 	 * The terminal state of each output stream. Two, not one as on a real
 	 * terminal: stdout and stderr arrive as separate messages here, and a
 	 * colour left on in one must not leak into the other.
 	 */
 	private ansi = { stdout: new AnsiStream(), stderr: new AnsiStream() };
+	/** The kernel's text after its last newline, not yet a line. */
+	private kernelRest = '';
+
+	/** `log` receives what the Output panel shows of a run; without it, that is dropped. */
+	constructor(private readonly log: RunnerLog | null = null) {}
 
 	/** True while a program is loading or running. */
 	get busy(): boolean {
@@ -72,13 +102,17 @@ export class Runner {
 	 * Starts `entry` of `files` with the runner of the pack `language` (its
 	 * directory under `packs/`), stopping any program still running; `mode`
 	 * 'test' runs the project's tests instead, 'mutate' mutation-tests it.
-	 * Output from the previous run is cleared.
+	 * Output from the previous run is cleared. `options` go to the runner as
+	 * they are (packs/CONTRACT.md: how a C++ program built for Linux is
+	 * emulated; a runner that has no use for them ignores them).
 	 */
-	start(language: string, files: Files, entry: string, mode: RunMode = 'run'): void {
+	start(language: string, files: Files, entry: string, mode: RunMode = 'run', options?: RunOptions): void {
 		this.stop(false);
 		this.chunks = [];
 		this.chars = 0;
 		this.typedAhead = [];
+		this.asked = false;
+		this.kernelRest = '';
 		this.ansi = { stdout: new AnsiStream(), stderr: new AnsiStream() };
 		this.started = performance.now();
 		this.state = { kind: 'running', phase: 'Starting', waiting: false };
@@ -99,7 +133,7 @@ export class Runner {
 				() => this.finish(null, `The runner failed: ${e.message || 'unknown error'}`),
 			);
 		};
-		worker.postMessage({ type: mode, files: { ...files }, entry, stdin: this.stdin });
+		worker.postMessage({ type: mode, files: { ...files }, entry, stdin: this.stdin, ...(options ? { options: { ...options } } : {}) });
 	}
 
 	/** Stops the running program; `say` notes it in the terminal. */
@@ -162,7 +196,8 @@ export class Runner {
 				this.state = { kind: 'loading', label: m.label, loaded: m.loaded, total: m.total };
 				break;
 			case 'phase':
-				this.state = { kind: 'running', phase: m.text, waiting: false };
+				// A new phase does not answer an outstanding request for input.
+				this.state = { kind: 'running', phase: m.text, waiting: this.state.kind === 'running' && this.state.waiting };
 				break;
 			case 'stdout':
 			case 'stderr':
@@ -170,22 +205,54 @@ export class Runner {
 				for (const span of this.ansi[m.type].feed(m.text)) this.append(m.type, span.text, span.css);
 				break;
 			case 'stdin':
-				if (this.state.kind === 'running') this.state = { ...this.state, waiting: true };
-				else this.state = { kind: 'running', phase: 'Running', waiting: true };
+				this.asked = true;
+				// A streaming runner takes input whenever it comes; the program
+				// is not known to be blocked, so the terminal does not say so.
+				if (!m.streaming) {
+					if (this.state.kind === 'running') this.state = { ...this.state, waiting: true };
+					else this.state = { kind: 'running', phase: 'Running', waiting: true };
+				}
 				this.feed();
+				break;
+			case 'trace':
+				if (this.state.kind === 'loading') this.state = { kind: 'running', phase: 'Running', waiting: false };
+				this.append('trace', m.text);
+				break;
+			case 'kernel':
+				this.kernel(m.text);
+				break;
+			case 'mark':
+				this.log?.mark(m.name, m.ms);
 				break;
 			case 'exit':
 				this.worker?.terminate();
 				this.worker = null;
+				this.kernel('\n');
+				// No note of the app's own: a program's non-zero status is its
+				// own business, and a VM that failed already said where its
+				// kernel log is (vm.js, CONTRACT.md "Running a program").
 				this.finish(m.code, null);
+				break;
+			default:
+				// A message type this app does not know (a newer runner's): ignored, as the contract says.
 				break;
 		}
 	}
 
-	/** Hands the oldest typed-ahead line to a runner that is waiting for input. */
+	/** Passes the kernel's text on a line at a time; a newline flushes what is left. */
+	private kernel(text: string): void {
+		const lines = (this.kernelRest + text).split(/\r?\n/);
+		this.kernelRest = lines.pop() ?? '';
+		for (const line of lines) {
+			if (!line.trim()) continue;
+			this.log?.kernel(line);
+		}
+	}
+
+	/** Hands the oldest typed-ahead line to a runner that has asked for input. */
 	private feed(): void {
 		const buffer = this.stdin;
-		if (!buffer || this.state.kind !== 'running' || !this.state.waiting) return;
+		if (!buffer || !this.busy || !this.asked) return;
 		const line = this.typedAhead.shift();
 		if (line === undefined) return;
 		const state = new Int32Array(buffer, 0, 2);
@@ -198,7 +265,8 @@ export class Runner {
 			Atomics.store(state, 0, 2);
 		}
 		Atomics.notify(state, 0);
-		this.state = { ...this.state, waiting: false };
+		this.asked = false;
+		if (this.state.kind === 'running') this.state = { ...this.state, waiting: false };
 	}
 
 	private finish(code: number | null, note: string | null): void {

@@ -16,6 +16,12 @@
 //    gets no diagnostics, an edit to it reparses the project, code actions
 //    with edits, document highlight, a new and a deleted header with
 //    didChangeWatchedFiles, and a ranged edit after a UTF-16 surrogate pair.
+// 3. Targets (README, "Targets"): a project whose compile_flags.txt names
+//    a Linux target (--target=aarch64-linux-musl) parses with that
+//    target's headers (__aarch64__, 64-bit long, the arch's bits/), which
+//    server.js fetches once (targets/<arch>/include.tar) before clangd
+//    sees the flag; a change of target to riscv64 fetches that arch's.
+//    Sessions 1 and 2 must have fetched no targets/ file at all.
 //
 //   node test.mjs            (after ./build.sh; needs playwright-core)
 //
@@ -40,8 +46,10 @@ const ISOLATION = { 'cross-origin-opener-policy': 'same-origin', 'cross-origin-e
  * `python3 -m http.server`. Encoding: the .br or .gz sibling when the
  * browser accepts it, with Content-Encoding, like the app's host. */
 async function serve(encoding) {
+    const requested = [];
     const server = createServer(async (req, res) => {
         const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+        requested.push(path);
         if (path === '/__test.html') {
             res.writeHead(200, { 'content-type': 'text/html', ...ISOLATION }).end('<!doctype html><link rel=icon href="data:,"><title>cpp pack test</title>');
             return;
@@ -68,7 +76,7 @@ async function serve(encoding) {
         }
     });
     await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
-    return { server, origin: `http://127.0.0.1:${server.address().port}` };
+    return { server, requested, origin: `http://127.0.0.1:${server.address().port}` };
 }
 const plain = await serve(false);
 const encoded = await serve(true);
@@ -531,6 +539,54 @@ try {
         `${show(errors(missing))} then ${show(fixed)} (insert at ${at.line}:${at.character})`
     );
     await lsp.finish('session 2');
+}
+{
+    // ---- 3. a Linux target
+    console.log('-- session 3: compile_flags.txt names a Linux target');
+    const fetchedTargets = [...plain.requested, ...encoded.requested].filter((p) => p.includes('/targets/'));
+    check('sessions 1 and 2 (the default target) fetched no targets/ file', fetchedTargets.length === 0, JSON.stringify(fetchedTargets));
+    const before = plain.requested.length;
+    const { lsp } = await session(plain.origin);
+    const diagnostics = lsp.diagnostics;
+    const ARCH_CPP = `#include <cstdio>
+#include <vector>
+#ifndef __aarch64__
+#error "not compiled for aarch64"
+#endif
+static_assert(sizeof(long) == 8, "LP64");
+static_assert(sizeof(void *) == 8, "64-bit pointers");
+int main() {
+    std::vector<long> v{1, 2, 3};
+    std::printf("%zu\\n", v.size());
+    return 0;
+}
+`;
+    const flags = (triple) => `--target=${triple}\n-std=c++20\n-Wall\n`;
+    const open = (name, text) => ['textDocument/didOpen', { textDocument: { uri: uri(name), languageId: name.endsWith('.txt') ? 'plaintext' : 'cpp', version: 1, text } }];
+    // As the app opens a project: compile_flags.txt last, in the same task.
+    await lsp.notifyAll([['initialized', {}], open('main.cpp', ARCH_CPP), open('compile_flags.txt', flags('aarch64-linux-musl'))]);
+    const aarch64 = await diagnostics('main.cpp', (d) => errors(d).length === 0, 0, 90000);
+    check('an aarch64 project parses with the aarch64 headers (__aarch64__, LP64, no error)', aarch64 && errors(aarch64).length === 0, show(aarch64));
+    const includeTars = () => plain.requested.slice(before).filter((p) => /\/targets\/[^/]+\/include\.tar$/.test(p));
+    check('targets/aarch64/include.tar is fetched once, and no library', JSON.stringify(includeTars()) === JSON.stringify(['/packs/cpp/targets/aarch64/include.tar'])
+        && !plain.requested.slice(before).some((p) => p.endsWith('lib.tar')), JSON.stringify(plain.requested.slice(before).filter((p) => p.includes('targets'))));
+    const riscv = ARCH_CPP.replace('#ifndef __aarch64__\n#error "not compiled for aarch64"', '#if !defined(__riscv) || __riscv_xlen != 64\n#error "not compiled for riscv64"');
+    let since = (await lsp.log()).length;
+    lsp.notify('textDocument/didChange', { textDocument: { uri: uri('compile_flags.txt'), version: 2 }, contentChanges: [{ text: flags('riscv64-linux-musl') }] });
+    lsp.notify('textDocument/didChange', { textDocument: { uri: uri('main.cpp'), version: 2 }, contentChanges: [{ text: riscv }] });
+    const rv = await diagnostics('main.cpp', (d) => errors(d).length === 0, since, 90000);
+    check('a change of target to riscv64 reparses with its headers (__riscv, xlen 64)', rv && errors(rv).length === 0, show(rv));
+    check('and fetches targets/riscv64/include.tar, once', JSON.stringify(includeTars()) === JSON.stringify(['/packs/cpp/targets/aarch64/include.tar', '/packs/cpp/targets/riscv64/include.tar']), JSON.stringify(includeTars()));
+    // The guard really guards: without a target flag the same file errors.
+    // (Without one clangd parses for its own default triple,
+    // x86_64-linux-musl, not wasm32-wasip1 as Run compiles: README,
+    // "Running", execution target vs. editor target.)
+    since = (await lsp.log()).length;
+    lsp.notify('textDocument/didChange', { textDocument: { uri: uri('compile_flags.txt'), version: 3 }, contentChanges: [{ text: '-std=c++20\n-Wall\n' }] });
+    lsp.notify('textDocument/didChange', { textDocument: { uri: uri('main.cpp'), version: 3 }, contentChanges: [{ text: riscv + '\n' }] });
+    const other = await diagnostics('main.cpp', (d) => errors(d).some((e) => /riscv64/.test(e.message)), since, 60000);
+    check('and without a target flag the same file does not compile', errors(other).some((e) => /riscv64/.test(e.message)), show(other));
+    await lsp.finish('session 3');
 }
 } finally {
     await browser.close();

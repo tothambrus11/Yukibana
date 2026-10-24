@@ -1,0 +1,29 @@
+# clang-tidy for yk-init (build-init.sh runs it on init.c and test-init.c, with the
+# same flags as the guest build). Kernel style: braces are optional for one statement.
+# Left out, with reasons:
+#  - readability-magic-numbers, readability-identifier-length: termios bits, fds
+#    and buffer sizes read better as written
+#  - bugprone-easily-swappable-parameters: yk_child_argv's parameters are named
+#    and each is tested
+#  - misc-include-cleaner: nolibc is one force-included header, not per-symbol headers
+#  - readability-braces-around-statements: kernel coding style
+#  - cert-err33-c: every ignored result is cast to (void) and commented where it matters
+#  - clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling: it asks for
+#    C11 Annex K (fprintf_s), which neither glibc, musl nor nolibc provide
+Checks: >
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  misc-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -readability-magic-numbers,
+  -readability-identifier-length,
+  -bugprone-easily-swappable-parameters,
+  -misc-include-cleaner,
+  -readability-braces-around-statements,
+  -cert-err33-c,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+WarningsAsErrors: '*'
+HeaderFilterRegex: 'init-args\.h'

@@ -58,6 +58,19 @@ pyproject.toml, package.json (with stryker.config.json), build.sbt, pom.xml (Jav
 build.gradle.kts (Kotlin), set up for the flat layout), a
 README.md with the commands and a .gitignore.
 
+C and C++ projects have a **Target** next to the test framework:
+WebAssembly (WASI), the default, or x86-64, AArch64 or RISC-V 64 Linux.
+The target is the `--target=` line of the project's `compile_flags.txt`,
+which the picker rewrites (a line written by hand counts too), so clangd,
+Run and the views always agree. On a Linux target Run cross-compiles a
+static musl program and runs it in Linux under QEMU compiled to
+WebAssembly, or, chosen in the Run options next to it, under QEMU's user
+mode (experimental), on 1, 2 or 4 CPUs, with strace if asked ("C and C++
+targets" below). The **IR** and **Asm** buttons open read-only panels with
+the LLVM IR and the assembly of the active source, recompiled as it is
+edited, for whichever target; the caret maps lines both ways between the
+source and the output, and Ctrl+click on an output line goes to its source.
+
 A web project's Run opens a Preview panel with its `index.html` in a
 sandboxed iframe: a stylesheet edit is applied in place, any other edit
 reloads the page, and its console goes to the terminal. JavaScript and
@@ -73,7 +86,7 @@ no DOM and no npm packages except fast-check, for property-based tests
 | Web (HTML, CSS, TypeScript) | the JavaScript pack's server for TypeScript; Monaco's own HTML and CSS (SCSS, Less) services: completion, hover, validation, formatting, colours | a live-reloading Preview panel (sandboxed iframe) | (JavaScript's), plus the CSS worker 0.2 MB and, once an HTML file is open, the HTML worker 0.15 MB | as TypeScript |
 | Python | basedpyright 1.40 | Pyodide 314.0.7 (Python 3.14) | 1.1 MB | 4.5 MB |
 | Scala 3 | the Scala 3.7.4 compiler's interactive API, compiled with Scala.js | the same compiler and the Scala.js linker; ScalaCheck 1.18.1 | 2.6 MB; ScalaCheck 0.25 MB when a source names it | 3.7 MB; ScalaCheck 0.34 MB more when a source names it |
-| C and C++ | clangd 21 (Emscripten, threads) | clang 21 and wasm-ld, WASI | 8.0 MB | 12.2 MB; Test 0.06 to 0.28 MB (the framework's libraries) |
+| C and C++ | clangd 21 (Emscripten, threads) | clang 21 and wasm-ld, WASI; for a Linux target clang 21 and ld.lld, then Linux 6.12 under QEMU-Wasm (or QEMU's user mode) | 8.0 MB; a Linux target's headers 0.01 MB | 12.2 MB; Test 0.06 to 0.28 MB (the framework's libraries); a Linux target 18.8 to 19.1 MB to compile, plus 2.6 to 2.9 MB for the VM (0.5 to 0.7 MB in user mode) |
 | Swift | sourcekitd 6.3.3 through sourcekit-lsp-lite, in one module with the compiler; swift-syntax for formatting | that module's swift-frontend, and wasm-ld | 31.2 MB | 8.2 MB |
 | Rust | rust-analyzer's IDE crates (ra_ap_ide 0.0.358) with our LSP layer, std 1.98 sources | Miri 1.78 (rustc's MIR interpreter, not a compiler), quickcheck 1.0.3 | 4.2 MB; quickcheck sources 0.47 MB when Cargo.toml names it | 29.8 MB; quickcheck 1.6 MB when Cargo.toml names it |
 | PHP | Phpactor 2026.10.07 on PHP 8.4 (php-wasm) | PHP 8.4.25's CLI (php-wasm), PHPUnit 12.5, Eris 1.3 | 7.6 MB | 2 KB (the same php.wasm); Test 0.6 MB, Eris 45 KB when used |
@@ -84,6 +97,40 @@ no DOM and no npm packages except fast-check, for property-based tests
 Sizes are brotli transfer sizes. The app itself is 1.2 MB, icons included.
 Each pack's README has the details: what was patched and why, what is
 measured, and what does not work.
+
+## C and C++ targets
+
+The target is one line of `compile_flags.txt`; the pack has the details
+(packs/cpp/README.md, "Targets", "Running" and "Compiler output views";
+packs/cpp/vm/README.md is the report on system and user mode). What each
+use case downloads, with brotli, measured:
+
+| Use case | Downloads | Size |
+| --- | --- | --- |
+| Edit, WebAssembly | clangd, `sysroot.tar.gz` | 8.1 MB, as before |
+| Edit, a Linux target | the same, plus `targets/<arch>/include.tar` (the arch's musl `bits/` headers) | + 0.01 MB |
+| Run, WebAssembly | `cc.wasm`, `wasi-sysroot.tar.gz` and `sysroot.tar.gz`, as before: none of the Linux targets' files | 14.4 MB, as before |
+| Run, a Linux target, system mode | `cc-cross.wasm` (15.7 MB: clang and ld.lld for the three arches, no WebAssembly), `sysroot.tar.gz`, the target's `include.tar` and `lib.tar` (0.9 to 1.3 MB), `vm.js`, then the arch's QEMU, kernel and initrd (2.55 MB riscv64, 2.65 MB x86-64, 2.88 MB AArch64) | about 21.5 MB the first time; 2.1 MB less after editing |
+| Run, user mode | the target's `qemu-<arch>` instead of the VM (0.50 to 0.72 MB) | about 19.4 MB the first time |
+| Another Linux target after the first | its tars and VM only | about 3.5 MB |
+| strace on | `vm/<arch>/strace.cpio` | + 0.4 MB |
+| IR or Asm view | `explorer.js` (5.7 KB), `demangle.wasm` (28 KB), and the target's compiler and headers (no libraries) unless Run already fetched them; the views' app code is lazy too (6.7 KB) | 0.04 MB after a Run |
+
+One cross compiler serves the three Linux targets: a compiler per target
+would be only 3 MB smaller and cost the next target 13 MB more. A
+WebAssembly-only session downloads nothing new: `cc.wasm` and
+`sysroot.tar.gz` are byte for byte what they were, and the app's e2e test
+checks the URLs.
+
+**System or user mode.** System mode is the default because it is a real
+Linux 6.12 kernel: a null dereference is SIGSEGV and exit 139, threads run
+on up to 4 vCPUs, `fork`, signals and `/proc` work, and it needs no
+emulation of system calls. It costs about 2.6 MB more download, 2 to 4 s of
+boot per run and 256 MB of guest RAM. User mode starts in 0.2 s and
+downloads 0.5 to 0.7 MB, but QEMU translates the system calls onto the
+browser's libc itself, with no kernel underneath: one CPU, no `fork`, no
+memory protection (a null dereference reads 0 and the program carries on),
+partial signals (packs/cpp/vm/README.md, "What user mode cannot do"). Run options choose between them per project.
 
 ## Offline and installing
 
@@ -116,7 +163,7 @@ serves from, and asks the browser for persistent storage first.
 | --- | --- | --- |
 | The app (precached) | 1.2 MB | 4.9 MB |
 | The app's lazy files | 0.5 MB | 2.8 MB |
-| Every pack (Python 5.9, JavaScript 1.6, C++ 19.9, Swift 39.5, Scala 6.0, Rust 32.5, PHP 7.9, Java 4.4, Kotlin 0.3) | 117 MB | 540 MB |
+| Every pack (Python 5.9, JavaScript 1.6, C++ 48.5, Swift 39.5, Scala 6.0, Rust 32.5, PHP 7.9, Java 4.4, Kotlin 0.3) | 146 MB | 670 MB |
 
 A new build installs in the background and the top bar offers "New
 version: reload"; until then the tab keeps the build it runs. Its app cache
@@ -139,13 +186,17 @@ after weeks without a visit, persistent storage or not.
   hints. Formatting is swift-syntax's BasicFormat. No macros, so no
   swift-testing: tests use our XCTest, a checked subset of
   swift-corelibs-xctest. Foundation is not in the sysroot.
-* **C++**: no threads, a fixed stack. Exceptions work (WebAssembly
-  exception handling, so a browser from 2025: Chrome 137, Firefox 131,
-  Safari 18.4). Tests in `tests/` are GoogleTest (without gMock or death
+* **C++**: on WebAssembly, no threads and a fixed stack. Exceptions work
+  (WebAssembly exception handling, so a browser from 2025: Chrome 137,
+  Firefox 131, Safari 18.4). Tests in `tests/` are GoogleTest (without gMock or death
   tests), doctest or Catch2 v3, whichever they include (one per project;
   the top bar's choice converts the sample's tests); only that framework's
-  libraries are downloaded. Container indexing is checked (libc++ hardening, fast mode); other
-  out-of-bounds accesses are not.
+  libraries are downloaded, and only for WebAssembly: on a Linux target
+  Test is disabled for now. Container indexing is checked (libc++ hardening, fast mode); other
+  out-of-bounds accesses are not. The Linux targets are static musl
+  programs with libraries from Alpine (libc++ 21.1.2 under clang 21.1.8's
+  headers); no ARM (32-bit), no sanitizers, no program arguments. The views
+  compile one source file at a time, without linking.
 * **Scala**: not Metals, which cannot run in a browser. The LSP layer is
   ours; what it answers comes from the compiler. No libraries but
   ScalaCheck (for a project that names `org.scalacheck`; properties run
@@ -204,9 +255,23 @@ Each pack has `test.mjs`, which drives its server headlessly in Chromium.
 `app/tests/e2e.mjs` drives the built app for every built pack: a server
 starts, an error is reported, completion, hover, definition, Run prints the
 expected output, project switching keeps edits, and Download saves a valid
-zip; for web projects, HTML and CSS completion, CSS validation and colours;
+zip; for C++, each Linux target from the picker (clangd's macros, Run,
+threads, a segfault's 139, user mode, Stop), the IR and assembly views
+with their line mapping, and the URLs each use case fetches; for web projects, HTML and CSS completion, CSS validation and colours;
 that the HTML and CSS workers load only when needed; that Chromium finds
 the app installable; and that, once Python is made available offline, a
-reload without a network starts the app and runs an edited program. `app/tests/export.mjs` downloads each sample as the app does and builds,
+reload without a network starts the app and runs an edited program.
+`app/tests/e2e-targets.mjs` (`npm run test:e2e:targets [target ...]`)
+measures the C++ targets: for WebAssembly and each Linux target, in a fresh
+session with service workers blocked, it runs a hello world and a
+four-thread pthreads program (system mode on 4 CPUs, then user mode, then
+strace; on Linux also a line typed into the terminal after the program
+started, in system and user mode, which must reach `std::cin` while the
+status says "Running", not "Waiting for input"), checks the terminal and
+exit codes, opens, edits, closes and
+reopens the LLVM IR and assembly views, checks that a WebAssembly session
+fetches exactly the files it did before targets existed, and prints the
+bytes each use case downloads and the runner's timing marks (`--json` saves
+them). `app/tests/export.mjs` downloads each sample as the app does and builds,
 runs and tests it with CMake and CTest, SwiftPM, Node, pytest, sbt and Cargo,
 skipping (and saying so) any tool the machine lacks.

@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LANGUAGES } from '../src/lib/languages.ts';
-import { buildSbt, exportProject } from '../src/lib/export.ts';
+import { buildSbt, exportProject, parseCompileFlags } from '../src/lib/export.ts';
 import { zip } from '../src/lib/zip.ts';
 import { chooseTestFramework } from '../src/lib/cpp-tests.ts';
 
@@ -62,6 +62,32 @@ for (const language of LANGUAGES) {
 	const own = { ...cpp.sample, 'CMakeLists.txt': '# mine\n', 'readme.txt': 'mine\n', '.gitignore': 'mine\n' };
 	const { files, generated } = exportProject(cpp, own);
 	check(files['CMakeLists.txt'] === '# mine\n' && files['.gitignore'] === 'mine\n' && !('README.md' in files) && generated.length === 0, "cpp: a project's own CMakeLists.txt, README and .gitignore are kept, and nothing is generated over them");
+}
+
+// ---- C++ targets: the browser's --target line is not CMake's business
+
+{
+	const cpp = sample('cpp');
+	const forms = ['--target=aarch64-linux-musl', '-target\naarch64-linux-musl', '--target\naarch64-linux-musl', '-target=aarch64-linux-musl'];
+	for (const form of forms) {
+		const flags = parseCompileFlags(`-std=c++20\n${form}\n-Wall\n-I.\n`);
+		check(flags.target === 'aarch64-linux-musl' && flags.options.join(' ') === '-Wall' && flags.includes.join(' ') === '.', `cpp: ${JSON.stringify(form)} in compile_flags.txt is read as the target, not as a CMake option (${JSON.stringify(flags)})`);
+	}
+	const plain = exportProject(cpp, cpp.sample).files;
+	const onWasm = exportProject(cpp, { ...cpp.sample, 'compile_flags.txt': `--target=wasm32-wasip1\n${cpp.sample['compile_flags.txt']}` }).files;
+	check(!/COMPILER_TARGET|--target|## Target/.test(plain['CMakeLists.txt'] + plain['README.md']), 'cpp: the sample, on the default target, gets no target note in CMakeLists.txt or README.md');
+	check(onWasm['CMakeLists.txt'] === plain['CMakeLists.txt'] && onWasm['README.md'] === plain['README.md'], "cpp: naming the default target (--target=wasm32-wasip1) changes neither CMakeLists.txt nor README.md");
+	for (const [triple, arch] of [['x86_64-linux-musl', 'x86_64'], ['aarch64-linux-musl', 'aarch64'], ['riscv64-linux-musl', 'riscv64']]) {
+		const { files } = exportProject(cpp, { ...cpp.sample, 'compile_flags.txt': `--target=${triple}\n${cpp.sample['compile_flags.txt']}` });
+		const cmake = files['CMakeLists.txt'];
+		const options = /target_compile_options\(project_flags INTERFACE ([^)]*)\)/.exec(cmake)?.[1] ?? '';
+		check(!options.includes('target') && options === '-Wall -Wextra', `cpp on ${arch}: --target is not passed to CMake (options: ${options})`);
+		check(cmake.startsWith('# Builds the project') && cmake.includes(`# In the browser, this project is built for ${triple}`) && cmake.includes(`CMAKE_CXX_COMPILER_TARGET=${triple}`), `cpp on ${arch}: CMakeLists.txt says CMake builds natively and how to cross compile`);
+		check(cmake.replace(/^# In the browser[^\n]*\n#[^\n]*\n#[^\n]*\n/m, '') === plain['CMakeLists.txt'], `cpp on ${arch}: apart from that note, CMakeLists.txt is the default target's`);
+		check(files['README.md'].includes('## Target') && files['README.md'].includes(`\`CMAKE_CXX_COMPILER_TARGET=${triple}\``) && files['README.md'].includes(`qemu-${arch}`), `cpp on ${arch}: README.md has a Target section`);
+	}
+	const unknown = exportProject(cpp, { ...cpp.sample, 'compile_flags.txt': '--target=armv7-linux-musleabihf\n-Wall\n' }).files['CMakeLists.txt'];
+	check(!/COMPILER_TARGET|armv7/.test(unknown), 'cpp: a target the browser does not know is left out of CMakeLists.txt, note and all');
 }
 
 // ---- The zip, unpacked by Python's zipfile

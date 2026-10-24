@@ -85,6 +85,9 @@ async function run(language, c) {
 	const page = await browser.newPage({ viewport: { width: 1400, height: 850 } });
 	const errors = [];
 	page.on('pageerror', (e) => errors.push(e.message));
+	// Every URL the page and its workers ask for, for the checks of what a use case downloads.
+	const requests = [];
+	page.context().on('request', (r) => requests.push(r.url()));
 	// `?trace` logs every LSP message to the console (cut at 2000 characters)
 	// and exposes `monaco`, for the checks that need to see what was asked.
 	const lspLog = [];
@@ -188,6 +191,10 @@ async function run(language, c) {
 	if (language === 'cpp') await cppBridge(page, check, lspLog);
 	if (language === 'typescript') await renameFromUse(page, check);
 	if (language === 'cpp' && existsSync(join(build, 'packs', 'cpp', 'runner.js'))) await testFrameworks(page, check);
+	if (language === 'cpp') {
+		if (existsSync(join(build, 'packs', 'cpp', 'cc-cross.wasm')) && existsSync(join(build, 'packs', 'cpp', 'vm.js'))) await cppTargets(page, check, requests);
+		else console.log('skip cpp: targets, Linux runs and compiler output views (packs/cpp has no cc-cross.wasm or vm.js)');
+	}
 
 	check(errors.length === 0, `no page errors${errors.length ? ': ' + errors.join('; ') : ''}`);
 	await page.close();
@@ -216,6 +223,197 @@ async function testFrameworks(page, check) {
 		const clean = await errors.filter({ hasText: /^0$/ }).waitFor({ timeout: 30_000 }).then(() => true, () => false);
 		check(clean, `clangd resolves the ${framework} headers: ${(await errors.textContent())?.trim()} errors`);
 	}
+}
+
+/** The pack files of the C++ pack among `urls`, as paths under packs/cpp/. */
+function cppPackFiles(urls) {
+	return [...new Set(urls.map((u) => /\/packs\/cpp\/([^?#]*)/.exec(u)?.[1]).filter(Boolean))].sort();
+}
+
+/** Waits for the terminal's run to end; returns its status line and text. */
+async function ended(page, timeout = 300_000) {
+	const status = page.locator('.terminal .status');
+	const done = await status.filter({ hasText: /Exited|Stopped/ }).waitFor({ timeout }).then(() => true, () => false);
+	return { done, status: ((await status.textContent()) ?? '').trim(), shown: (await page.locator('.terminal pre').textContent()) ?? '' };
+}
+
+/** Replaces a project file's text through its model, as an edit. */
+function setText(page, path, text) {
+	return page.evaluate(([path, text]) => globalThis.monaco.editor.getModels().find((m) => m.uri.path === `/workspace/${path}`)?.setValue(text), [path, text]);
+}
+
+/** The text a compiler output view shows (`llvm-ir` or `asm`). */
+function viewText(page, kind) {
+	return page.evaluate((kind) => globalThis.monaco.editor.getModel(globalThis.monaco.Uri.parse(`yukibana-output:/${kind}`))?.getValue() ?? '', kind);
+}
+
+/** Waits until `predicate(text of view kind)` holds; returns whether it did, and the text. */
+async function viewShows(page, kind, predicate, timeout) {
+	const t0 = Date.now();
+	let text = '';
+	while (Date.now() - t0 < timeout) {
+		text = await viewText(page, kind);
+		if (predicate(text)) return { ok: true, text, seconds: (Date.now() - t0) / 1000 };
+		await page.waitForTimeout(250);
+	}
+	return { ok: false, text, seconds: (Date.now() - t0) / 1000 };
+}
+
+
+/**
+ * C++ cross-compilation targets (cpp-targets.ts), Linux runs under QEMU and
+ * the compiler output views. Runs after the default-target checks of the
+ * same page, whose downloads must not include anything of this.
+ */
+async function cppTargets(page, check, requests) {
+	// Four threads, each adding a million to an atomic and, under a mutex, to a plain counter.
+	const THREADS = `#include <atomic>
+#include <cstdio>
+#include <mutex>
+#include <thread>
+#include <vector>
+
+int main() {
+    std::atomic<long> counted{0};
+    long locked = 0;
+    std::mutex mu;
+    std::vector<std::thread> pool;
+    for (int t = 0; t < 4; ++t)
+        pool.emplace_back([&] {
+            for (int i = 0; i < 1000000; ++i) {
+                counted.fetch_add(1, std::memory_order_relaxed);
+                std::lock_guard<std::mutex> guard(mu);
+                ++locked;
+            }
+        });
+    for (auto &t : pool) t.join();
+    std::printf("atomic=%ld mutex=%ld\\n", counted.load(), locked);
+}
+`;
+	const forbidden = ['cc-cross', 'targets/', 'vm.js', 'vm/', 'user/', 'explorer.js', 'demangle'];
+	const before = cppPackFiles(requests);
+	check(!before.some((f) => forbidden.some((x) => f.includes(x))), `editing, Run and Test on WebAssembly fetch nothing of the Linux targets or views (${before.join(', ')})`);
+
+	const picker = page.locator('header .target select');
+	const testButton = page.locator('header button.test');
+	const errorCount = page.locator('footer .counts span[title=Errors]');
+	const warningCount = page.locator('footer .counts span[title=Warnings]');
+	const sample = await modelText(page, 'main.cpp');
+	const flags = await modelText(page, 'compile_flags.txt');
+	const archs = { x86_64: ['x86_64-linux', 'x86_64-linux-musl', '__x86_64__'], aarch64: ['aarch64-linux', 'aarch64-linux-musl', '__aarch64__'], riscv64: ['riscv64-linux', 'riscv64-linux-musl', '__riscv'] };
+
+	for (const [arch, [id, triple, macro]] of Object.entries(archs)) {
+		const from = requests.length;
+		await picker.selectOption(id);
+		const text = (await modelText(page, 'compile_flags.txt')) ?? '';
+		check(text === `--target=${triple}\n${flags}`, `choosing ${arch} puts --target=${triple} first in compile_flags.txt (${JSON.stringify(text)})`);
+		check(await testButton.isDisabled(), `on ${arch}, Test is disabled ("${await testButton.getAttribute('title')}")`);
+
+		// clangd parses for the target: its macro is defined (the #warning proves the file was parsed), the wrong-target #error is not hit.
+		await openFile(page, 'main.cpp');
+		// As one edit, not typed: Enter after a macro name would accept a completion.
+		await page.evaluate((text) => {
+			const editor = globalThis.monaco.editor.getEditors().find((e) => e.getModel()?.uri.path === '/workspace/main.cpp');
+			editor.pushUndoStop();
+			editor.executeEdits('e2e', [{ range: new globalThis.monaco.Range(1, 1, 1, 1), text }]);
+			editor.pushUndoStop();
+			editor.focus();
+		}, `#ifndef ${macro}\n#error wrong target\n#endif\n#ifdef ${macro}\n#warning right target\n#endif\n`);
+		const parsed = await warningCount.filter({ hasNotText: /^0$/ }).waitFor({ timeout: 60_000 }).then(() => true, () => false);
+		const clean = await errorCount.filter({ hasText: /^0$/ }).waitFor({ timeout: 30_000 }).then(() => true, () => false);
+		check(parsed && clean, `clangd parses main.cpp for ${arch}: ${macro} is defined (${(await warningCount.textContent())?.trim()} warnings, ${(await errorCount.textContent())?.trim()} errors)`);
+		for (let i = 0; i < 40 && (await modelText(page, 'main.cpp')) !== sample; i++) await page.keyboard.press('Control+z');
+		check((await modelText(page, 'main.cpp')) === sample, `undo restores main.cpp on ${arch}`);
+
+		await page.locator('header button.run').click();
+		const r = await ended(page);
+		check(r.done && /code 0/.test(r.status) && r.shown.includes('5.000000'), `Run on ${arch} (QEMU, system mode) prints 5.000000 (${r.status}: ${JSON.stringify(r.shown.slice(-300))})`);
+
+		const threads = arch === 'x86_64' ? 4 : 1;
+		await page.locator('header .run-options button.toggle').click();
+		await page.locator('header .run-options select').selectOption(String(threads));
+		await page.keyboard.press('Escape');
+		await setText(page, 'main.cpp', THREADS);
+		await page.locator('header button.run').click();
+		const t = await ended(page, 600_000);
+		check(t.done && /code 0/.test(t.status) && t.shown.includes('atomic=4000000 mutex=4000000'), `4 threads on ${arch} with ${threads} CPU(s) count exactly (${t.status}: ${JSON.stringify(t.shown.slice(-200))})`);
+
+		if (arch === 'aarch64') {
+			await setText(page, 'main.cpp', 'int main() {\n    volatile int *p = nullptr;\n    return *p;\n}\n');
+			await page.locator('header button.run').click();
+			const segv = await ended(page);
+			check(segv.done && /code 139/.test(segv.status) && segv.shown.includes('signal 11'), `a null dereference on aarch64 exits 139 with signal 11 (${segv.status}: ${JSON.stringify(segv.shown.slice(-200))})`);
+		}
+		await setText(page, 'main.cpp', sample);
+		await page.locator('header .run-options button.toggle').click();
+		await page.locator('header .run-options select').selectOption('1');
+		await page.keyboard.press('Escape');
+
+		const files = cppPackFiles(requests.slice(from));
+		const others = Object.keys(archs).filter((a) => a !== arch);
+		const foreign = files.filter((f) => others.some((a) => f.startsWith(`vm/${a}/`) || f.startsWith(`targets/${a}/`) || f.startsWith(`user/${a}/`)));
+		check(foreign.length === 0, `${arch} fetches no file of another architecture (${files.join(', ')})`);
+	}
+
+	// The views, on x86_64.
+	await picker.selectOption('x86_64-linux');
+	await openFile(page, 'main.cpp');
+	await page.locator('header button.view', { hasText: /^IR$/ }).click();
+	const ir = await viewShows(page, 'llvm-ir', (t) => t.includes('target triple = "x86_64-unknown-linux-musl"') && t.includes('define'), 240_000);
+	check(ir.ok && !ir.text.includes('!dbg'), `the LLVM IR view shows main.cpp's IR for x86_64, without !dbg (${ir.seconds.toFixed(1)} s; ${JSON.stringify(ir.text.slice(0, 160))})`);
+	await page.locator('header button.view', { hasText: /^Asm$/ }).click();
+	const asm = await viewShows(page, 'asm', (t) => /^main:/m.test(t) && t.includes('distance(Point const&, Point const&)'), 120_000);
+	check(asm.ok, `the assembly view shows main: and calls distance(Point const&, Point const&), demangled (${asm.seconds.toFixed(1)} s; ${JSON.stringify(asm.text.slice(0, 200))})`);
+	const tabs = await page.locator('.dv-tab .dock-tab').allTextContents();
+	check(tabs.includes('LLVM IR') && tabs.includes('Assembly'), `the views are tabs called LLVM IR and Assembly (${tabs.join(', ')})`);
+
+	await place(page, 'distance(points');
+	const mapped = await page.locator('[data-view="asm"] .yk-mapped').first().waitFor({ timeout: 10_000 }).then(() => true, () => false);
+	check(mapped, `the caret on main.cpp's distance( call lights up its assembly (${await page.locator('[data-view="asm"] .yk-mapped').count()} .yk-mapped)`);
+
+	await setText(page, 'main.cpp', `${sample}\nint extra_function_xyz(int v) { return v * 7; }\n`);
+	const updated = await viewShows(page, 'asm', (t) => t.includes('extra_function_xyz'), 10_000);
+	check(updated.ok, `an edit of main.cpp updates the assembly within 10 s (${updated.seconds.toFixed(1)} s)`);
+
+	await picker.selectOption('aarch64-linux');
+	const a64 = await viewShows(page, 'asm', (t) => /^\s+ret\b/m.test(t) && !t.includes('%rbp'), 120_000);
+	const triple = (await page.locator('[data-view="asm"] .yk-view-triple').textContent().catch(() => '')) ?? '';
+	check(a64.ok && triple === 'aarch64-linux-musl', `switching to aarch64 shows aarch64 assembly (ret) and its triple in the toolbar (${triple})`);
+	await picker.selectOption('wasm32-wasi');
+	const wasm = await viewShows(page, 'asm', (t) => t.includes('end_function'), 120_000);
+	check(wasm.ok, `switching to WebAssembly shows wasm32 assembly with end_function (${wasm.seconds.toFixed(1)} s)`);
+	check(!(await testButton.isDisabled()), 'on WebAssembly, Test is enabled again');
+	await setText(page, 'main.cpp', sample);
+
+	// User mode, experimental.
+	await picker.selectOption('x86_64-linux');
+	await page.locator('header .run-options button.toggle').click();
+	await page.locator('header .run-options input[value="user"]').check();
+	await page.keyboard.press('Escape');
+	await page.locator('header button.run').click();
+	const user = await ended(page);
+	check(user.done && /code 0/.test(user.status) && user.shown.includes('5.000000'), `Run on x86_64 in QEMU's user mode prints 5.000000 (${user.status})`);
+	await page.locator('header .run-options button.toggle').click();
+	await page.locator('header .run-options input[value="system"]').check();
+	await page.keyboard.press('Escape');
+
+	// Stop ends an endless program in the VM, and the page stays responsive.
+	await setText(page, 'main.cpp', 'int main() {\n    volatile unsigned long n = 0;\n    for (;;) ++n;\n}\n');
+	await page.locator('header button.run').click();
+	await page.locator('.terminal .status', { hasText: 'Running' }).waitFor({ timeout: 300_000 }).catch(() => {});
+	await page.waitForTimeout(3000);
+	await page.locator('header button.stop').click();
+	const stopped = await ended(page, 10_000);
+	const t0 = Date.now();
+	const alive = await page.evaluate(() => 1 + 1).then((v) => v === 2);
+	check(stopped.done && /Stopped/.test(stopped.status) && alive && Date.now() - t0 < 2000, `Stop ends an endless loop on x86_64 Linux and the page answers (${stopped.status})`);
+	await setText(page, 'main.cpp', sample);
+
+	// Back to the sample, on WebAssembly.
+	page.once('dialog', (d) => void d.accept());
+	await page.locator('header button', { hasText: 'Reset project' }).click();
+	const reset = await page.waitForFunction(() => globalThis.monaco.editor.getModels().find((m) => m.uri.path === '/workspace/compile_flags.txt')?.getValue().startsWith('-std='), null, { timeout: 15_000 }).then(() => true, () => false);
+	check(reset && (await picker.inputValue()) === 'wasm32-wasi', `Reset project restores the sample on WebAssembly (${await picker.inputValue()})`);
 }
 
 /** Opens a project file from the explorer and waits for its tab. */

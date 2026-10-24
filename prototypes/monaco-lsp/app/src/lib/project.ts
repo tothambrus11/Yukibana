@@ -4,6 +4,7 @@
  * back finds the files as they were left.
  */
 import { isLanguageId, languageOf, type Files, type LanguageId } from './languages';
+import { runOptionsOf, type RunOptions } from './cpp-targets';
 
 /** What is saved for one language. Paths are relative, `/`-separated, without `.` or `..`. */
 export interface Project {
@@ -14,6 +15,12 @@ export interface Project {
 	open: string[];
 	/** The file shown last. */
 	active: string | null;
+	/**
+	 * How Run runs a C++ program built for a Linux target (cpp-targets.ts):
+	 * absent until the user changes one, and then saved with the project.
+	 * Other languages and the WebAssembly target ignore it.
+	 */
+	runOptions?: RunOptions;
 }
 
 /** Every project file lives under this folder, as the servers see it. */
@@ -98,7 +105,11 @@ export function saveLanguage(language: LanguageId): void {
 	}
 }
 
-/** Checks the shape of a stored project; throws naming what is wrong. */
+/**
+ * Checks the shape of a stored project; throws naming what is wrong. Only
+ * the files are worth refusing a project over: a bad folder, tab or run
+ * option is dropped (the run options to their defaults), never thrown.
+ */
 function parseProject(value: unknown): Project {
 	if (typeof value !== 'object' || value === null) throw new Error('not an object');
 	const v = value as Record<string, unknown>;
@@ -117,6 +128,8 @@ function parseProject(value: unknown): Project {
 		folders: strings(v['folders']).filter((f) => !pathProblem(f)),
 		open: strings(v['open']).filter((p) => p in checked),
 		active,
+		// Invalid values become the defaults: run options are not worth losing a project over.
+		...(v['runOptions'] !== undefined ? { runOptions: runOptionsOf(v['runOptions']) } : {}),
 	};
 }
 

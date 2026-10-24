@@ -48,13 +48,15 @@ async function describe(path, hashed) {
 }
 
 // Lazy app files: what Monaco's code imports dynamically (a grammar, a
-// language service's `*Mode.js`) and whatever only those chunks import, plus
-// the language services' workers. Kit's own dynamic imports (the client
-// entry, the page) are part of starting up, so they stay in the shell.
+// language service's `*Mode.js`), what the app's own code imports
+// dynamically from src/lib (the compiler output views and their grammars,
+// fetched when a view first opens), and whatever only those chunks import,
+// plus the language services' workers. Kit's own dynamic imports (the
+// client entry, the page) are part of starting up, so they stay in the shell.
 const startup = new Set();
 const lazyRoots = [];
 for (const [src, chunk] of Object.entries(viteManifest)) {
-	if (chunk.isDynamicEntry && src.includes('node_modules/monaco-editor/')) lazyRoots.push(src);
+	if (chunk.isDynamicEntry && (src.includes('node_modules/monaco-editor/') || src.startsWith('src/lib/'))) lazyRoots.push(src);
 	else if (chunk.isEntry || chunk.isDynamicEntry) startup.add(src);
 }
 const closure = (roots, dynamic) => {

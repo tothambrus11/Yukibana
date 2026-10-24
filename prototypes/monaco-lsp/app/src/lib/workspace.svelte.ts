@@ -6,12 +6,14 @@
  */
 import { monaco } from './monaco';
 import { LanguageClient, type ClientState, type LoadingProgress, type LogLevel } from './lsp/client';
-import { isLanguageId, languageOf, LANGUAGES, packOf, type LanguageId } from './languages';
+import { isLanguageId, languageOf, LANGUAGES, packOf, type ExploreKind, type LanguageId } from './languages';
 import { Runner, type RunMode } from './run.svelte';
 import { Preview } from './preview';
 import { exportProject } from './export';
 import { zip } from './zip';
 import { chooseTestFramework, detectTestFramework, TESTS_DIR, type TestFramework } from './cpp-tests';
+import { DEFAULT_RUN_OPTIONS, targetById, targetOf, withTarget, type CppTargetId, type RunOptions, type TargetChoice } from './cpp-targets';
+import type { Explorer } from './explorer.svelte';
 import { baseName, loadLanguage, loadProject, parentOf, pathOf, pathProblem, ROOT_URI, sampleProject, saveLanguage, saveProject, type Project } from './project';
 
 /** The model URI of a project path. */
@@ -47,7 +49,17 @@ export interface EditorHost {
 	showPreview(): void;
 	/** Closes the Preview panel, if it is open. */
 	hidePreview(): void;
+	/**
+	 * Opens a compiler output view (LLVM IR, assembly) right of the editors,
+	 * or brings it to the front; its panel tells `explorer` it opened.
+	 */
+	showView(kind: ExploreKind): void;
+	/** Closes the compiler output views, if open: the language or project changed. */
+	hideViews(): void;
 }
+
+/** The file that holds a C++ project's flags, its target among them (cpp-targets.ts). */
+const COMPILE_FLAGS = 'compile_flags.txt';
 
 const SAVE_DELAY_MS = 400;
 const MAX_LOG_LINES = 2000;
@@ -69,8 +81,32 @@ export class Workspace {
 	 * none (or the project is not C++).
 	 */
 	testFramework = $state<TestFramework | 'mixed' | null>(null);
-	/** The program run from this project, if any, and the terminal's contents. */
-	readonly runner = new Runner();
+	/**
+	 * A C++ project's target, as its compile_flags.txt says (cpp-targets.ts);
+	 * null when the project is not C++.
+	 */
+	target = $state<TargetChoice | null>(null);
+	/**
+	 * How Run runs a C++ program built for a Linux target; saved with the
+	 * project once changed. The defaults for any other project.
+	 */
+	runOptions = $state<RunOptions>({ ...DEFAULT_RUN_OPTIONS });
+	/**
+	 * The program run from this project, if any, and the terminal's
+	 * contents. The guest kernel's log and the run's timings go to the
+	 * Output panel.
+	 */
+	readonly runner = new Runner({
+		kernel: (line) => this.write('log', `[kernel] ${line}`),
+		mark: (name, ms) => this.write('log', `timing: ${name} ${(ms / 1000).toFixed(2)} s`),
+	});
+	/**
+	 * The compiler output views' client (languages with `explores`), loaded
+	 * with the views the first time one opens: null until then, so the app
+	 * shell carries none of it.
+	 */
+	explorer: Explorer | null = null;
+	private explorerLoad: Promise<Explorer> | null = null;
 	/** A web project's page, shown in the Preview panel; its console goes to the terminal. */
 	readonly preview = new Preview(this.runner);
 
@@ -80,6 +116,8 @@ export class Workspace {
 	private saveTimer: ReturnType<typeof setTimeout> | undefined;
 	private logId = 0;
 	private host: EditorHost | null = null;
+	/** Whether the user chose run options for this project: only then are they saved with it. */
+	private runOptionsChosen = false;
 	/** Bumped by every language switch, so a switch overtaken by a later one is skipped. */
 	private generation = 0;
 	/**
@@ -119,6 +157,7 @@ export class Workspace {
 	resetProject(): Promise<void> {
 		return this.serially(async () => {
 			this.preview.stop();
+			this.closeViews();
 			await this.stopClient();
 			this.disposeModels();
 			this.load(sampleProject(this.language));
@@ -157,8 +196,85 @@ export class Workspace {
 			return;
 		}
 		const files = this.currentFiles();
+		const linux = this.target?.kind === 'target' && this.target.target.runtime === 'linux';
+		if (mode === 'test' && linux) {
+			// The button is disabled; this is the keyboard shortcut. The runner would refuse too.
+			this.write('warning', 'Tests run on the WebAssembly target only, for now: choose WebAssembly (WASI) as the target to run them.');
+			return;
+		}
 		this.host?.showTerminal();
-		this.runner.start(packOf(language), files, entry, mode);
+		this.runner.start(packOf(language), files, entry, mode, this.language === 'cpp' ? { ...this.runOptions } : undefined);
+	}
+
+	/**
+	 * Opens a compiler output view of the active C or C++ source (languages
+	 * with `explores`); does nothing for another language.
+	 */
+	async showView(kind: ExploreKind): Promise<void> {
+		if (!languageOf(this.language).explores?.includes(kind)) return;
+		const generation = this.generation;
+		try {
+			await this.loadExplorer();
+		} catch (e) {
+			this.write('error', `The compiler output views could not be loaded: ${e instanceof Error ? e.message : String(e)}`);
+			return;
+		}
+		// The language changed while the views' code downloaded: the request was for the old one.
+		if (generation === this.generation) this.host?.showView(kind);
+	}
+
+	/** The explorer, loading its code the first time. */
+	private loadExplorer(): Promise<Explorer> {
+		this.explorerLoad ??= import('./explorer.svelte').then(({ Explorer }) => {
+			const explorer = new Explorer({
+				pack: () => {
+					const language = languageOf(this.language);
+					return language.explores?.length ? packOf(language) : null;
+				},
+				files: () => this.currentFiles(),
+			});
+			explorer.activeChanged(this.active);
+			this.explorer = explorer;
+			return explorer;
+		});
+		// A failed download may succeed on the next try.
+		this.explorerLoad.catch(() => (this.explorerLoad = null));
+		return this.explorerLoad;
+	}
+
+	/**
+	 * Puts a C++ project on target `id` (cpp-targets.ts): compile_flags.txt
+	 * is rewritten (or created) as one edit, which Undo takes back, then
+	 * saved; clangd, Run and the views follow the file. The output panel
+	 * says what changed.
+	 */
+	chooseTarget(id: CppTargetId): void {
+		if (this.language !== 'cpp') return;
+		const target = targetById(id);
+		const model = this.models.get(COMPILE_FLAGS);
+		const before = model?.getValue();
+		const after = withTarget(before, id);
+		if (model && after !== before) {
+			model.pushStackElement();
+			model.pushEditOperations([], [{ range: model.getFullModelRange(), text: after }], () => null);
+			model.pushStackElement();
+		} else if (!model && after) {
+			this.addModel(COMPILE_FLAGS, after, true);
+			this.files = [...this.models.keys()].sort();
+			// A new model fires no content change, which is how an edit reaches the open views.
+			this.explorer?.edited();
+		}
+		this.refreshTarget();
+		const how = target.default ? `no --target line in ${COMPILE_FLAGS}` : `--target=${target.triple} in ${COMPILE_FLAGS}`;
+		this.write('info', `Target: ${target.label} (${how}).${target.runtime === 'linux' ? ' Run compiles for Linux and runs the program under QEMU; tests run on WebAssembly only.' : ''}`);
+		this.scheduleSave();
+	}
+
+	/** Changes how Run runs a program built for a Linux target; saved with the project. */
+	setRunOptions(options: Partial<RunOptions>): void {
+		this.runOptions = { ...this.runOptions, ...options };
+		this.runOptionsChosen = true;
+		this.scheduleSave();
 	}
 
 	/**
@@ -244,6 +360,7 @@ export class Workspace {
 	tabsChanged(open: string[], active: string | null): void {
 		this.open = open;
 		this.active = active;
+		this.explorer?.activeChanged(active);
 		this.scheduleSave();
 	}
 
@@ -264,6 +381,7 @@ export class Workspace {
 		this.addModel(path, '', true);
 		this.files = [...this.models.keys()].sort();
 		this.host?.open(path);
+		this.explorer?.edited();
 		this.scheduleSave();
 	}
 
@@ -294,6 +412,7 @@ export class Workspace {
 		this.folders = this.folders.map((f) => (f === from || f.startsWith(from + '/') ? to + f.slice(from.length) : f)).sort();
 		this.files = [...this.models.keys()].sort();
 		for (const p of reopen) this.host?.open(p);
+		this.explorer?.edited();
 		this.scheduleSave();
 	}
 
@@ -303,6 +422,7 @@ export class Workspace {
 		for (const p of doomed) this.removeModel(p);
 		this.folders = this.folders.filter((f) => f !== path && !f.startsWith(path + '/'));
 		this.files = [...this.models.keys()].sort();
+		this.explorer?.edited();
 		this.scheduleSave();
 	}
 
@@ -331,6 +451,8 @@ export class Workspace {
 		for (const [path, text] of Object.entries(project.files)) this.addModel(path, text, false);
 		this.files = [...this.models.keys()].sort();
 		this.folders = [...project.folders].sort();
+		this.runOptions = { ...(project.runOptions ?? DEFAULT_RUN_OPTIONS) };
+		this.runOptionsChosen = project.runOptions !== undefined;
 		this.host?.closeAll();
 		const entry = languageOf(this.language).entry;
 		const open = project.open.length ? project.open : this.models.has(entry) ? [entry] : this.files.slice(0, 1);
@@ -338,6 +460,7 @@ export class Workspace {
 		const active = project.active ?? open[0];
 		if (active) this.host?.open(active);
 		this.refreshTestFramework();
+		this.refreshTarget();
 	}
 
 	private addModel(path: string, text: string, created: boolean): void {
@@ -345,6 +468,7 @@ export class Workspace {
 		model.onDidChangeContent(() => {
 			this.scheduleSave(path);
 			this.preview.changed(path);
+			this.explorer?.edited();
 		});
 		this.models.set(path, model);
 		if (created) this.preview.changed(path);
@@ -375,12 +499,19 @@ export class Workspace {
 		return this.transitions;
 	}
 
+	/** Stops the compiler output views' worker and closes their panels. */
+	private closeViews(): void {
+		this.explorer?.reset();
+		this.host?.hideViews();
+	}
+
 	/** Saves the project, stops its server, and removes its files from the editor. */
 	private async closeProject(): Promise<void> {
 		this.runner.stop(false);
 		this.runner.clear();
 		this.preview.stop();
 		this.host?.hidePreview();
+		this.closeViews();
 		this.flush();
 		await this.stopClient();
 		this.flush(); // edits typed while the server was shutting down
@@ -454,13 +585,19 @@ export class Workspace {
 		this.testFramework = detected.mixed ? 'mixed' : detected.framework;
 	}
 
+	private refreshTarget(): void {
+		this.target = this.language === 'cpp' ? targetOf(this.models.get(COMPILE_FLAGS)?.getValue()) : null;
+	}
+
 	/**
 	 * Saves shortly. `edited` is the file whose text changed, if that is all
 	 * that did: the test framework is then looked at again only when it is
-	 * under tests/, not on every keystroke in any file.
+	 * under tests/, and the target only when it is compile_flags.txt, not on
+	 * every keystroke in any file.
 	 */
 	private scheduleSave(edited?: string): void {
 		if (edited === undefined || edited.startsWith(TESTS_DIR)) this.refreshTestFramework();
+		if (edited === undefined || edited === COMPILE_FLAGS) this.refreshTarget();
 		clearTimeout(this.saveTimer);
 		this.saveTimer = setTimeout(() => this.saveNow(), SAVE_DELAY_MS);
 	}
@@ -468,7 +605,8 @@ export class Workspace {
 	private saveNow(): void {
 		clearTimeout(this.saveTimer);
 		const files = this.currentFiles();
-		saveProject(this.language, { files, folders: this.folders, open: this.open.filter((p) => p in files), active: this.active }, (m) => this.write('error', m));
+		const project = { files, folders: this.folders, open: this.open.filter((p) => p in files), active: this.active, ...(this.runOptionsChosen ? { runOptions: { ...this.runOptions } } : {}) };
+		saveProject(this.language, project, (m) => this.write('error', m));
 	}
 }
 

@@ -1,7 +1,7 @@
 <!--
   The program's terminal: what it printed (errors in red, and the colours
-  the program asked for with ANSI escapes, see ansi.ts), what was typed, and
-  an input line. Enter sends the line; Ctrl+D ends the input.
+  the program asked for with ANSI escapes, see ansi.ts), its system calls
+  when strace is on (dimmed), what was typed, and an input line. Enter sends the line; Ctrl+D ends the input.
 -->
 <script lang="ts">
 	import type { Workspace } from '../workspace.svelte';
@@ -103,6 +103,11 @@
 	}
 	.info {
 		color: var(--gray-3);
+		font-style: italic;
+	}
+	/* System calls (strace on a Linux target): there to read when wanted, not to compete with the output. */
+	.trace {
+		color: var(--gray-4);
 		font-style: italic;
 	}
 	.empty {

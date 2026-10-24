@@ -102,8 +102,18 @@ App to runner, once:
 { type: 'run',
   files: Record<string, string>,  // the project: relative path -> text
   entry: string,                  // the entry file, e.g. "main.py"
-  stdin: SharedArrayBuffer | null }
+  stdin: SharedArrayBuffer | null,
+  options?: { emulation: 'system' | 'user'; cpus: 1 | 2 | 4; strace: boolean } }
 ```
+
+`options` are how a program is emulated, for a runner that runs it in an
+emulator. The app sends them for C and C++ projects only (the project's
+Run options, saved with it; `app/src/lib/cpp-targets.ts`), and the C++
+runner uses them only for a Linux target (`--target=` in
+`compile_flags.txt`, packs/cpp/README.md): `system` runs the program in
+Linux under QEMU's system emulation with `cpus` CPUs, `user` under QEMU's
+user mode (one CPU), and `strace` traces its system calls. Absent, they
+are `system`, 1, `false`. A runner with no use for them ignores them.
 
 A runner that can also run the project's tests takes the same message with
 `type: 'test'` (the app offers Test for languages with `tests: true` in
@@ -140,6 +150,29 @@ Runner to app, any number of times:
                                        // after printing them to stderr.
 ```
 
+And, optionally (an app ignores message types it does not know, so a
+runner may send these to an app that does not show them):
+
+```ts
+{ type: 'trace', text: string }              // the program's system calls (strace), shown dimmed
+                                             // in the terminal, between its output
+{ type: 'kernel', text: string }             // an emulated machine's console: the guest kernel's
+                                             // log and the emulator's own messages; the app writes
+                                             // it to the Output panel a line at a time, as
+                                             // "[kernel] <line>"
+{ type: 'mark', name: string, ms: number }   // a timing, ms since the run message arrived; the app
+                                             // writes "timing: <name> <seconds> s" to the Output
+                                             // panel. The C++ runner's names: compiled, linked,
+                                             // vm-loaded, exec, first-stdout, exit
+```
+
+A program that ends by a signal exits with 128 + the signal's number (139
+for SIGSEGV), after "Terminated by signal 11 (SIGSEGV)" on stderr; an
+emulated machine that fails exits 1, after saying on stderr that the
+guest kernel's log is in the Output panel. The app adds no note of its
+own to a non-zero code: the guest kernel may print messages
+while a program that exits 5 on purpose runs fine.
+
 ## Standard input
 
 The page is cross-origin isolated, so the app passes a `SharedArrayBuffer`
@@ -165,6 +198,17 @@ The app writes the data, then stores 2 (or 3 for Ctrl-D) in `state` and
 calls `Atomics.notify`. A runner must flush its stdout before waiting, so a
 prompt printed without a newline is visible.
 
+A runner that cannot see when its program reads (the C++ runner on a Linux
+target: the guest kernel takes input whenever it arrives and holds it until
+the program reads) streams input instead. It posts
+`{ type: 'stdin', streaming: true }`, waits without blocking its thread
+(`Atomics.waitAsync`, or polling), and after each answer stores 1 and asks
+again, for the whole run. The app answers it exactly as above, with the
+next line typed as soon as there is one, but does not show the program as
+waiting for input or move the focus to the input line: it may be busy, not
+reading. A phase message does not cancel an outstanding request of either
+kind.
+
 ## Requirements
 
 * The same as for servers: everything from `/packs/<id>/`, small,
@@ -176,4 +220,61 @@ prompt printed without a newline is visible.
   project compiled and linked), `main.swift`, `Main.scala` (`@main` or
   `object Main { def main }`).
 * A program that runs forever must be stoppable: the app terminates the
-  worker, so a runner must not depend on finishing cleanly.
+  worker, so a runner must not depend on finishing cleanly. Workers the
+  runner starts (an emulator's threads) end with it.
+
+# Showing compiler output (optional)
+
+A pack whose language compiles to something worth reading may show it, as
+Compiler Explorer does: the app's **IR** and **Asm** buttons (and the
+editor's "Show LLVM IR" and "Show Assembly" commands) open read-only
+panels with the LLVM IR or the assembly of the active source file, next
+to the editors. The app offers them for languages with `explores` in
+`app/src/lib/languages.ts` (`explores: ['llvm-ir', 'asm']` for C and
+C++), and starts the pack's third worker, `app/static/packs/<id>/explorer.js`
+(a module worker), the first time a panel opens; it is stopped when the
+language changes or the project is reset. Nothing of it is downloaded
+before.
+
+App to explorer, any number of times:
+
+```ts
+{ type: 'emit', id: number,           // increases with every request
+  emit: 'llvm-ir' | 'asm',
+  files: Record<string, string>,      // the project, as for a run
+  path: string,                       // the source to compile: a project path
+  options: { demangle: boolean;       // demangled symbols
+             intel: boolean;          // x86-64 assembly in Intel syntax
+             directives: boolean;     // assembler directives and unused labels kept
+             library: boolean } }     // functions only from headers outside the project kept
+```
+
+The app asks when a panel opens, when the active editor shows another
+source (a header keeps the source shown before), when an option changes,
+and 500 ms after the last edit of any project file, and only for a panel
+that is in front: a panel behind another tab asks when it comes back. The
+options start as `{demangle: true, intel: false, directives: false,
+library: false}` for assembly and with `demangle: false` for IR.
+
+Explorer to app:
+
+```ts
+{ type: 'loading', label, loaded, total }           // a download, as for a runner
+{ type: 'result', id, emit, ok: true,
+  text: string,                                     // the output, filtered
+  lines: ({ file: string; line: number } | null)[], // per line of text: its source line
+  target: string,                                   // the target's id (C/C++: cpp-targets.ts)
+  triple: string, flags: string[],                  // what the toolbar shows: the triple, clang's arguments
+  ms: number }                                      // how long the compile took
+{ type: 'result', id, emit, ok: false,
+  error: string,                                    // the compiler's messages, project-relative paths
+  target: string | null, ms: number }
+```
+
+Guarantees: `lines.length` is the number of lines of `text`; a `file` is
+a project path, or the path the compiler printed for a header outside the
+project; a request that a newer one of the same `emit` replaced may get no
+answer, and the app keeps only the answer to the newest `id` of each. The
+app maps the caret both ways with `lines` (the source line's output lines
+are highlighted, and the output line's source line), and Ctrl/Cmd+click on
+an output line opens its source line.

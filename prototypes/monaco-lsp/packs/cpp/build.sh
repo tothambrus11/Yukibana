@@ -8,7 +8,10 @@
 #   sysroot.tar.gz  musl and libc++ headers, clang's freestanding headers,
 #                   GoogleTest's, Catch2's and doctest's headers
 #
-# and then, through build-runner.sh, what runs a project (README, "Running"):
+# then the Linux targets' compiler and libraries (build-cross.sh,
+# build-targets.sh; README, "Targets") and the demangler (build-demangle.sh;
+# README, "Compiler output views"), and then, through build-runner.sh, what
+# runs a project (README, "Running"):
 #
 #   runner.js            the module Worker the app starts on Run
 #   cc.js, cc.wasm       clang 21.1.8 + wasm-ld, one binary, WebAssembly only
@@ -16,6 +19,11 @@
 #   gtest.tar            GoogleTest's libraries, fetched by runner.js for tests
 #   catch2.tar           Catch2's libraries, the same for tests that use Catch2
 #   doctest.tar          doctest's implementation and main, for doctest's tests
+#   explorer.js          the compiler output views' worker (LLVM IR, assembly)
+#   cc-cross.js, .wasm   clang 21.1.8 + ld.lld (ELF), x86_64/aarch64/riscv64 Linux
+#   runner-linux.js      linking and running for a Linux target (with vm.js)
+#   targets/<arch>/      include.tar, lib.tar: a Linux target's musl and LLVM runtimes
+#   demangle.js, .wasm   llvm::demangle, for the views
 #
 # Idempotent: each step is skipped when its output is in the cache
 # ($PACK_CACHE/cpp, default ~/.cache/yukibana-packs/cpp). Needs a Linux host
@@ -187,7 +195,9 @@ step "pack"
 cp build-wasm/bin/clangd.wasm "$OUT/clangd.wasm"
 cp build-wasm/bin/clangd.js "$OUT/clangd.js"
 (cd "$HERE" && [ -d node_modules/esbuild ] || npm ci --no-audit --no-fund >/dev/null)
-"$HERE/node_modules/.bin/esbuild" "$HERE/src/server.js" --outfile="$OUT/server.js" --format=esm --minify \
+# Bundled: it imports src/targets.js (and its targets.json), for the Linux
+# targets' headers; clangd.js stays a file of its own.
+"$HERE/node_modules/.bin/esbuild" "$HERE/src/server.js" --bundle --external:./clangd.js --outfile="$OUT/server.js" --format=esm --minify \
   --target=es2022 --define:CLANGD_WASM_SIZE="$(stat -c %s "$OUT/clangd.wasm")" \
   --define:SYSROOT_SIZE="$(stat -c %s "$OUT/sysroot.tar.gz")" --log-level=warning
 cp "$SRC/clang-tools-extra/clangd/../LICENSE.TXT" "$OUT/LICENSE-llvm.txt" 2>/dev/null || cp "$SRC/llvm/LICENSE.TXT" "$OUT/LICENSE-llvm.txt"
@@ -195,6 +205,19 @@ cp "musl-$MUSL_VERSION/COPYRIGHT" "$OUT/LICENSE-musl.txt"
 node "$HERE/compress.mjs" "$OUT/server.js" "$OUT/clangd.js" "$OUT/clangd.wasm"
 ls -la "$OUT"
 
-step "runner (clang + wasm-ld, WASI sysroot, runner.js)"
+step "Linux targets: cc-cross (clang + ld.lld), per-target headers and libraries"
+# README, "Targets". Before the runner step, whose pack-runner.sh bundles
+# runner.js and explorer.js with these files' sizes and copies cc-cross.
+"$HERE/build-cross.sh"
+"$HERE/build-targets.sh"
+
+step "demangler for the compiler output views"
+"$HERE/build-demangle.sh"
+
+step "runner (clang + wasm-ld, WASI sysroot, runner.js, explorer.js)"
 # A separate script so it can run on its own; see README, "Running".
 "$HERE/build-runner.sh"
+
+# Running a Linux target's program: QEMU-Wasm, the emulator's build
+# (vm/README.md), when it is there.
+if [ -x "$HERE/build-vm.sh" ]; then "$HERE/build-vm.sh"; fi

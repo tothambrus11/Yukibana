@@ -15,6 +15,7 @@
 import type { Files, Language, LanguageId } from './languages';
 // With its extension: tests/export.mjs runs this file under Node's type stripping.
 import { detectTestFramework, withoutComments, TEST_FRAMEWORKS, type TestFramework } from './cpp-tests.ts';
+import { targetOf, type CppTarget } from './cpp-targets.ts';
 
 /** What a download contains. */
 export interface ExportedProject {
@@ -152,6 +153,13 @@ interface Flags {
 	definitions: string[];
 	/** Everything else, in order: warnings, `-f` options, optimisation. */
 	options: string[];
+	/**
+	 * The last target flag's value (`--target=X`, `-target X`, and the
+	 * spellings clang refuses, `-target=X` and `--target X`), or null. Never
+	 * an option: CMake builds for the machine it runs on, or for the target
+	 * of a toolchain file, not for whatever the browser built for.
+	 */
+	target: string | null;
 }
 
 /** C++ standard aliases clang accepts, by CMake's name for them. */
@@ -161,10 +169,10 @@ const C_ALIASES: Record<string, string> = { '89': '90', '9x': '99', '1x': '11', 
 /**
  * compile_flags.txt, one argument per line as clangd reads it (a `-I` whose
  * directory is on the next line included). A `-std=` CMake cannot name is
- * kept as a plain option.
+ * kept as a plain option; a target flag is set apart (`target`).
  */
 export function parseCompileFlags(text: string): Flags {
-	const flags: Flags = { cxx: null, c: null, includes: [], definitions: [], options: [] };
+	const flags: Flags = { cxx: null, c: null, includes: [], definitions: [], options: [], target: null };
 	const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 	for (let i = 0; i < lines.length; i++) {
 		const flag = lines[i]!;
@@ -174,11 +182,28 @@ export function parseCompileFlags(text: string): Flags {
 		else if (c && /^\d+$/.test(C_ALIASES[c[2]!] ?? c[2]!)) flags.c = { standard: C_ALIASES[c[2]!] ?? c[2]!, extensions: c[1] === 'gnu' };
 		else if (flag === '-I' && i + 1 < lines.length) flags.includes.push(lines[++i]!);
 		else if (flag.startsWith('-I')) flags.includes.push(flag.slice(2));
+		else if (flag === '-target' || flag === '--target') flags.target = lines[++i] ?? '';
+		else if (flag.startsWith('--target=') || flag.startsWith('-target=')) flags.target = flag.slice(flag.indexOf('=') + 1);
 		else if (flag === '-D' && i + 1 < lines.length) flags.definitions.push(lines[++i]!);
 		else if (flag.startsWith('-D')) flags.definitions.push(flag.slice(2));
 		else flags.options.push(flag);
 	}
 	return flags;
+}
+
+/**
+ * The CMakeLists.txt comment for a project the browser builds for a Linux
+ * target: CMake builds natively, and what cross compiling would take.
+ * Nothing for the default target.
+ */
+function crossNote(target: CppTarget | null, languages: readonly string[]): string[] {
+	if (!target) return [];
+	const variables = languages.map((l) => `CMAKE_${l}_COMPILER_TARGET=${target.triple}`).join(' and ');
+	return [
+		`# In the browser, this project is built for ${target.triple} (the --target line of compile_flags.txt).`,
+		'# CMake builds for the machine it runs on. To cross compile, configure with a toolchain file',
+		`# that sets ${variables} and a musl sysroot (CMAKE_SYSROOT).`,
+	];
 }
 
 /** A CMake quoted argument: `"` `\` `$` and `;` escaped, so a path is one argument, verbatim. */
@@ -199,6 +224,16 @@ function cmakeDir(dir: string): string {
 }
 
 /**
+ * The Linux target compile_flags.txt puts the project on (cpp-targets.ts),
+ * or null for the default target (WebAssembly) and for a triple the browser
+ * does not know.
+ */
+function linuxTarget(files: Files): CppTarget | null {
+	const choice = targetOf(files['compile_flags.txt']);
+	return choice.kind === 'target' && choice.target.runtime === 'linux' ? choice.target : null;
+}
+
+/**
  * CMakeLists.txt for the project as the C++ pack builds it: one executable,
  * `app`, from every C/C++ source outside tests/; when tests/ has sources, a
  * second one, `app_tests`, from those plus the program's sources without its
@@ -209,7 +244,9 @@ function cmakeDir(dir: string): string {
  * framework itself, so a `-Werror` there does not fail on the framework's code. The options are left
  * out for MSVC, which does not take GCC-style flags. compile_commands.json is
  * written to the build folder for clangd. Without compile_flags.txt the
- * compiler's default standard applies, as it does for clangd.
+ * compiler's default standard applies, as it does for clangd. A target
+ * flag is never passed on: for a Linux target a comment at the top says
+ * what cross compiling would take (crossNote).
  */
 export function cmakeLists(files: Files, entry: string): string {
 	const sources = Object.keys(files).filter((p) => CXX.test(p) || C.test(p)).sort();
@@ -227,6 +264,7 @@ export function cmakeLists(files: Files, entry: string): string {
 		'# Builds the project where it is, with the layout it had in Yukibana Light:',
 		'#   cmake -S . -B build && cmake --build build && ./build/app',
 		...(tests.length ? ['#   ctest --test-dir build --output-on-failure'] : []),
+		...crossNote(linuxTarget(files), languages),
 		'cmake_minimum_required(VERSION 3.16...3.31)',
 		`project(app LANGUAGES ${languages.join(' ')})`,
 		'',
@@ -1049,6 +1087,14 @@ function testSection(files: Files): string {
 	return `${test}\n\n## Mutation testing\n\nStrykerJS ${STRYKER_VERSION}, as Mutate runs it in Yukibana, configured in \`stryker.config.json\` (its tap runner runs each test file in a process of its own):\n\n\`\`\`sh\nnpm run mutate            # npx fetches Stryker the first time\n\`\`\`\n\nThe report is printed and written to \`reports/mutation/mutation.html\`.`;
 }
 
+/** The README's section for a project the browser builds for a Linux target; none for the default target. */
+function crossSection(target: CppTarget | null): string[] {
+	if (!target) return [];
+	return [
+		`## Target\n\nIn Yukibana Light this project is built for ${target.label} (\`${target.triple}\`, the \`--target\` line of \`compile_flags.txt\`) and runs under QEMU. CMake leaves the target out and builds for the machine it runs on. To cross compile, use a toolchain file that sets \`CMAKE_CXX_COMPILER_TARGET=${target.triple}\` (and \`CMAKE_C_COMPILER_TARGET\` for C) with a clang and a musl sysroot for it (\`CMAKE_SYSROOT\`); the program then runs on a ${target.arch} Linux machine, or elsewhere under \`qemu-${target.arch}\`.`,
+	];
+}
+
 /** How to build, run and test with each language's tools, as Markdown sections. */
 function instructions(language: Language, files: Files): string[] {
 	const paths = Object.keys(files);
@@ -1058,6 +1104,7 @@ function instructions(language: Language, files: Files): string[] {
 			return [
 				'## Build and run\n\nWith CMake 3.16 or later and a C++ compiler:\n\n```sh\ncmake -S . -B build\ncmake --build build\n./build/app\n```',
 				...(tests ? [`## Test\n\nThe tests in \`tests/\` use ${{ gtest: `GoogleTest ${GTEST_VERSION}`, doctest: `doctest ${DOCTEST_VERSION}`, catch2: `Catch2 ${CATCH2_VERSION}` }[testFrameworkOf(files)]}, which CMake downloads the first time it configures the build:\n\n\`\`\`sh\nctest --test-dir build --output-on-failure\n\`\`\``] : []),
+				...crossSection(linuxTarget(files)),
 				'## Editors\n\nCLion, Visual Studio and VS Code (with CMake Tools) open the folder as a CMake project. clangd reads `build/compile_commands.json`, which CMake writes, and `compile_flags.txt` for files outside the build.',
 			];
 		}

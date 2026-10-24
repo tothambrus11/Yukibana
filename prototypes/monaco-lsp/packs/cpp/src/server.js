@@ -24,7 +24,16 @@
 //     compile_flags.txt and .clangd on every parse (patched; upstream caches
 //     them for 5 to 30 s), but only reparses open files when told to, so a
 //     change to one of them is followed by a didSave, which reparses every
-//     open file whose command changed.
+//     open file whose command changed;
+//   * a Linux target's headers: when compile_flags.txt names a target
+//     (`--target=aarch64-linux-musl`, src/targets.js), that arch's musl
+//     bits/ headers, targets/<arch>/include.tar, are fetched once and laid
+//     at /usr/include/<multiarch>/bits, where clang's Linux driver looks
+//     before /usr/include (whose bits/ are x86_64's). Messages that arrive
+//     meanwhile wait, in order; then the didSave reparse above applies the
+//     target. The default target fetches nothing more.
+
+import { targetOf } from './targets.js';
 
 /* global CLANGD_WASM_SIZE, SYSROOT_SIZE */
 // Replaced by build.sh with the byte sizes it shipped: a host that serves the
@@ -208,15 +217,68 @@ function mirror(message) {
 /** @type {unknown[] | null} messages that arrive while loading */
 let early = [];
 let failure = null;
+/** @type {unknown[] | null} messages that arrive while a target's headers load */
+let waiting = null;
+/** The arches whose headers are in the file system. An arch whose fetch
+ * failed is not here, so the next change to compile_flags.txt retries it. */
+const targetHeaders = new Set();
+/** How long a target's include.tar may take before clangd goes on without it:
+ * every LSP message waits while it loads. */
+const TARGET_HEADERS_TIMEOUT_MS = 30_000;
 
-function receive(message) {
+/** The arch of the Linux target a didOpen/didChange of compile_flags.txt
+ * names, when its headers are not loaded yet; otherwise null. */
+function newTargetOf({ method, params }) {
+    const doc = params?.textDocument;
+    if (!doc || !/^textDocument\/did(Open|Change)$/.test(method) || pathOf(doc.uri) !== '/workspace/compile_flags.txt') return null;
+    const text = doc.text ?? applyChanges(documents.get(doc.uri) ?? '', params.contentChanges);
+    const arch = targetOf({ 'compile_flags.txt': text }).target?.arch;
+    return arch && !targetHeaders.has(arch) ? arch : null;
+}
+
+/**
+ * Fetches a Linux target's bits/ headers into the file system; never rejects.
+ * Only a success marks the arch loaded. A failure (offline, an HTTP error, no
+ * answer within TARGET_HEADERS_TIMEOUT_MS) is shown to the user, since clangd
+ * then resolves <bits/...> to the default x86_64 copies in /usr/include/bits
+ * and its diagnostics may be wrong for the target, and is retried on the next
+ * change to compile_flags.txt.
+ */
+async function loadTargetHeaders(arch) {
+    const name = `targets/${arch}/include.tar`;
+    try {
+        const body = await download(name, 0, AbortSignal.timeout(TARGET_HEADERS_TIMEOUT_MS));
+        const headers = await unpackSysroot(new Uint8Array(await new Response(body).arrayBuffer()));
+        logMessage(3, `${name}: ${headers} headers`);
+        targetHeaders.add(arch);
+    } catch (error) {
+        const message = `Could not load the ${arch} headers (${name}: ${error?.message ?? error}); diagnostics use x86_64's until compile_flags.txt changes again.`;
+        post({ jsonrpc: '2.0', method: 'window/showMessage', params: { type: 2, message } });
+    }
+}
+
+/** `retried`: the message already waited for its target's headers once, and
+ * is passed on whether or not they loaded. */
+function receive(message, retried = false) {
     if (failure) {
         if (message.id !== undefined && message.method)
             post({ jsonrpc: '2.0', id: message.id, error: { code: -32603, message: failure } });
         return;
     }
-    if (early) {
-        early.push(message);
+    if (early || waiting) {
+        (early ?? waiting).push(message);
+        return;
+    }
+    const arch = retried ? null : newTargetOf(message);
+    if (arch) {
+        waiting = [message];
+        loadTargetHeaders(arch).then(() => {
+            const queued = waiting;
+            waiting = null;
+            // The first is the message that asked for the headers: passed on as
+            // it is, loaded or not, rather than asking again at once.
+            queued.forEach((m, i) => receive(m, i === 0));
+        });
         return;
     }
     mirror(message);
@@ -249,9 +311,10 @@ self.onmessage = ({ data }) => receive(data);
 
 // ---- loading.
 
-/** Fetches a file next to this script as a stream, reporting progress. */
-async function download(name, total) {
-    const response = await fetch(new URL(name, import.meta.url));
+/** Fetches a file next to this script as a stream, reporting progress;
+ * `signal`, when given, aborts the request and the reading of its body. */
+async function download(name, total, signal) {
+    const response = await fetch(new URL(name, import.meta.url), signal ? { signal } : {});
     if (!response.ok || !response.body) throw new Error(`${name}: HTTP ${response.status}`);
     let loaded = 0;
     progress(name, 0, total);
