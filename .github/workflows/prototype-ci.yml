@@ -48,7 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -76,7 +76,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -92,7 +92,7 @@ jobs:
           echo "CHROMIUM=$(node -e "import('playwright-core').then((m) => console.log(m.chromium.executablePath()))")" >> "$GITHUB_ENV"
 
       # The pack's npm cache: its build.sh installs from it.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ${{ env.PACK_CACHE }}/javascript
           key: ci-javascript-${{ hashFiles('prototypes/monaco-lsp/packs/javascript/package-lock.json') }}
