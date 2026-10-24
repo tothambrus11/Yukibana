@@ -24,18 +24,16 @@ on:
   push:
     tags:
       - light-v*
-    # So that a change to this file runs it on the branch it is developed on.
-    branches:
-      - claude/project-thread-3ei4fl
-    paths:
-      - .github/workflows/light-release.yml
 
+# A second run of the same ref waits for the first rather than cancelling
+# it: a run that finishes leaves its caches for the next.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
+  actions: read # the Haskell pack's GHC root file system, another run's artifact
 
 env:
   PACK_CACHE: /home/runner/.cache/yukibana-packs
@@ -136,8 +134,49 @@ jobs:
             light-${{ matrix.pack }}-${{ hashFiles(format('prototypes/monaco-lsp/packs/{0}/**', matrix.pack)) }}-
             light-${{ matrix.pack }}-
 
+      # The Haskell pack's inputs, for either of its build.sh:
+      # - on GHC, it takes the "haskell-ghc-rootfs" artifact of the
+      #   haskell-ghc.yml run it pins (ROOTFS_RUN) from $HASKELL_GHC_ROOTFS;
+      # - on MicroHs, it uses the C++ pack's Emscripten when that is there,
+      #   and its own fallback fetch passes its fetch() the arguments in the
+      #   C++ pack's order (url, sha256, file; its own takes url, file,
+      #   sha256), so on a clean machine it fails its checksum. The same
+      #   emsdk is installed here where it looks first, pinned by the
+      #   values in that build.sh.
+      - name: Haskell's inputs
+        id: haskell
+        if: matrix.pack == 'haskell'
+        run: |
+          run=$(sed -n 's/^ROOTFS_RUN=\([0-9][0-9]*\).*/\1/p' build.sh)
+          echo "rootfs-run=$run" >> "$GITHUB_OUTPUT"
+          [ -z "$run" ] || exit 0
+          E="$PACK_CACHE/cpp/emsdk"
+          eval "$(grep -E '^EMSDK_(VERSION|COMMIT|RELEASE|BINARIES_SHA256|NODE|NODE_SHA256)=' build.sh)"
+          [ "$(cat "$E/upstream/emscripten/emscripten-version.txt" 2>/dev/null)" != "\"$EMSDK_VERSION\"" ] || exit 0
+          rm -rf "$E" && mkdir -p "$(dirname "$E")"
+          git clone --quiet --depth 1 --branch "$EMSDK_VERSION" https://github.com/emscripten-core/emsdk "$E"
+          [ "$(git -C "$E" rev-parse HEAD)" = "$EMSDK_COMMIT" ]
+          mkdir -p "$E/downloads"
+          base=https://storage.googleapis.com/webassembly/emscripten-releases-builds
+          curl -sSfL -o "$E/downloads/$EMSDK_RELEASE-wasm-binaries.tar.xz" "$base/linux/$EMSDK_RELEASE/wasm-binaries.tar.xz"
+          curl -sSfL -o "$E/downloads/$EMSDK_NODE" "$base/deps/$EMSDK_NODE"
+          printf '%s  %s\n' "$EMSDK_BINARIES_SHA256" "$E/downloads/$EMSDK_RELEASE-wasm-binaries.tar.xz" \
+            "$EMSDK_NODE_SHA256" "$E/downloads/$EMSDK_NODE" | sha256sum -c -
+          (cd "$E" && EMSDK_KEEP_DOWNLOADS=1 ./emsdk install "$EMSDK_VERSION" >/dev/null && ./emsdk activate "$EMSDK_VERSION" >/dev/null)
+          rm -rf "$E/downloads"
+
+      - uses: actions/download-artifact@v4
+        if: steps.haskell.outputs.rootfs-run
+        with:
+          name: haskell-ghc-rootfs
+          run-id: ${{ steps.haskell.outputs.rootfs-run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/haskell-ghc-rootfs
+
       - name: Build
         run: ./build.sh
+        env:
+          HASKELL_GHC_ROOTFS: ${{ steps.haskell.outputs.rootfs-run && format('{0}/haskell-ghc-rootfs', runner.temp) || '' }}
 
       - name: Disk and cache usage
         if: always()
