@@ -5,6 +5,7 @@
 | `server.js` + `rust-analyzer.wasm` | **rust-analyzer's IDE crates** (`ra_ap_ide` and friends, **0.0.358**, from crates.io) with a small LSP layer written for this pack (`server/src/lib.rs`), compiled to wasm32-wasip1 with Rust 1.98.0 | diagnostics, completion (with auto-import), hover, signature help, definition, type definition, implementations, references, highlights, outline, rename, quick fixes and assists, semantic tokens, inlay hints |
 | `std-src.tar` | `core`, `alloc` and `std` sources from **rust-src 1.98.0** | what rust-analyzer reads for the standard library: types, completion, docs |
 | `runner.js` + `miri.wasm` + `sysroot.tar` | **Miri**, rustc's MIR interpreter (rustc **1.78.0-dev**), compiled to wasm32-wasip1 by bjorn3 and published by [rubri](https://github.com/LyonSyonII/rubri), with its x86_64-unknown-linux-gnu sysroot | **Run** (stdout/stderr, interactive stdin) and **Test** (`#[test]` in `src/`, and `tests/*.rs`, reported like `cargo test`) |
+| `quickcheck-1.0.3.tar` + `quickcheck-1.0.3-src.tar` | **[quickcheck](https://github.com/BurntSushi/quickcheck) 1.0.3** and its dependencies (rand, rand_core, getrandom, libc, cfg-if) from crates.io, compiled with that Miri, and their sources | **property-based tests**, for a project whose `Cargo.toml` names `quickcheck` (see "Property-based tests"); downloaded only then |
 
 The status bar shows `rust-analyzer (ra_ap_ide, Yukibana) 0.0.358`. This is
 **not the `rust-analyzer` binary**: that program needs threads, a file
@@ -60,8 +61,18 @@ a file, or changes `Cargo.toml`, the way Cargo would:
 - The target is x86_64-unknown-linux-gnu (cfgs and data layout, so hover
   shows real sizes), like the runner's.
 
-Not read from `Cargo.toml`: `[dependencies]` (there is no crates.io here,
-see "What does not work"), features, `[[bin]]` paths, build scripts.
+- If `Cargo.toml` names `quickcheck` under `[dependencies]` or
+  `[dev-dependencies]`, `server.js` downloads `quickcheck-1.0.3-src.tar`
+  and restarts the server with it: quickcheck, rand, rand_core, getrandom,
+  libc and cfg-if become library crates with the features, build-script
+  cfgs and dependencies Cargo resolved for them (`crates.json`, written by
+  `scripts/build-crates.mjs`), and every crate of the project depends on
+  quickcheck (dev-dependencies too: the library is analysed with
+  `cfg(test)`). Diagnostics wait for the download rather than flash an
+  unresolved `use`.
+
+Not read from `Cargo.toml`: other `[dependencies]` (there is no crates.io
+here, see "What does not work"), features, `[[bin]]` paths, build scripts.
 
 ### Why std 1.98 for analysis and 1.78 for running
 
@@ -94,8 +105,8 @@ last word.
 ### What does not work in the editor
 
 - **No formatting.** rustfmt is a separate program and is not in the pack.
-- **No crates.io dependencies.** A `use serde::...` is unresolved in the
-  editor and on Run.
+- **No crates.io dependencies but quickcheck.** A `use serde::...` is
+  unresolved in the editor and on Run.
 - **No procedural macros**, so `#[derive(Serialize)]`-style macros from
   crates would expand to nothing (there are no such crates anyway). The
   standard library's built-in derives (`Debug`, `Clone`, `PartialEq`, ...)
@@ -149,7 +160,7 @@ test panics, the instance dies, and the runner starts a new one that skips
 the tests already done. `#[ignore]` and `#[should_panic]` (with
 `expected`) work; a `#[test]` returning `Result` fails on `Err`. Benchmarks,
 doc tests, test filters and `--nocapture` are not supported. The sample's
-four tests take about 4 s.
+four tests (one a quickcheck property) take about 9 s in `test-run.mjs`.
 
 ### What does not work on Run
 
@@ -169,7 +180,103 @@ four tests take about 4 s.
   as far as it gets.
 - Threads run (Miri schedules them on one thread), but slowly. No network,
   no files outside `/tmp`, no processes.
-- No crates.io dependencies, no build scripts, no proc macros.
+- No crates.io dependencies but quickcheck (below), no build scripts, no
+  proc macros.
+
+### Property-based tests
+
+[quickcheck](https://github.com/BurntSushi/quickcheck) 1.0.3, the
+standard property-based testing crate without procedural macros, is the
+one crates.io package here. A project asks for it as it would with Cargo,
+and the sample does:
+
+```toml
+[dev-dependencies]
+quickcheck = "1"
+```
+
+```rust
+use quickcheck::quickcheck;
+
+quickcheck! {
+    fn distance_is_symmetric(ax: i32, ay: i32, bx: i32, by: i32) -> bool {
+        let a = Point::new(ax as f64, ay as f64);
+        let b = Point::new(bx as f64, by as f64);
+        distance(a, b) == distance(b, a)
+    }
+}
+```
+
+`quickcheck!` (a `macro_rules!` macro) makes each property a `#[test]`
+that tries 100 random inputs and, when one fails, shrinks it and fails
+with the smallest it found:
+
+```
+running 2 tests
+test distance_is_symmetric ... ok
+test norm_stays_under_100 ... FAILED
+
+failures:
+
+---- norm_stays_under_100 stdout ----
+thread 'norm_stays_under_100' panicked at quickcheck-1.0.3/src/tester.rs:165:28:
+[quickcheck] TEST FAILED. Arguments: (100)
+```
+
+How it gets here: `crates/Cargo.toml` asks for `quickcheck = "=1.0.3"`
+without default features (they add env_logger and regex, for
+configuration through environment variables a program here does not have),
+`crates/Cargo.lock` pins it and its dependencies by version and checksum,
+and `scripts/build-crates.mjs` has Cargo resolve the graph and run libc's
+build script (`cargo check --target x86_64-unknown-linux-gnu`), then
+compiles each crate with the same Miri, editions, features and cfgs, to
+metadata with MIR, as the runner compiles a project's library. The runner
+passes `--extern quickcheck=...` to the crates Cargo would give it to:
+`[dependencies]` to all of them, `[dev-dependencies]` to the test crates
+only (so a Run of the sample downloads nothing more). A version
+requirement 1.0.3 does not meet (`quickcheck = "0.9"`) is a warning, and
+1.0.3 is used. Without the declaration `use quickcheck` is `E0432`, as with
+Cargo.
+
+Limits:
+
+- **A property must return `bool` or `TestResult`.** quickcheck finds out
+  that a property failed either from its result or by catching its panic,
+  and panics cannot be caught here (above). A property that panics
+  (`assert!`, an overflow, an index out of bounds) fails its test with that
+  panic and the first failing input is not shrunk or printed.
+- **No `#[quickcheck]` attribute**: it is the `quickcheck_macros` crate, a
+  procedural macro. `quickcheck!` and `quickcheck(f as fn(...) -> bool)`
+  do the same.
+- **Slow**: every case is interpreted. In `test-run.mjs` the sample's
+  Test (four tests, the property among them) takes about 9 s, and a file
+  with a four-`f64` property and a failing one about 6 to 8 s.
+  `QuickCheck::new().tests(20).quickcheck(...)` runs fewer cases; the
+  environment variables quickcheck reads (`QUICKCHECK_TESTS`) are not set
+  here.
+- proptest, the other common crate, was not added. It would probably run
+  (its `prop_assert!` returns an error rather than panicking), but it is
+  three times the dependencies (regex-syntax, bitflags, num-traits,
+  rand_chacha, rand_xorshift, unarray, and rusty-fork and wait-timeout for
+  its default `fork` and `timeout` features, which spawn processes), and it
+  saves failing cases to `proptest-regressions/` files by default. One
+  property-testing crate is enough to have the technique.
+
+### Mutation testing: not available
+
+[cargo-mutants](https://mutants.rs) is the maintained mutation tester for
+Rust. It is a Cargo subcommand that copies the source tree, edits one
+function at a time and runs `cargo build` and `cargo test` as child
+processes for each mutant, timing each against a baseline. None of that
+exists here: there is no Cargo, no process to spawn and no file tree to
+copy; each mutant would be a full compile and test under Miri (the
+sample's tests take seconds, so a few hundred mutants would take tens of
+minutes); and a mutant that panics ends the instance without unwinding.
+[mutagen](https://github.com/llogiq/mutagen) inserts its mutations with
+an attribute procedural macro (`#[mutate]`) and a nightly toolchain, and
+there are no procedural macros here (and it is unmaintained since 2020).
+Writing a mutation runner for this pack would be a new tool, not an
+existing one, which this pack does not do.
 
 ## Alternatives considered
 
@@ -206,8 +313,13 @@ where the server can):
 | `miri.wasm` | 47.2 MB | 15.1 MB | 9.4 MB |
 | `sysroot.tar` | 83.0 MB | 29.7 MB | 20.4 MB |
 | **runner total** | **130 MB** | **44.8 MB** | **29.8 MB** |
+| `quickcheck-1.0.3.tar` (runner, when `Cargo.toml` names quickcheck) | 6.9 MB | 2.6 MB | 1.64 MB |
+| `quickcheck-1.0.3-src.tar` (editor, when `Cargo.toml` names quickcheck) | 5.3 MB | 0.94 MB | 0.47 MB |
 
-The runner's parts are downloaded on the first Run or Test only.
+The runner's parts are downloaded on the first Run or Test only; the
+quickcheck archives only for a project that declares it (the runner's for
+Test when it is a dev-dependency). Most of both is libc (4.9 MB of the
+metadata, 4.4 MB of the sources), which getrandom needs on Linux.
 `sysroot.tar` is the rubri sysroot's rlibs reduced to their `lib.rmeta`
 member (the object code is never used by an interpreter), without
 `proc_macro` and the compiler-internal crates. `std-src.tar` leaves out
@@ -223,6 +335,8 @@ than Linux (`scripts/make-sysroot-src.py`).
 | rust-src (std sources for analysis) | 1.98.0, sha256 `0e977492...870f2bf` | static.rust-lang.org | MIT OR Apache-2.0 |
 | Miri / rustc and its sysroot | 1.78.0-dev (`miri.opt.1718474653.wasm`) | rubri at `00de75bcec3d8cf5156aef2382c738cbfe069986` | MIT OR Apache-2.0 (rubri: MIT) |
 | browser_wasi_shim | 0.4.2 | npm | MIT OR Apache-2.0 |
+| quickcheck | 1.0.3 | crates.io, locked in `crates/Cargo.lock` | Unlicense OR MIT |
+| rand, rand_core, getrandom, libc, cfg-if | 0.8.8, 0.6.4, 0.2.17, 0.2.191, 1.0.5 | crates.io, locked in `crates/Cargo.lock` | MIT OR Apache-2.0 |
 
 Full notices: `LICENSES.txt`, shipped next to the pack's files.
 
@@ -249,7 +363,11 @@ diagnostics, errors and their clearing, completion (members, std,
 auto-import), hover (with std docs and layout), definition, references,
 symbols, signature help, highlights, rename, semantic tokens, inlay hints, a
 quick fix, a new module file and its deletion; then the brotli-served files
-and a renamed package. `test-run.mjs` runs and tests the sample, a failing
-test, stdin (a prompt, then end of file), compile errors (`E0308`, the
+and a renamed package; quickcheck's sources loading because `Cargo.toml`
+names it, hover and completion from it, and `use quickcheck` unresolved
+without the declaration. `test-run.mjs` runs and tests the sample, a failing
+test, a passing and a failing quickcheck property (with its shrunk
+counterexample), quickcheck loaded only when declared, a `[dependencies]`
+entry with a version 1.0.3 does not meet, stdin (a prompt, then end of file), compile errors (`E0308`, the
 borrow checker's `E0382`), a panic, `process::exit`, a project without
 `Cargo.toml`, and an endless loop that is stopped.

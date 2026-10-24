@@ -12,6 +12,9 @@
 #   std-src  core, alloc and std from rust-src 1.98.0 (static.rust-lang.org)
 #   runner   Miri compiled to wasm32-wasip1 and its sysroot, from the rubri
 #            project at a pinned commit (sha256 of every file checked)
+#   crates   quickcheck and its dependencies from crates.io (crates/Cargo.lock
+#            pins versions and checksums), compiled with that Miri for the
+#            runner and packed as sources for the server
 set -euo pipefail
 
 RUST_TOOLCHAIN=1.98.0          # ra_ap_* 0.0.358 needs rustc >= 1.98
@@ -84,15 +87,30 @@ fi
 cp "$CACHE/sysroot.tar" "$OUT/sysroot.tar"
 gunzip -c "$RUBRI/$MIRI_WASM.gz" > "$OUT/miri.wasm"
 
-# 5. The workers, bundled (the runner's WASI file system comes from npm).
+# 4b. The crates.io packages a project may depend on (crates/): Cargo
+#     resolves them and runs their build scripts, Miri compiles them
+#     (scripts/build-crates.mjs). Named after quickcheck's version, the one
+#     a project asks for; rebuilt when the lock file or the script changes.
 [ -d "$HERE/node_modules/esbuild" ] || (cd "$HERE" && npm ci --no-audit --no-fund)
+QUICKCHECK_VERSION="$(awk '/^name = "quickcheck"$/ { getline; gsub(/"/, "", $3); print $3 }' "$HERE/crates/Cargo.lock")"
+CRATES="quickcheck-$QUICKCHECK_VERSION"
+if [ ! -f "$CACHE/$CRATES.tar" ] || [ "$HERE/crates/Cargo.lock" -nt "$CACHE/$CRATES.tar" ] || [ "$HERE/scripts/build-crates.mjs" -nt "$CACHE/$CRATES.tar" ]; then
+    $NICE node "$HERE/scripts/build-crates.mjs" "$RUST_TOOLCHAIN" "$CACHE/crates-target" "$OUT/miri.wasm" "$OUT/sysroot.tar" "$CACHE" "$CRATES"
+fi
+cp "$CACHE/$CRATES.tar" "$CACHE/$CRATES-src.tar" "$OUT/"
+CRATES_DIRECT="{\"quickcheck\":\"$QUICKCHECK_VERSION\"}"
+
+# 5. The workers, bundled (the runner's WASI file system comes from npm).
 size() { stat -c %s "$OUT/$1"; }
 "$HERE/node_modules/.bin/esbuild" "$HERE/src/server.js" --bundle --format=esm --minify --target=es2022 --log-level=warning \
-    --define:SERVER_WASM_SIZE="$(size rust-analyzer.wasm)" --define:STD_SRC_SIZE="$(size std-src.tar)" --outfile="$OUT/server.js"
+    --define:SERVER_WASM_SIZE="$(size rust-analyzer.wasm)" --define:STD_SRC_SIZE="$(size std-src.tar)" \
+    --define:CRATES_SRC_FILE="\"$CRATES-src.tar\"" --define:CRATES_SRC_SIZE="$(size "$CRATES-src.tar")" --define:CRATES_DIRECT="$CRATES_DIRECT" --outfile="$OUT/server.js"
 "$HERE/node_modules/.bin/esbuild" "$HERE/src/runner.js" --bundle --format=esm --minify --target=es2022 --log-level=warning \
-    --loader:.rs=text --define:MIRI_WASM_SIZE="$(size miri.wasm)" --define:SYSROOT_SIZE="$(size sysroot.tar)" --outfile="$OUT/runner.js"
+    --loader:.rs=text --define:MIRI_WASM_SIZE="$(size miri.wasm)" --define:SYSROOT_SIZE="$(size sysroot.tar)" \
+    --define:CRATES_FILE="\"$CRATES.tar\"" --define:CRATES_SIZE="$(size "$CRATES.tar")" --define:CRATES_DIRECT="$CRATES_DIRECT" --outfile="$OUT/runner.js"
 
 # 6. Licences and precompressed siblings.
 cp "$HERE/LICENSES.txt" "$OUT/LICENSES.txt"
-node "$HERE/scripts/compress.mjs" "$OUT/server.js" "$OUT/runner.js" "$OUT/rust-analyzer.wasm" "$OUT/std-src.tar" "$OUT/miri.wasm" "$OUT/sysroot.tar"
+node "$HERE/scripts/compress.mjs" "$OUT/server.js" "$OUT/runner.js" "$OUT/rust-analyzer.wasm" "$OUT/std-src.tar" "$OUT/miri.wasm" "$OUT/sysroot.tar" \
+    "$OUT/$CRATES.tar" "$OUT/$CRATES-src.tar"
 echo "built $(du -sh "$OUT" | cut -f1) into $OUT"

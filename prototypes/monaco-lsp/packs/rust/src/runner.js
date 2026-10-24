@@ -11,6 +11,11 @@
 //   miri.wasm    Miri (rustc 1.78.0-dev, 2024), wasm32-wasip1, from rubri
 //   sysroot.tar  the x86_64-unknown-linux-gnu sysroot's rlibs, reduced to
 //                their metadata (the object code is never used)
+//   quickcheck-<version>.tar
+//                the crates.io packages the pack ships (quickcheck and its
+//                dependencies), compiled to metadata the same way by
+//                scripts/build-crates.mjs; downloaded only for a project
+//                whose Cargo.toml names one (see `crateArgs`)
 //
 // The project is laid out as Cargo lays it out: src/main.rs is the binary,
 // src/lib.rs (if any) a library the binary and the tests use under the
@@ -35,10 +40,15 @@
 import { Directory, Fd, File, PreopenDirectory, WASI, WASIProcExit, wasi as defs } from '@bjorn3/browser_wasi_shim';
 import HARNESS from './harness.rs';
 
-/* global MIRI_WASM_SIZE, SYSROOT_SIZE */
+/* global MIRI_WASM_SIZE, SYSROOT_SIZE, CRATES_FILE, CRATES_SIZE, CRATES_DIRECT */
+/** The crates.io packages' metadata (build.sh), or null in a build without them. */
+const CRATES = typeof CRATES_FILE === 'string' ? CRATES_FILE : null;
+/** The crates a project may depend on, and the version of each that is here. */
+const DIRECT = typeof CRATES_DIRECT === 'object' ? CRATES_DIRECT : {};
 const SIZES = {
     'miri.wasm': typeof MIRI_WASM_SIZE === 'number' ? MIRI_WASM_SIZE : 0,
     'sysroot.tar': typeof SYSROOT_SIZE === 'number' ? SYSROOT_SIZE : 0,
+    ...(CRATES ? { [CRATES]: typeof CRATES_SIZE === 'number' ? CRATES_SIZE : 0 } : {}),
 };
 
 /** The target Miri interprets for: the one the sysroot was built for. */
@@ -133,6 +143,13 @@ function load() {
         return { module, sysroot: tree(untar(new Uint8Array(bytes))) };
     })();
     return toolchain;
+}
+
+let registry = null;
+/** The crates.io packages' metadata, as a directory (lib<crate>.rmeta). */
+function loadCrates() {
+    registry ??= (async () => tree(untar(new Uint8Array(await (await download(CRATES)).arrayBuffer()))))();
+    return registry;
 }
 
 // ---- standard streams
@@ -234,7 +251,7 @@ class Input extends Fd {
  * from its first line on), the panic's own message is not. `stdout`
  * receives the program's output instead of the app when given.
  */
-function miri({ module, sysroot }, args, { project, out, stdin, env = [], stdout = null }) {
+function miri({ module, sysroot }, args, { project, out, deps, stdin, env = [], stdout = null }) {
     let panicked = false;
     let swallow = false;
     const err = lines((line) => {
@@ -249,10 +266,12 @@ function miri({ module, sysroot }, args, { project, out, stdin, env = [], stdout
         new PreopenDirectory('/project', []),
         new PreopenDirectory('/out', []),
         new PreopenDirectory('/tmp', []),
+        new PreopenDirectory('/deps', []),
     ];
     fds[3].dir = sysroot;
     fds[4].dir = project;
     fds[5].dir = out;
+    if (deps) fds[7].dir = deps;
     const wasi = new WASI(['miri', ...args], env, fds);
     const imports = { wasi_snapshot_preview1: wasi.wasiImport };
     // Anything else the module imports (rubri's build declares thread
@@ -285,22 +304,109 @@ function miri({ module, sysroot }, args, { project, out, stdin, env = [], stdout
 
 // ---- the project, as Cargo sees it
 
-/** `[package] name` and `edition` from Cargo.toml (a line-based reading, enough
- * for the keys a package needs; anything else in it is ignored). */
+/**
+ * `[package] name` and `edition` from Cargo.toml, and the crates it names
+ * under `[dependencies]` and `[dev-dependencies]` (`name = "1"`, `name = {
+ * version = "1", ... }` or a `[dependencies.name]` table), each with its
+ * version requirement (null when none is given). A line-based reading,
+ * enough for the keys a package needs; anything else in it is ignored.
+ * Crate names have dashes as underscores, as code names them.
+ */
 function manifest(files) {
     const text = files['Cargo.toml'] ?? '';
     let section = '';
     const values = {};
+    const dependencies = new Map();
+    const devDependencies = new Map();
+    const kinds = { dependencies, 'dev-dependencies': devDependencies };
+    let table = null; // [map, crate] while in [dependencies.<crate>]
     for (const raw of text.split('\n')) {
         const line = raw.replace(/#.*$/, '').trim();
         const header = /^\[([^\]]+)\]$/.exec(line);
-        if (header) section = header[1].trim();
+        if (header) {
+            section = header[1].trim();
+            const t = /^((?:dev-)?dependencies)\.(.+)$/.exec(section);
+            table = t ? [kinds[t[1]], t[2].trim().replace(/^"|"$/g, '').replace(/-/g, '_')] : null;
+            if (table) table[0].set(table[1], null);
+            continue;
+        }
         const kv = /^([A-Za-z_-]+)\s*=\s*"([^"]*)"$/.exec(line);
         if (kv && section === 'package') values[kv[1]] = kv[2];
+        if (kv && table && kv[1] === 'version') table[0].set(table[1], kv[2]);
+        const dep = /^([A-Za-z0-9_"-]+)\s*=\s*(.*)$/.exec(line);
+        if (dep && kinds[section]) {
+            const req = /^"([^"]*)"/.exec(dep[2]) ?? /\bversion\s*=\s*"([^"]*)"/.exec(dep[2]);
+            kinds[section].set(dep[1].replace(/"/g, '').replace(/-/g, '_'), req ? req[1] : null);
+        }
     }
     const name = (values.name || 'app').replace(/-/g, '_');
     const edition = EDITIONS.has(values.edition) ? values.edition : DEFAULT_EDITION;
-    return { name, edition, declared: values.edition };
+    return { name, edition, declared: values.edition, dependencies, devDependencies };
+}
+
+/**
+ * Whether `version` (x.y.z) meets a Cargo version requirement: comma-
+ * separated comparators, each `^` (the default), `~`, `=`, `<`, `<=`, `>`,
+ * `>=` or a wildcard (`1.*`, `*`), by Cargo's rules (a caret allows changes
+ * that keep the leftmost non-zero part). Pre-release requirements are not
+ * understood (false).
+ */
+function satisfies(version, requirement) {
+    const v = version.split('.').map(Number);
+    const cmp = (a, b) => {
+        for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) < (b[i] ?? 0) ? -1 : 1;
+        return 0;
+    };
+    return requirement.split(',').every((raw) => {
+        const m = /^\s*(\^|~|=|<=|>=|<|>)?\s*(\*|\d+)(?:\.(\*|\d+))?(?:\.(\*|\d+))?\s*$/.exec(raw);
+        if (!m) return false;
+        const op = m[1] ?? '^';
+        const parts = [m[2], m[3], m[4]].filter((p) => p !== undefined && p !== '*').map(Number);
+        const wildcard = [m[2], m[3], m[4]].includes('*');
+        const low = [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
+        // The first version past the range a partial or caret requirement allows.
+        const bump = (i) => [...parts.slice(0, i), parts[i] + 1, 0, 0].slice(0, 3);
+        if (wildcard || (op === '=' && parts.length < 3)) {
+            if (parts.length === 0) return true;
+            return cmp(v, low) >= 0 && cmp(v, bump(parts.length - 1)) < 0;
+        }
+        switch (op) {
+            case '=': return cmp(v, low) === 0;
+            case '>': return parts.length === 3 ? cmp(v, low) > 0 : cmp(v, bump(parts.length - 1)) >= 0;
+            case '>=': return cmp(v, low) >= 0;
+            case '<': return cmp(v, low) < 0;
+            case '<=': return parts.length === 3 ? cmp(v, low) <= 0 : cmp(v, bump(parts.length - 1)) < 0;
+            case '~': return cmp(v, low) >= 0 && cmp(v, bump(Math.min(parts.length - 1, 1))) < 0;
+            default: {
+                // ^: up to the next change of the leftmost non-zero part
+                // given (^0.0 and ^0 are partial: the last part given).
+                const lead = parts.findIndex((p) => p !== 0);
+                const at = lead === -1 ? parts.length - 1 : lead;
+                return cmp(v, low) >= 0 && cmp(v, bump(at)) < 0;
+            }
+        }
+    });
+}
+
+/**
+ * The rustc arguments that give a crate the crates.io packages Cargo.toml
+ * asks for, and loads them (only then): `dependencies` for every crate of
+ * the project, `devDependencies` too for test crates, as Cargo does (so a
+ * Run, `test` false, loads nothing for dev-dependencies alone). A
+ * crate that is not here is left to rustc (an unresolved `use` is E0432,
+ * as before), and one whose requirement the version here does not meet
+ * gets a warning and the version here. Returns `{ normal, dev, dir }`.
+ */
+async function crateArgs({ dependencies, devDependencies }, test) {
+    const pick = (deps) => [...deps].filter(([name]) => DIRECT[name] !== undefined);
+    const normal = pick(dependencies);
+    const dev = test ? pick(devDependencies) : [];
+    if (!CRATES || normal.length + dev.length === 0) return { normal: [], dev: [], dir: null };
+    for (const [name, req] of [...normal, ...dev])
+        if (req !== null && !satisfies(DIRECT[name], req))
+            post({ type: 'stderr', text: `warning: ${name} ${DIRECT[name]} is the only version here; Cargo.toml asks for "${req}"\n` });
+    const args = (deps) => deps.flatMap(([name]) => ['--extern', `${name}=/deps/lib${name}.rmeta`]).concat(deps.length ? ['-L', 'dependency=/deps'] : []);
+    return { normal: args(normal), dev: args([...normal, ...dev.filter(([n]) => !dependencies.has(n))]), dir: await loadCrates() };
 }
 
 /** A cargo status line ("   Compiling x"), on stderr. */
@@ -309,23 +415,24 @@ const stem = (path) => path.split('/').pop().replace(/\.rs$/, '').replace(/-/g, 
 
 async function main({ type, files, entry, stdin }) {
     const test = type === 'test';
-    const { name, edition, declared } = manifest(files);
+    const cargo = manifest(files);
+    const { name, edition, declared } = cargo;
     if (declared && !EDITIONS.has(declared))
         post({ type: 'stderr', text: `warning: edition ${declared} is newer than this rustc (1.78); using ${edition}\n` });
     phase('Loading');
-    const tools = await load();
+    const [tools, deps] = await Promise.all([load(), crateArgs(cargo, test)]);
     const project = tree(Object.entries(files).map(([path, text]) => [path, encoder.encode(text)]));
     const out = new Directory([]);
-    const io = { project, out, stdin: new Input(stdin) };
+    const io = { project, out, deps: deps.dir, stdin: new Input(stdin) };
     // Paths in diagnostics and panics as the project names them (src/main.rs).
     const rustc = ['--sysroot', '/sysroot', '--target', TARGET, '--edition', edition, '--color=always', '--remap-path-prefix=/project/='];
     const common = [...rustc, ...MIRI_FLAGS];
     /** Miri as rustc: a crate to metadata with every function's MIR, as
      * cargo-miri builds dependencies. */
-    const library = (crate, path) =>
+    const library = (crate, path, ext = []) =>
         miri(
             tools,
-            ['--crate-type=lib', `--crate-name=${crate}`, '--emit=metadata', '-Zalways-encode-mir', '-o', `/out/lib${crate}.rmeta`, path, ...rustc],
+            ['--crate-type=lib', `--crate-name=${crate}`, '--emit=metadata', '-Zalways-encode-mir', '-o', `/out/lib${crate}.rmeta`, path, ...ext, ...rustc],
             { ...io, env: ['MIRI_BE_RUSTC=target'] },
         ).code;
 
@@ -336,7 +443,7 @@ async function main({ type, files, entry, stdin }) {
     if (lib && (bin || test)) {
         phase('Compiling');
         status('Compiling', `${name} (src/lib.rs)`);
-        const code = library(name, `/project/${lib}`);
+        const code = library(name, `/project/${lib}`, deps.normal);
         if (code !== 0) return code;
         externs.push('--extern', `${name}=/out/lib${name}.rmeta`, '-L', '/out');
     }
@@ -348,7 +455,7 @@ async function main({ type, files, entry, stdin }) {
         }
         phase('Running');
         status('Running', bin);
-        return miri(tools, [`--crate-name=${bin === 'src/main.rs' ? name : stem(bin)}`, `/project/${bin}`, ...externs, ...common], io).code;
+        return miri(tools, [`--crate-name=${bin === 'src/main.rs' ? name : stem(bin)}`, `/project/${bin}`, ...externs, ...deps.normal, ...common], io).code;
     }
 
     // Tests: unit tests of the library and the binary, then each file of
@@ -365,10 +472,10 @@ async function main({ type, files, entry, stdin }) {
         '/out',
     ];
     const targets = [];
-    if (lib) targets.push([`unittests ${lib}`, lib, name, []]);
-    if (bin) targets.push([`unittests ${bin}`, bin, name, externs]);
+    if (lib) targets.push([`unittests ${lib}`, lib, name, deps.dev]);
+    if (bin) targets.push([`unittests ${bin}`, bin, name, [...externs, ...deps.dev]]);
     for (const path of Object.keys(files).sort())
-        if (/^tests\/[^/]+\.rs$/.test(path)) targets.push([path, path, stem(path), externs]);
+        if (/^tests\/[^/]+\.rs$/.test(path)) targets.push([path, path, stem(path), [...externs, ...deps.dev]]);
     if (targets.length === 0) {
         post({ type: 'stderr', text: 'error: no tests: no src/lib.rs, src/main.rs or tests/*.rs\n' });
         return 101;

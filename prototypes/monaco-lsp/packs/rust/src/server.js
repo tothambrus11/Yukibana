@@ -8,6 +8,15 @@
 //                       (completion, hover docs, types). Newer than the
 //                       runner's Miri (1.78), because this rust-analyzer
 //                       only understands a recent std's format_args!
+////   quickcheck-<version>-src.tar
+//                       the sources of the crates.io packages the pack
+//                       ships (quickcheck and its dependencies) and their
+//                       crate graph (crates.json), from
+//                       scripts/build-crates.mjs. Downloaded only once the
+//                       project's Cargo.toml names one of them; the
+//                       instance is then restarted with them (as after a
+//                       crash, below), since rust-analyzer's library files
+//                       are given before the first message.
 //
 // The wasm module is a library with no main loop: this file hands it each
 // JSON-RPC message (yk_message) and, once the client has been quiet for a
@@ -17,10 +26,16 @@
 // standard library and the open documents again, and answers the request
 // that failed with an error, so one bad request does not end the session.
 
-/* global SERVER_WASM_SIZE, STD_SRC_SIZE */
+/* global SERVER_WASM_SIZE, STD_SRC_SIZE, CRATES_SRC_FILE, CRATES_SRC_SIZE, CRATES_DIRECT */
+/** The crates.io packages' sources (build.sh), or null in a build without them. */
+const CRATES_SRC = typeof CRATES_SRC_FILE === 'string' ? CRATES_SRC_FILE : null;
+/** The crates a project may name in Cargo.toml to get them (crates.json's
+ * `direct`; CRATES_DIRECT maps each to its version). */
+const DIRECT = typeof CRATES_DIRECT === 'object' ? Object.keys(CRATES_DIRECT) : [];
 const SIZES = {
     'rust-analyzer.wasm': typeof SERVER_WASM_SIZE === 'number' ? SERVER_WASM_SIZE : 0,
     'std-src.tar': typeof STD_SRC_SIZE === 'number' ? STD_SRC_SIZE : 0,
+    ...(CRATES_SRC ? { [CRATES_SRC]: typeof CRATES_SRC_SIZE === 'number' ? CRATES_SRC_SIZE : 0 } : {}),
 };
 /** How long the client must be quiet before diagnostics are computed. */
 const IDLE_MS = 250;
@@ -124,6 +139,13 @@ function wasi(memory) {
 
 let module = null;
 let sysroot = null;
+/** The crates.io packages' files, [path, bytes], once downloaded. */
+let crates = null;
+/** Set once Cargo.toml names one of them; cleared if the download failed. */
+let cratesRequested = false;
+/** Diagnostics wait while they download, rather than report their `use`
+ * as unresolved for a moment. */
+let cratesPending = false;
 let instance = null;
 /** The client's documents (uri -> text) and its initialize message, to
  * bring a fresh instance up to date after a crash. */
@@ -142,6 +164,10 @@ function start() {
     };
     const output = () => JSON.parse(decoder.decode(new Uint8Array(exports.memory.buffer, exports.yk_output_ptr(), exports.yk_output_len())));
     for (const [path, bytes] of sysroot) exports.yk_sysroot_file(...pass(path), ...pass(decoder.decode(bytes)));
+    for (const [path, bytes] of crates ?? []) {
+        if (path === 'crates.json') exports.yk_crates(...pass(decoder.decode(bytes)));
+        else exports.yk_crate_file(...pass(path), ...pass(decoder.decode(bytes)));
+    }
     instance = {
         message(message) {
             exports.yk_message(...pass(JSON.stringify(message)));
@@ -161,33 +187,87 @@ function call(f) {
         return f(instance);
     } catch (e) {
         log(1, `rust-analyzer stopped (${e instanceof Error ? e.message : String(e)}); restarting it`);
-        try {
-            start();
-            if (initializeMessage) instance.message(initializeMessage);
-            instance.message({ jsonrpc: '2.0', method: 'initialized', params: {} });
-            for (const [uri, text] of documents)
-                instance.message({ jsonrpc: '2.0', method: 'textDocument/didOpen', params: { textDocument: { uri, languageId: 'rust', version: 0, text } } });
-        } catch (again) {
-            log(1, `rust-analyzer could not be restarted: ${again instanceof Error ? again.message : String(again)}`);
-        }
+        restart();
         return null;
     }
+}
+
+/** A fresh instance, brought up to date with the session (after a crash, or
+ * to give it the crates.io packages). The client sees nothing of it but
+ * diagnostics published again. */
+function restart() {
+    try {
+        start();
+        if (initializeMessage) instance.message(initializeMessage);
+        instance.message({ jsonrpc: '2.0', method: 'initialized', params: {} });
+        for (const [uri, text] of documents)
+            instance.message({ jsonrpc: '2.0', method: 'textDocument/didOpen', params: { textDocument: { uri, languageId: 'rust', version: 0, text } } });
+    } catch (again) {
+        log(1, `rust-analyzer could not be restarted: ${again instanceof Error ? again.message : String(again)}`);
+    }
+}
+
+/**
+ * Whether a Cargo.toml names one of `names` under `[dependencies]` or
+ * `[dev-dependencies]`: a line-based reading, the one the server
+ * (`declared` in lib.rs) and the runner make.
+ */
+function declares(manifest, names) {
+    let section = '';
+    for (const raw of manifest.split('\n')) {
+        const line = raw.replace(/#.*$/, '').trim();
+        const header = /^\[([^\]]+)\]$/.exec(line);
+        if (header) {
+            section = header[1].trim();
+            const table = /^(?:dev-)?dependencies\.(.+)$/.exec(section);
+            if (table && names.includes(table[1].trim().replace(/^"|"$/g, '').replace(/-/g, '_'))) return true;
+            continue;
+        }
+        const key = /^([A-Za-z0-9_"-]+)\s*=/.exec(line);
+        if (key && (section === 'dependencies' || section === 'dev-dependencies') && names.includes(key[1].replace(/"/g, '').replace(/-/g, '_')))
+            return true;
+    }
+    return false;
+}
+
+/** Downloads the crates.io packages the first time Cargo.toml names one,
+ * then restarts the instance with them. Until then (and if the download
+ * fails) the project is analysed without them. */
+function wantCrates(uri, text) {
+    if (!CRATES_SRC || cratesRequested || uri !== 'file:///workspace/Cargo.toml' || !declares(text, DIRECT)) return;
+    cratesRequested = cratesPending = true;
+    download(CRATES_SRC)
+        .then((tar) => {
+            crates = untar(tar);
+            restart();
+        })
+        .catch((e) => log(1, `${CRATES_SRC} could not be loaded: ${e instanceof Error ? e.message : String(e)}`))
+        .finally(() => {
+            cratesPending = false;
+            scheduleIdle();
+        });
 }
 
 let idleTimer = 0;
 function scheduleIdle() {
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
+        if (cratesPending) return; // wantCrates schedules it again
         for (const m of call((i) => i.idle()) ?? []) post(m);
     }, IDLE_MS);
 }
 
 function track(message) {
     const doc = message.params?.textDocument;
-    if (message.method === 'textDocument/didOpen') documents.set(doc.uri, doc.text);
-    else if (message.method === 'textDocument/didChange') {
+    if (message.method === 'textDocument/didOpen') {
+        documents.set(doc.uri, doc.text);
+        wantCrates(doc.uri, doc.text);
+    } else if (message.method === 'textDocument/didChange') {
         const last = message.params.contentChanges?.at(-1);
-        if (last && last.range === undefined) documents.set(doc.uri, last.text);
+        if (last && last.range === undefined) {
+            documents.set(doc.uri, last.text);
+            wantCrates(doc.uri, last.text);
+        }
     } else if (message.method === 'textDocument/didClose') documents.delete(doc.uri);
     else if (message.method === 'initialize') initializeMessage = message;
 }

@@ -1,0 +1,24 @@
+# The crates.io packages a project may depend on in the browser, as Cargo
+# resolves them: Cargo.lock pins every version and checksum, and
+# scripts/build-crates.mjs compiles the resolved graph with the runner's
+# Miri (quickcheck-<version>.tar) and packs its sources for rust-analyzer
+# (quickcheck-<version>-src.tar). A project declares the dependency in its
+# own Cargo.toml (`[dev-dependencies] quickcheck = "1"`), as it would for
+# Cargo; see README, "Property-based tests".
+#
+# This package itself is empty: it exists so that `cargo check` resolves
+# the graph, runs its build scripts and reports what it would pass rustc.
+[package]
+name = "yukibana-crates"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# Without the default features (`regex`, `use_logging`): they add
+# env_logger, regex and log for QUICKCHECK_* environment configuration and
+# logging, and a program in the browser has no environment.
+quickcheck = { version = "=1.0.3", default-features = false }

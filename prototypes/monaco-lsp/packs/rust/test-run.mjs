@@ -14,7 +14,10 @@
 // test, a prompt without newline and two lines of stdin, end of input, a
 // type error and a borrow error (rustc's diagnostics, non-zero exit, nothing
 // run), a panic (exit 101), process::exit, and a program that never ends,
-// which the page stops by terminating the worker.
+// which the page stops by terminating the worker. Property-based tests with
+// quickcheck (declared in Cargo.toml): one that holds, one whose shrunk
+// counterexample is reported, the crates' archive fetched only for a project
+// that declares them, and a version requirement it does not meet.
 //
 // Adapted from ../swift/test-run.mjs.
 
@@ -130,6 +133,26 @@ const BORROW_ERROR = {
 const PANIC = { ...MANIFEST, 'src/main.rs': 'fn main() {\n    let v: Vec<i32> = Vec::new();\n    println!("before");\n    println!("{}", v[1]);\n}\n' };
 const EXIT = { ...MANIFEST, 'src/main.rs': 'fn main() {\n    println!("leaving");\n    std::process::exit(3);\n}\n' };
 const FOREVER = { ...MANIFEST, 'src/main.rs': 'fn main() {\n    println!("looping");\n    let mut i: u64 = 0;\n    loop {\n        i = i.wrapping_add(1);\n    }\n}\n' };
+const PROPERTIES = {
+    'Cargo.toml': '[package]\nname = "props"\nversion = "0.1.0"\nedition = "2021"\n\n[dev-dependencies]\nquickcheck = "1"\n',
+    'src/lib.rs': 'pub fn distance(a: (f64, f64), b: (f64, f64)) -> f64 {\n    (a.0 - b.0).hypot(a.1 - b.1)\n}\n',
+    'tests/properties.rs': `use props::distance;
+use quickcheck::{quickcheck, TestResult};
+
+quickcheck! {
+    fn distance_is_symmetric(ax: f64, ay: f64, bx: f64, by: f64) -> TestResult {
+        if [ax, ay, bx, by].iter().any(|v| !v.is_finite()) {
+            return TestResult::discard();
+        }
+        TestResult::from_bool(distance((ax, ay), (bx, by)) == distance((bx, by), (ax, ay)))
+    }
+
+    fn norm_stays_under_100(x: u8) -> bool {
+        distance((x as f64, 0.0), (0.0, 0.0)) < 100.0
+    }
+}
+`,
+};
 const SINGLE = { 'src/main.rs': 'use std::collections::HashMap;\n\nfn main() {\n    let mut m = HashMap::new();\n    for w in "a b a c b a".split(\' \') {\n        *m.entry(w).or_insert(0) += 1;\n    }\n    let mut v: Vec<_> = m.into_iter().collect();\n    v.sort();\n    println!("{v:?}");\n}\n' };
 
 const browser = await chromium.launch({ executablePath: CHROMIUM });
@@ -250,6 +273,34 @@ try {
             /left: "\(1, 2\.5\)"/.test(failing.stdout) && /test result: FAILED\. 2 passed; 1 failed/.test(failing.stdout),
         `code=${failing.code} ${failing.stdout.split('\n').filter((l) => /left|right|test result/.test(l)).join(' | ')}`,
     );
+    check('cargo test: quickcheck, a dev-dependency of the sample, is downloaded for Test (not for Run)',
+        tests.loading['quickcheck-1.0.3.tar'] !== undefined && cold.loading['quickcheck-1.0.3.tar'] === undefined, Object.keys(tests.loading).join(', '));
+
+    // 2b. Property-based tests with quickcheck, a dev-dependency.
+    const props = await run(PROPERTIES, { type: 'test' });
+    const propResults = [...props.stdout.matchAll(/^test (\S+) \.\.\. (ok|FAILED)$/gm)].map((m) => `${m[1]} ${m[2]}`);
+    check(
+        'quickcheck: a property that holds passes, one that does not fails with its shrunk counterexample (100), exit 101',
+        props.code === 101 &&
+            JSON.stringify(propResults) === JSON.stringify(['distance_is_symmetric ok', 'norm_stays_under_100 FAILED']) &&
+            /\[quickcheck\] TEST FAILED\. Arguments: \(100\)/.test(props.stdout) &&
+            /test result: FAILED\. 1 passed; 1 failed/.test(props.stdout),
+        `code=${props.code} in ${props.ms} ms ${JSON.stringify(propResults)} ${props.stdout.split('\n').filter((l) => /quickcheck/.test(l)).join(' | ')}`,
+    );
+    if (props.code !== 101) console.log(plain(props.stderr), props.stdout);
+    const undeclared = await run({ ...PROPERTIES, 'Cargo.toml': MANIFEST['Cargo.toml'].replace('demo', 'props') }, { type: 'test' });
+    check('quickcheck: without the declaration in Cargo.toml it is unresolved (E0432) and not downloaded, as with Cargo',
+        undeclared.code !== 0 && /E0432|E0433/.test(plain(undeclared.stderr)) && /quickcheck/.test(plain(undeclared.stderr)) &&
+            undeclared.loading['quickcheck-1.0.3.tar'] === undefined,
+        `code=${undeclared.code} ${Object.keys(undeclared.loading).join(', ')}`);
+    const old = await run({
+        'Cargo.toml': '[package]\nname = "old"\nedition = "2021"\n\n[dependencies]\nquickcheck = { version = "0.9", default-features = false }\n',
+        'src/main.rs': 'fn main() {\n    let mut g = quickcheck::Gen::new(10);\n    let v: Vec<u8> = quickcheck::Arbitrary::arbitrary(&mut g);\n    println!("{}", v.len() <= 10);\n}\n',
+    });
+    check('quickcheck: a [dependencies] entry reaches the binary; a requirement 1.0.3 does not meet is a warning',
+        old.code === 0 && old.stdout === 'true\n' && /warning: quickcheck 1\.0\.3 is the only version here; Cargo\.toml asks for "0\.9"/.test(old.stderr),
+        `code=${old.code} ${JSON.stringify(old.stdout)} ${plain(old.stderr).split('\n')[0]}`);
+
     const runOfTests = await run(SAMPLE, {});
     check("'run' of the same project runs the program, not its tests", runOfTests.code === 0 && runOfTests.stdout === EXPECTED);
 

@@ -576,7 +576,9 @@ def distance(a: Point, b: Point): Double =
 	{
 		// Cargo's layout: a library (src/lib.rs) the binary (src/main.rs) and
 		// the integration tests (tests/) use under the package's name, which
-		// both the pack's server and its runner read from Cargo.toml.
+		// both the pack's server and its runner read from Cargo.toml. The
+		// tests use quickcheck, a dev-dependency in Cargo.toml, which the pack
+		// ships compiled for its Miri (packs/rust/README.md).
 		id: 'rust',
 		label: 'Rust',
 		monacoLanguages: ['rust'],
@@ -590,6 +592,9 @@ def distance(a: Point, b: Point): Double =
 name = "geometry"
 version = "0.1.0"
 edition = "2021"
+
+[dev-dependencies]
+quickcheck = "1"
 `,
 			'src/main.rs': `use geometry::{distance, Point};
 
@@ -649,13 +654,16 @@ mod tests {
 }
 `,
 			'tests/geometry.rs': `use geometry::{distance, Point};
+use quickcheck::quickcheck;
 
-#[test]
-fn distance_is_symmetric() {
-    let a = Point::new(1.0, 2.0);
-    let b = Point::new(-2.0, 6.0);
-    assert_eq!(distance(a, b), distance(b, a));
-    assert_eq!(distance(a, b), 5.0);
+quickcheck! {
+    // A property: quickcheck tries it on 100 random points and, if one
+    // fails, shrinks it to the simplest failing input it can find.
+    fn distance_is_symmetric(ax: i32, ay: i32, bx: i32, by: i32) -> bool {
+        let a = Point::new(ax as f64, ay as f64);
+        let b = Point::new(bx as f64, by as f64);
+        distance(a, b) == distance(b, a)
+    }
 }
 
 #[test]

@@ -26,6 +26,19 @@ miri.wasm, sysroot.tar
   compiler_builtins) are MIT and/or Apache-2.0 (compiler_builtins also
   carries the LLVM exception).
 
+quickcheck-1.0.3.tar, quickcheck-1.0.3-src.tar
+  quickcheck 1.0.3, https://github.com/BurntSushi/quickcheck, Copyright
+  Andrew Gallant. Unlicense OR MIT (used here under MIT).
+  Its dependencies, from crates.io (versions in packs/rust/crates/Cargo.lock):
+  rand 0.8.8 and rand_core 0.6.4 (https://github.com/rust-random/rand,
+  Copyright the Rand Project Developers and the Rust Project Developers),
+  getrandom 0.2.17 (https://github.com/rust-random/getrandom, Copyright the
+  Rand Project Developers), libc 0.2.191 (https://github.com/rust-lang/libc,
+  Copyright the Rust Project Developers) and cfg-if 1.0.5
+  (https://github.com/rust-lang/cfg-if, Copyright Alex Crichton), each MIT
+  OR Apache-2.0. The .tar holds their compiled metadata, the -src.tar their
+  sources.
+
 runner.js
   includes browser_wasi_shim 0.4.2, https://github.com/bjorn3/browser_wasi_shim,
   Copyright bjorn3 and contributors, MIT OR Apache-2.0.

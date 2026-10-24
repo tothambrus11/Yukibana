@@ -13,9 +13,12 @@
 //    signature help, document highlight, prepare rename and rename across
 //    files, semantic tokens, inlay hints, a quick fix that adds a `use`, a
 //    flyimport completion resolved to its `use`, and a new module file.
+//    The sample's tests use quickcheck (a dev-dependency): its sources are
+//    downloaded because Cargo.toml names it, and it completes and hovers.
 // 2. The same sample served with Content-Encoding (the .br siblings): the
-//    pack loads and reports the same, and a package renamed in Cargo.toml
-//    makes `use geometry::...` an error.
+//    pack loads and reports the same, a package renamed in Cargo.toml
+//    makes `use geometry::...` an error, and a Cargo.toml without the
+//    dev-dependency makes `use quickcheck::...` one.
 //
 //   node test.mjs            (after ./build.sh; needs playwright-core)
 
@@ -224,6 +227,21 @@ try {
         check(`${name} has no diagnostics (std, the library and the modules resolve)`, diags && diags.length === 0, `${show(diags)} ${Date.now() - t} ms`);
     }
 
+    // quickcheck, named in Cargo.toml's [dev-dependencies].
+    const TESTS = SAMPLE['tests/geometry.rs'];
+    const qcLoads = (await lsp.log()).filter((m) => m.method === 'yukibana/loading' && /^quickcheck-[\d.]+-src\.tar$/.test(m.params.label));
+    check('quickcheck\'s sources are downloaded because Cargo.toml names it', qcLoads.some((m) => m.params.loaded === m.params.total && m.params.total > 0),
+        qcLoads.map((m) => `${m.params.label} ${m.params.loaded}/${m.params.total}`).at(-1) ?? 'none');
+    const qcHover = await lsp.request('textDocument/hover', at('tests/geometry.rs', TESTS, 'quickcheck! {', 2));
+    const qcHoverText = qcHover.result?.contents?.value ?? '';
+    check('hover on quickcheck! shows the macro from the quickcheck crate', /macro_rules! quickcheck/.test(qcHoverText) && /quickcheck/.test(qcHoverText), JSON.stringify(qcHoverText.slice(0, 200)));
+    const QC_COMPLETE = TESTS.replace('use quickcheck::quickcheck;', 'use quickcheck::quickcheck;\nfn f() { let _ = quickcheck::TestResult::; }');
+    lsp.notify('textDocument/didChange', { textDocument: { uri: uri('tests/geometry.rs'), version: 2 }, contentChanges: [{ text: QC_COMPLETE }] });
+    const qcItems = await lsp.request('textDocument/completion', { ...at('tests/geometry.rs', QC_COMPLETE, 'TestResult::', 12), context: { triggerKind: 2, triggerCharacter: ':' } });
+    const qcLabels = (qcItems.result?.items ?? qcItems.result ?? []).map((i) => i.label);
+    check('completion after `quickcheck::TestResult::` offers passed, failed and discard', ['passed', 'failed', 'discard'].every((l) => qcLabels.some((x) => x.startsWith(l))), qcLabels.slice(0, 10).join(', '));
+    lsp.notify('textDocument/didChange', { textDocument: { uri: uri('tests/geometry.rs'), version: 3 }, contentChanges: [{ text: TESTS }] });
+
     // Errors.
     let since = (await lsp.log()).length;
     const BROKEN = MAIN.replace('    println!("{}", b.norm());', '    println!("{}", b.norm());\n    let n = no_such_function(a);\n    let = 3;');
@@ -361,6 +379,11 @@ try {
     lsp.notify('textDocument/didChange', { textDocument: { uri: uri('Cargo.toml'), version: 2 }, contentChanges: [{ text: SAMPLE['Cargo.toml'].replace('"geometry"', '"plane"') }] });
     const renamed = await lsp.diagnostics('src/main.rs', (d) => errors(d).length > 0, since);
     check('renaming the package in Cargo.toml makes `use geometry::...` unresolved (the crate is now `plane`)', errors(renamed).some((d) => d.code === 'E0432' && d.range.start.line === 0), show(renamed));
+    const since2 = (await lsp.log()).length;
+    const NO_QC = SAMPLE['Cargo.toml'].replace(/\n\[dev-dependencies\]\nquickcheck = "1"\n/, '\n');
+    lsp.notify('textDocument/didChange', { textDocument: { uri: uri('Cargo.toml'), version: 3 }, contentChanges: [{ text: NO_QC }] });
+    const undeclared = await lsp.diagnostics('tests/geometry.rs', (d) => errors(d).some((e) => e.range.start.line === 1), since2);
+    check('a Cargo.toml without the dev-dependency makes `use quickcheck::...` unresolved, as with Cargo', NO_QC !== SAMPLE['Cargo.toml'] && errors(undeclared).some((d) => d.code === 'E0432' && d.range.start.line === 1), show(undeclared));
     await lsp.finish('session 2');
 }
 } finally {

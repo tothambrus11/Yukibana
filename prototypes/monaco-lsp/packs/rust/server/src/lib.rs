@@ -12,12 +12,14 @@
 //! and converts between the protocol and rust-analyzer's types the way
 //! rust-analyzer's `to_proto`/`from_proto` do, for the subset the app uses.
 //!
-//! The host (server.js) talks to it through four exports: `yk_alloc` for a
+//! The host (server.js) talks to it through these exports: `yk_alloc` for a
 //! buffer to write into, `yk_sysroot_file` for each file of the standard
-//! library's sources (before the first message), `yk_message` for one
-//! JSON-RPC message, and `yk_idle` when the client has been quiet for a
-//! moment, which publishes diagnostics. Each returns a JSON array of
-//! messages for the client, read with `yk_output_ptr` and `yk_output_len`.
+//! library's sources and, when the project depends on the crates.io
+//! packages the pack ships, `yk_crate_file` and `yk_crates` for theirs
+//! (before the first message), `yk_message` for one JSON-RPC message, and
+//! `yk_idle` when the client has been quiet for a moment, which publishes
+//! diagnostics. The last two return a JSON array of messages for the
+//! client, read with `yk_output_ptr` and `yk_output_len`.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -78,6 +80,48 @@ const SYSROOT_CRATES: &[(&str, LangCrateOrigin, &[&str])] = &[
     ("alloc", LangCrateOrigin::Alloc, &["core"]),
     ("std", LangCrateOrigin::Std, &["alloc", "core"]),
 ];
+/// Where the crates.io packages' files live in rust-analyzer's VFS, as
+/// Cargo's registry holds them (`<package>-<version>/src/lib.rs`).
+const REGISTRY: &str = "/registry/";
+
+/// One crate of a crates.io package, as `crates.json` describes it (see
+/// scripts/build-crates.mjs, which writes it from what Cargo resolved).
+struct LibraryCrate {
+    /// `<package>-<version>`, what `deps` refer to.
+    id: String,
+    /// The crate's name in code (`rand_core`).
+    name: String,
+    version: String,
+    edition: Edition,
+    /// Its root file, relative to the archive.
+    root: String,
+    /// cfgs Cargo passes it: features (`feature="small_rng"`) and its
+    /// build script's (`linux_time_bits64`).
+    cfg: Vec<String>,
+    /// (name in code, id) of each crate it depends on.
+    deps: Vec<(String, String)>,
+}
+
+impl LibraryCrate {
+    /// None when a field is missing or of the wrong kind.
+    fn from_json(spec: &Value) -> Option<LibraryCrate> {
+        let text = |key: &str| spec[key].as_str().map(str::to_owned);
+        let edition = match spec["edition"].as_str()? {
+            "2015" => Edition::Edition2015,
+            "2018" => Edition::Edition2018,
+            "2021" => Edition::Edition2021,
+            "2024" => Edition::Edition2024,
+            _ => return None,
+        };
+        let cfg = spec["cfg"].as_array()?.iter().map(|c| c.as_str().map(str::to_owned)).collect::<Option<Vec<_>>>()?;
+        let deps = spec["deps"]
+            .as_array()?
+            .iter()
+            .map(|d| Some((d["name"].as_str()?.to_owned(), d["id"].as_str()?.to_owned())))
+            .collect::<Option<Vec<_>>>()?;
+        Some(LibraryCrate { id: text("id")?, name: text("name")?, version: text("version")?, edition, root: text("root")?, cfg, deps })
+    }
+}
 
 thread_local! {
     static SERVER: RefCell<Server> = RefCell::new(Server::new());
@@ -125,6 +169,27 @@ pub extern "C" fn yk_sysroot_file(path: *mut u8, path_len: usize, text: *mut u8,
     SERVER.with(|s| s.borrow_mut().add_sysroot_file(path, text));
 }
 
+/// One file of the crates.io packages' sources (`quickcheck-<version>-src.tar`,
+/// built by scripts/build-crates.mjs), `path` relative to that archive
+/// (`quickcheck-1.0.3/src/lib.rs`). Only before the first message, with
+/// `yk_crates`.
+#[unsafe(no_mangle)]
+pub extern "C" fn yk_crate_file(path: *mut u8, path_len: usize, text: *mut u8, text_len: usize) {
+    let (path, text) = (take(path, path_len), take(text, text_len));
+    SERVER.with(|s| s.borrow_mut().add_crate_file(path, text));
+}
+
+/// The graph of those packages: the archive's `crates.json`, as
+/// scripts/build-crates.mjs writes it (`{"crates": [...], "direct": [...]}`,
+/// each crate after its dependencies). Only before the first message. A
+/// crate the text does not describe well enough is left out, with a line
+/// in the log at the first message.
+#[unsafe(no_mangle)]
+pub extern "C" fn yk_crates(ptr: *mut u8, len: usize) {
+    let text = take(ptr, len);
+    SERVER.with(|s| s.borrow_mut().set_crates(&text));
+}
+
 /// One JSON-RPC message from the client.
 #[unsafe(no_mangle)]
 pub extern "C" fn yk_message(ptr: *mut u8, len: usize) {
@@ -159,6 +224,15 @@ struct Server {
     /// crate graph takes them.
     sysroot: BTreeMap<String, FileId>,
     sysroot_pending: Vec<(FileId, String)>,
+    /// The crates.io packages' files, by path relative to their archive
+    /// (`quickcheck-1.0.3/src/lib.rs`); their texts wait in `sysroot_pending`.
+    crate_files: BTreeMap<String, FileId>,
+    /// Their crates, each after its dependencies (`yk_crates`).
+    crates: Vec<LibraryCrate>,
+    /// The crates a project may depend on by naming them in Cargo.toml.
+    direct: Vec<String>,
+    /// What was wrong with `yk_crates`'s text, for the log.
+    crate_errors: Vec<String>,
     /// Workspace files by path relative to the root (`src/main.rs`).
     files: BTreeMap<String, FileId>,
     /// Text of the workspace's Cargo.toml, for the package's name and edition.
@@ -188,6 +262,10 @@ impl Server {
             next_file: 0,
             sysroot: BTreeMap::new(),
             sysroot_pending: Vec::new(),
+            crate_files: BTreeMap::new(),
+            crates: Vec::new(),
+            direct: Vec::new(),
+            crate_errors: Vec::new(),
             files: BTreeMap::new(),
             manifest: String::new(),
             graph_dirty: true,
@@ -210,9 +288,35 @@ impl Server {
         self.sysroot_pending.push((id, text));
     }
 
+    fn add_crate_file(&mut self, path: String, text: String) {
+        let id = self.file_id();
+        self.crate_files.insert(path, id);
+        self.sysroot_pending.push((id, text));
+    }
+
+    fn set_crates(&mut self, text: &str) {
+        let value: Value = match serde_json::from_str(text) {
+            Ok(value) => value,
+            Err(e) => return self.crate_errors.push(format!("crates.json: {e}")),
+        };
+        for spec in value["crates"].as_array().into_iter().flatten() {
+            match LibraryCrate::from_json(spec) {
+                Some(c) => self.crates.push(c),
+                None => self.crate_errors.push(format!("crates.json: left out {spec}")),
+            }
+        }
+        self.direct = value["direct"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
+    }
+
     fn handle(&mut self, message: Value) -> Vec<Value> {
         let method = message.get("method").and_then(Value::as_str).unwrap_or("").to_owned();
         let params = message.get("params").cloned().unwrap_or(Value::Null);
+        let mut logged: Vec<Value> = self.crate_errors.drain(..).map(|e| log(1, &e)).collect();
+        logged.extend(self.dispatch(message, method, params));
+        logged
+    }
+
+    fn dispatch(&mut self, message: Value, method: String, params: Value) -> Vec<Value> {
         match message.get("id").cloned() {
             Some(id) if !method.is_empty() => {
                 let answer = if self.shutdown && method != "shutdown" {
@@ -334,13 +438,44 @@ impl Server {
         (name.unwrap_or_else(|| "app".into()).replace('-', "_"), edition)
     }
 
+    /// The crates Cargo.toml names under `[dependencies]` or
+    /// `[dev-dependencies]` (as `name = ...` lines, or `[dependencies.name]`
+    /// tables), with dashes as underscores, read line by line as the runner
+    /// reads them. Both kinds reach every crate of the project here: Cargo
+    /// gives dev-dependencies to the tests only, but rust-analyzer analyses
+    /// the library with `cfg(test)`, so its tests need them too.
+    fn declared(&self) -> Vec<String> {
+        let mut section = String::new();
+        let mut names = Vec::new();
+        for raw in self.manifest.lines() {
+            let line = raw.split('#').next().unwrap_or("").trim();
+            if line.starts_with('[') && line.ends_with(']') {
+                section = line[1..line.len() - 1].trim().to_owned();
+                for table in ["dependencies.", "dev-dependencies."] {
+                    if let Some(name) = section.strip_prefix(table) {
+                        names.push(name.trim().trim_matches('"').replace('-', "_"));
+                    }
+                }
+            } else if section == "dependencies" || section == "dev-dependencies" {
+                if let Some((key, _)) = line.split_once('=') {
+                    names.push(key.trim().trim_matches('"').replace('-', "_"));
+                }
+            }
+        }
+        names
+    }
+
     /// Source roots and the crate graph, as rust-analyzer's project model
     /// builds them for a Cargo package with one library and binaries:
     /// `src/lib.rs` is a library crate named after the package, and
     /// `src/main.rs` (or `main.rs` without it), `src/bin/*.rs` and
     /// `tests/*.rs` are crates that depend on it. Every crate depends on the
     /// standard library's, and the project's are analysed with `cfg(test)`
-    /// on, as rust-analyzer does for workspace members.
+    /// on, as rust-analyzer does for workspace members. The crates.io
+    /// packages the host gave (`yk_crates`) are library crates in a source
+    /// root of their own, with the cfgs and dependencies Cargo resolved
+    /// for them; a project crate depends on those of them that Cargo.toml
+    /// names (`declared`).
     fn rebuild(&mut self) {
         let mut change = ChangeWithProcMacros::default();
         for (id, text) in self.pending.drain(..) {
@@ -363,7 +498,11 @@ impl Server {
         for (path, id) in &self.sysroot {
             library.insert(*id, VfsPath::new_virtual_path(format!("{SYSROOT}{path}")));
         }
-        change.set_roots(vec![SourceRoot::new_local(local), SourceRoot::new_library(library)]);
+        let mut registry = FileSet::default();
+        for (path, id) in &self.crate_files {
+            registry.insert(*id, VfsPath::new_virtual_path(format!("{REGISTRY}{path}")));
+        }
+        change.set_roots(vec![SourceRoot::new_local(local), SourceRoot::new_library(library), SourceRoot::new_library(registry)]);
 
         let mut graph = CrateGraphBuilder::default();
         let cwd = Arc::new(AbsPathBuf::try_from("/workspace").expect("absolute"));
@@ -404,6 +543,58 @@ impl Server {
             lang.insert(*name, id);
         }
 
+        // The crates.io packages, as Cargo builds dependencies: the target's
+        // cfgs, `debug_assertions` (the dev profile), not `test`, and the
+        // features and build-script cfgs Cargo gave them.
+        let mut registry_ids = HashMap::new();
+        for c in &self.crates {
+            let Some(root) = self.crate_files.get(&c.root) else {
+                continue;
+            };
+            let mut cfg = target_cfg.clone();
+            cfg.insert_atom(Symbol::intern("debug_assertions"));
+            for option in &c.cfg {
+                match option.split_once('=') {
+                    Some((key, value)) => {
+                        cfg.insert_key_value(Symbol::intern(key.trim()), Symbol::intern(value.trim().trim_matches('"')))
+                    }
+                    None => cfg.insert_atom(Symbol::intern(option.trim())),
+                }
+            }
+            let id = graph.add_crate_root(
+                *root,
+                c.edition,
+                Some(CrateDisplayName::from_canonical_name(&c.name)),
+                Some(c.version.clone()),
+                cfg,
+                None,
+                Env::default(),
+                CrateOrigin::Library { repo: None, name: Symbol::intern(&c.name) },
+                Vec::new(),
+                false,
+                cwd.clone(),
+                ws.clone(),
+            );
+            for (dep, prelude) in [("core", true), ("alloc", false), ("std", true)] {
+                if let Some(to) = lang.get(dep) {
+                    let _ = graph.add_dep(id, DependencyBuilder::with_prelude(CrateName::new(dep).expect("name"), *to, prelude, true));
+                }
+            }
+            for (name, dep) in &c.deps {
+                if let (Some(to), Ok(name)) = (registry_ids.get(dep), CrateName::new(name)) {
+                    let _ = graph.add_dep(id, DependencyBuilder::new(name, *to));
+                }
+            }
+            registry_ids.insert(c.id.clone(), id);
+        }
+        let declared = self.declared();
+        let wanted: Vec<_> = self
+            .crates
+            .iter()
+            .filter(|c| self.direct.contains(&c.name) && declared.contains(&c.name))
+            .filter_map(|c| Some((CrateName::new(&c.name).ok()?, *registry_ids.get(&c.id)?)))
+            .collect();
+
         let (package, edition) = self.package();
         let mut local_cfg = target_cfg.clone();
         local_cfg.insert_atom(Symbol::intern("test"));
@@ -430,6 +621,9 @@ impl Server {
                         DependencyBuilder::with_prelude(CrateName::new(dep).expect("name"), *to, prelude, true),
                     );
                 }
+            }
+            for (name, to) in &wanted {
+                let _ = graph.add_dep(id, DependencyBuilder::new(name.clone(), *to));
             }
             id
         };

@@ -45,7 +45,8 @@ formatting and semantic highlighting, as far as each language server offers
 them. Run (Ctrl+Enter) compiles and runs the project in a worker, with a
 terminal that can read input. Test (Ctrl+Shift+Enter) runs the project's
 tests in `tests/` (`Tests/` for Swift): pytest (with Hypothesis for
-property-based tests), `node:test` (with fast-check), GoogleTest,
+property-based tests), `node:test` (with fast-check), Rust's `#[test]`
+(with quickcheck), GoogleTest,
 doctest or Catch2 (chosen next to Test), XCTest, or JUnit Jupiter (Java, in
 `src/test/java/`); Scala has no Test yet, and Kotlin neither Run nor Test. Download saves the project as
 `<language>-project.zip` for an IDE: its files as they are, at the same
@@ -71,7 +72,7 @@ no DOM and no npm packages except fast-check, for property-based tests
 | Scala 3 | the Scala 3.7.4 compiler's interactive API, compiled with Scala.js | the same compiler and the Scala.js linker | 2.6 MB | 3.7 MB |
 | C and C++ | clangd 21 (Emscripten, threads) | clang 21 and wasm-ld, WASI | 8.0 MB | 12.2 MB; Test 0.06 to 0.28 MB (the framework's libraries) |
 | Swift | swift-syntax-ls (ours) plus swift-frontend 6.3.3 for types and errors | the same swift-frontend and wasm-ld | 30.2 MB | 8.2 MB |
-| Rust | rust-analyzer's IDE crates (ra_ap_ide 0.0.358) with our LSP layer, std 1.98 sources | Miri 1.78 (rustc's MIR interpreter, not a compiler) | 4.2 MB | 29.8 MB |
+| Rust | rust-analyzer's IDE crates (ra_ap_ide 0.0.358) with our LSP layer, std 1.98 sources | Miri 1.78 (rustc's MIR interpreter, not a compiler), quickcheck 1.0.3 | 4.2 MB; quickcheck sources 0.47 MB when Cargo.toml names it | 29.8 MB; quickcheck 1.6 MB when Cargo.toml names it |
 | PHP | Phpactor 2026.10.07 on PHP 8.4 (php-wasm) | PHP 8.4.25's CLI (php-wasm), PHPUnit 12.5, Eris 1.3 | 7.6 MB | 2 KB (the same php.wasm); Test 0.6 MB, Eris 45 KB when used |
 | Java | javac (OpenJDK 25u) compiled to WebAssembly GC by TeaVM 0.16.0 (teavm-javac), with our language service on its trees | the same javac, then TeaVM linking the program to WebAssembly GC in the browser; JUnit Jupiter 5.14 | 2.0 MB | 2.3 MB (TeaVM's class library) |
 | Kotlin | ours, syntax only, on tree-sitter-kotlin 1.1.0 (web-tree-sitter 0.25) | none: no Kotlin compiler runs in a browser | 0.26 MB | none |
@@ -156,12 +157,17 @@ after weeks without a visit, persistent storage or not.
   driver and child processes (packs/php/README.md).
 * **Rust**: not the rust-analyzer program but its analysis crates, with a
   crate graph built from `Cargo.toml` and `src/`; no crates.io
-  dependencies, no proc macros, no formatting, and no `cargo check`, so
+  dependencies but quickcheck (declared in `Cargo.toml`, for
+  property-based tests whose properties return `bool`: a panic cannot be
+  caught, so a panicking property is not shrunk), no proc macros, no
+  formatting, and no `cargo check`, so
   borrow-check errors appear only on Run. Run interprets the program with
   Miri (rustc 1.78, edition 2021 at most): compile errors are rustc's, but
   it is slow, a panic cannot be caught (`catch_unwind`), there are no
   program arguments, and std APIs newer than 1.78 type check in the editor
   and fail on Run. Tests run like `cargo test` through our own harness.
+  No mutation testing: cargo-mutants runs Cargo as child processes
+  (packs/rust/README.md).
 * **Java**: the real javac (Java 25 language level) for diagnostics and
   every editor feature, but programs link against TeaVM's class library,
   a subset of the JDK's: no files, networking, threads or reflection.
