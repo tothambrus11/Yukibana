@@ -119,6 +119,19 @@ const s4 = await ask(['sig', '/tmp/workspace/Main.hs', '15', '11', 'Point']);
 expect('sig of the constructor Point', s4.found && s4.args?.length === 2, s4);
 const tk = await ask(['tokens', '/tmp/workspace/Main.hs']);
 expect('tokens of Main.hs', Array.isArray(tk) && tk.length >= 5 * 10 && tk.includes('norm') && tk.includes('enumMember') && tk.includes('function'), tk);
+// Call hierarchy, explicit imports, and the modules that export a name.
+const c1 = await ask(['calls', '/tmp/workspace/Geometry.hs', '9', '1']); // norm's binding
+expect('incoming calls of norm', c1.item?.name === 'norm' && c1.incoming?.some((c) => c.from.name === 'main'), c1);
+const c2 = await ask(['calls', '/tmp/workspace/Main.hs', '13', '1']); // main's binding
+expect('outgoing calls of main', c2.item?.name === 'main' && c2.outgoing?.some((c) => c.to.name === 'norm'), c2);
+const im = await ask(['imports', '/tmp/workspace/Main.hs']);
+expect('explicit imports of Main.hs', Array.isArray(im) && im.some((i) => i.module === 'Geometry' && i.items.includes('norm') && i.items.some((x) => x.startsWith('Point'))) && im.some((i) => i.module === 'Control.Monad.State' && i.items.includes('evalState')), im);
+const ex1 = await ask(['exports', 'sortBy']);
+expect('modules exporting sortBy', Array.isArray(ex1) && ex1.some((e) => e.module === 'Data.List'), ex1);
+const ex2 = await ask(['exports', 'Just']);
+expect('modules exporting Just, with its type', Array.isArray(ex2) && ex2.some((e) => e.module === 'Data.Maybe' && e.parent === 'Maybe'), ex2);
+const ex3 = await ask(['exports', 'norm']);
+expect('the project module exporting norm', Array.isArray(ex3) && ex3.some((e) => e.module === 'Geometry' && e.home), ex3);
 if (!first.diagnostics || first.diagnostics.length < 3) {
     console.error('expected several diagnostics');
     process.exitCode = 1;

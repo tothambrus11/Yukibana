@@ -13,6 +13,7 @@ on:
     paths:
       - prototypes/monaco-lsp/packs/haskell/ghc/**
       - '!prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh'
+      - '!prototypes/monaco-lsp/packs/haskell/ghc/*.patch'
       - .github/workflows/haskell-ghc.yml
   workflow_dispatch:
 

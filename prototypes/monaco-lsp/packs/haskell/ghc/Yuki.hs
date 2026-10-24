@@ -10,7 +10,8 @@
 -- once per worker, @yukiRequest@ answers one request at a time. A request is
 -- lines of text (the first names it); an answer is JSON. The language server
 -- (server.js) checks the project with 'check' and asks 'info', 'refs',
--- 'scope', 'sig' and 'tokens' about what that check saw; the runner
+-- 'scope', 'sig', 'tokens', 'calls', 'imports' and 'exports' about what
+-- that check saw; the runner
 -- (runner.js) uses 'run'.
 --
 -- A session is either an editor's (GHC's type checker only, no code: what
@@ -33,7 +34,7 @@ import Data.IORef
 import Data.Either (partitionEithers)
 import Data.List (intercalate, nub, sortOn, stripPrefix)
 import qualified Data.Map.Strict as M
-import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe)
+import Data.Maybe (catMaybes, isJust, isNothing, listToMaybe, mapMaybe)
 import qualified Data.Set as S
 import GHC.IO.Encoding (getLocaleEncoding)
 import qualified GHC.IO.FD as FD
@@ -47,12 +48,15 @@ import Text.Read (readMaybe)
 
 import GHC
 import GHC.Core.ConLike (ConLike (..))
+import GHC.Core.DataCon (dataConTyCon)
+import GHC.Core.TyCon (tyConName)
 import GHC.Data.Bag (bagToList)
 import GHC.Data.FastString (FastString, unpackFS)
 import GHC.Driver.Env (hscInterp, hsc_NC, hsc_units)
 import GHC.Driver.Monad (Session (..), modifyLogger, reflectGhc)
 import GHC.Driver.Ppr (showSDoc)
 import GHC.Driver.Session (gopt_set)
+import GHC.Hs (HsModule (..), ImportDecl (..), ImportDeclQualifiedStyle (..), ImportListInterpretation (..), getLocA)
 import GHC.Hs.Doc (WithHsDocIdentifiers (..))
 import GHC.Hs.DocString (renderHsDocString)
 import GHC.Platform.Ways (Way (WayDyn), addWay)
@@ -64,8 +68,8 @@ import GHC.Tc.Types (TcGblEnv (..))
 import GHC.Types.Error (MessageClass (..))
 import GHC.Types.Name (isInternalName, nameModule_maybe, nameOccName)
 import GHC.Types.Name.Occurrence (isDataOcc, isTcOcc, isTvOcc, occNameString)
-import GHC.Types.Name.Reader (ImpDeclSpec (..), ImportSpec (..), globalRdrEnvElts, gre_imp, gre_lcl, gre_name)
-import GHC.Types.SrcLoc (mkRealSrcLoc, mkRealSrcSpan)
+import GHC.Types.Name.Reader (GlobalRdrElt, ImpDeclSpec (..), ImportSpec (..), Parent (..), globalRdrEnvElts, gre_imp, gre_lcl, gre_name, gre_par)
+import GHC.Types.SrcLoc (containsSpan, mkRealSrcLoc, mkRealSrcSpan)
 import GHC.Iface.Syntax (showToIface)
 import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Tc.Utils.TcType (tcSplitFunTys, tcSplitNestedSigmaTys)
@@ -94,7 +98,11 @@ data State = State
     -- | The .hie file of each module of the last check, by source path.
     stHie :: !(IORef (M.Map FilePath HieFile)),
     -- | The module summaries of the last check, by source path.
-    stSummaries :: !(IORef (M.Map FilePath ModSummary))
+    stSummaries :: !(IORef (M.Map FilePath ModSummary)),
+    -- | What every visible library module exports, by name: made by the
+    -- first 'exports' request (it reads every module's interface) and kept,
+    -- as the libraries do not change.
+    stExports :: !(IORef (Maybe (M.Map String [(String, Name)])))
   }
 
 {-# NOINLINE stateRef #-}
@@ -159,7 +167,7 @@ yukiInit jsLibdir jsMode jsFlags = do
   -- prompt shows before the program reads.
   hSetBuffering stdout (if editor then LineBuffering else NoBuffering)
   writeIORef stateRef . Just
-    =<< State session df editor diags <$> newIORef M.empty <*> newIORef M.empty
+    =<< State session df editor diags <$> newIORef M.empty <*> newIORef M.empty <*> newIORef Nothing
   where
     collect diags cls doc = case cls of
       MCDiagnostic {} -> modifyIORef' diags (renderJson doc :)
@@ -180,6 +188,9 @@ yukiRequest jsReq = do
       ["scope", f, l, c] -> withPos l c (scope st f)
       ["sig", f, l, c, name] -> withPos l c (\line col -> sig st f line col name)
       ["tokens", f] -> tokens st f
+      ["calls", f, l, c] -> withPos l c (calls st f)
+      ["imports", f] -> explicitImports st f
+      ["exports", name] -> exportsOf st name
       ("run" : rest) -> run st rest
       _ -> pure (obj [("failure", str ("unknown request: " ++ unwords (take 1 req)))])
   answer <- case r of
@@ -730,6 +741,235 @@ tokenKind hf thing n d
       _ -> False
     isFunction ty = let (_, _, rho) = tcSplitNestedSigmaTys ty in not (null (fst (tcSplitFunTys rho)))
     hieFunction t = let (_, args, _) = splitHie t in not (null args)
+
+-- * Call hierarchy
+
+-- | A value binding of the last check, as a .hie file records it: the name,
+-- the file, where the name is written at its binding ("sel") and the
+-- whole binding ("span": every equation of a function, its where clause),
+-- and its type as GHC inferred or was told it.
+data Bound = Bound
+  { bName :: !Name,
+    bFile :: !FilePath,
+    bSel :: !RealSrcSpan,
+    bSpan :: !RealSrcSpan,
+    bType :: !String
+  }
+
+-- | Every value binding of the last check's modules, top-level and local
+-- (a where or let function is a caller and a callee of its own, as in
+-- HLS's call hierarchy); not instance methods, whose name is the class's.
+boundValues :: DynFlags -> M.Map FilePath HieFile -> [Bound]
+boundValues df hies =
+  nubOn
+    (\b -> (bFile b, srcSpanStartLine (bSel b), srcSpanStartCol (bSel b)))
+    [ Bound n file (nodeSpan node) whole (maybe "" (\t -> renderHieType df (recoverFullType t (hie_types hf))) (identType d))
+      | (file, hf) <- M.toList hies,
+        ast <- M.elems (getAsts (hie_asts hf)),
+        node <- flattenAst ast,
+        Just ni <- [M.lookup SourceInfo (getSourcedNodeInfo (sourcedNodeInfo node))],
+        (Right n, d) <- M.toList (nodeIdentifiers ni),
+        not (generated n),
+        ValBind RegularBind _ (Just whole) <- S.toList (identInfo d)
+    ]
+
+-- | Where a name is used (written as a value: not its binding, its type
+-- signature or an import or export list), in one file's .hie file.
+usesIn :: HieFile -> (Name -> Bool) -> [(Name, RealSrcSpan)]
+usesIn hf wanted =
+  [ (n, nodeSpan node)
+    | ast <- M.elems (getAsts (hie_asts hf)),
+      node <- flattenAst ast,
+      Just ni <- [M.lookup SourceInfo (getSourcedNodeInfo (sourcedNodeInfo node))],
+      (Right n, d) <- M.toList (nodeIdentifiers ni),
+      wanted n,
+      Use `S.member` identInfo d
+  ]
+
+-- | @calls file line col@: the call hierarchy of the function named at a
+-- position, as HLS's call-hierarchy plugin answers it from .hie files:
+-- {"item": null} when the name is not bound by a value binding of the
+-- project (a library's, a lambda's argument), else "item" (its binding),
+-- "incoming" (each binding whose body uses it, with where: "from",
+-- "ranges") and "outgoing" (each project binding its body uses: "to",
+-- "ranges"). An item is {name, type, span (the whole binding), sel (the
+-- name at its binding)}. A use outside any binding (an instance method's
+-- body) has no caller and is left out.
+calls :: State -> FilePath -> Int -> Int -> IO JsonDoc
+calls st f line col = do
+  hies <- readIORef (stHie st)
+  df <- inGhc st getSessionDynFlags
+  let bs = boundValues df hies
+      named = M.fromListWith (flip (++)) [(bName b, [b]) | b <- bs]
+      inFile = M.fromListWith (++) [(bFile b, [b]) | b <- bs]
+      -- The innermost binding around a use.
+      enclosing file sp =
+        listToMaybe
+          ( sortOn
+              (\b -> (srcSpanEndLine (bSpan b) - srcSpanStartLine (bSpan b), srcSpanEndCol (bSpan b) - srcSpanStartCol (bSpan b)))
+              [b | b <- M.findWithDefault [] file inFile, bSpan b `containsSpan` sp]
+          )
+      target = case M.lookup f hies >>= \hf -> identAt hf line col of
+        Just (_, Right n, _, _) -> M.lookup n named >>= listToMaybe
+        _ -> Nothing
+  pure $ case target of
+    Nothing -> obj [("item", J.JSNull)]
+    Just b ->
+      let byKey = M.fromList [(key c, c) | c <- bs]
+          -- Uses grouped by the binding they are in (its caller or
+          -- callee), in the order they are written.
+          grouped xs =
+            [ (c, sps)
+              | (k, sps) <- M.toList (M.fromListWith (flip (++)) [(key c, [sp]) | (c, sp) <- xs]),
+                Just c <- [M.lookup k byKey]
+            ]
+          incoming =
+            grouped
+              [ (c, sp)
+                | (file, hf) <- M.toList hies,
+                  (_, sp) <- usesIn hf (== bName b),
+                  Just c <- [enclosing file sp]
+              ]
+          outgoing =
+            grouped
+              [ (c, sp)
+                | Just hf <- [M.lookup (bFile b) hies],
+                  (n, sp) <- usesIn hf (`M.member` named),
+                  bSpan b `containsSpan` sp,
+                  Just c <- [M.lookup n named >>= listToMaybe]
+              ]
+       in obj
+            [ ("item", item b),
+              ("incoming", J.JSArray [obj [("from", item c), ("ranges", J.JSArray (map spanJson sps))] | (c, sps) <- incoming]),
+              ("outgoing", J.JSArray [obj [("to", item c), ("ranges", J.JSArray (map spanJson sps))] | (c, sps) <- outgoing])
+            ]
+  where
+    key c = (bFile c, srcSpanStartLine (bSel c), srcSpanStartCol (bSel c))
+    item b =
+      obj
+        [ ("name", str (occNameString (nameOccName (bName b)))),
+          ("type", str (bType b)),
+          ("span", spanJson (bSpan b)),
+          ("sel", spanJson (bSel b))
+        ]
+
+flattenAst :: HieAST a -> [HieAST a]
+flattenAst n = n : concatMap flattenAst (nodeChildren n)
+
+-- * Imports
+
+-- | @imports file@: for each import of the module without an import list
+-- (and not qualified, and not Prelude), the list that would import just
+-- what the module uses from it, as HLS's "make import explicit" code lens
+-- writes it: [{module, span (the import declaration), items}], each item
+-- as it is written in an import list (@sort@, @(<|>)@, @Map@, @Maybe
+-- (Just, Nothing)@). What a module uses is every name its .hie file has
+-- written outside import and export lists; which import brought a name
+-- into scope is GHC's renamer's (each name's import specs). A name that
+-- another import already lists by name is not listed again.
+explicitImports :: State -> FilePath -> IO JsonDoc
+explicitImports st f = do
+  sums <- readIORef (stSummaries st)
+  hie <- lookupHie st f
+  case (M.lookup f sums, hie) of
+    (Just ms, Just hf) -> do
+      r <- try (inGhc st (parseModule ms >>= typecheckModule))
+      case r of
+        Left (_ :: SomeException) -> pure (J.JSArray [])
+        Right tm -> do
+          let decls = hsmodImports (unLoc (pm_parsed_source (tm_parsed_module tm)))
+              used =
+                S.fromList
+                  [ n
+                    | ast <- M.elems (getAsts (hie_asts hf)),
+                      node <- flattenAst ast,
+                      Just ni <- [M.lookup SourceInfo (getSourcedNodeInfo (sourcedNodeInfo node))],
+                      (Right n, d) <- M.toList (nodeIdentifiers ni),
+                      not (any isImportExport (S.toList (identInfo d)))
+                  ]
+              gres = [g | g <- globalRdrEnvElts (tcg_rdr_env (fst (tm_internals_ tm))), gre_name g `S.member` used]
+              listing = [realOf (getLocA d) | d <- decls, Just (Exactly, _) <- [ideclImportList (unLoc d)]]
+              from g = [realOf (is_dloc (is_decl s)) | s <- bagToList (gre_imp g)]
+          pure . J.JSArray $
+            [ obj [("module", str m), ("span", spanJson sp), ("items", J.JSArray (map str (importItems mine)))]
+              | d <- decls,
+                let i = unLoc d
+                    m = moduleNameString (unLoc (ideclName i)),
+                isNothing (ideclImportList i),
+                ideclQualified i == NotQualified,
+                m /= "Prelude",
+                Just sp <- [realOf (getLocA d)],
+                let mine = [g | g <- gres, Just sp `elem` from g, not (any (`elem` listing) (from g))]
+            ]
+    _ -> pure (J.JSArray [])
+  where
+    isImportExport = \case
+      IEThing _ -> True
+      _ -> False
+    realOf = \case
+      RealSrcSpan s _ -> Just s
+      _ -> Nothing
+
+-- | Names as an import list writes them: a constructor, field or method
+-- under its type or class (@Maybe (Just)@, @Foldable (foldl')@), an
+-- operator in parentheses, sorted.
+importItems :: [GlobalRdrElt] -> [String]
+importItems gs =
+  let parentOf g = case gre_par g of
+        ParentIs p -> Just p
+        NoParent -> Nothing
+      tops = nub [gre_name g | g <- gs, Nothing <- [parentOf g]]
+      kids = M.fromListWith (flip (++)) [(p, [gre_name g]) | g <- gs, Just p <- [parentOf g]]
+      item n = case nub (M.findWithDefault [] n kids) of
+        [] -> nameItem n
+        cs -> nameItem n ++ " (" ++ intercalate ", " (sortOn id (map nameItem cs)) ++ ")"
+   in sortOn id (map item (tops ++ [p | p <- M.keys kids, p `notElem` tops]))
+
+-- | A name as an import or export list writes it.
+nameItem :: Name -> String
+nameItem n = case occNameString (nameOccName n) of
+  s@(c : _) | not (c == '_' || c == '\'' || isIdentChar c) -> "(" ++ s ++ ")"
+  s -> s
+  where
+    isIdentChar c = c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c > '\x7f'
+
+-- | @exports name@: every module that exports a name, for "add import":
+-- the project's own modules (at the last check) and every module of the
+-- packages the session exposes. Each is {module, kind, parent, home}:
+-- "parent" is the type a data constructor belongs to (it is imported as
+-- @T (C)@), null otherwise; "home" whether the module is the project's.
+-- The first request reads every library module's interface (some 460, a
+-- few seconds); the answer's index is kept.
+exportsOf :: State -> String -> IO JsonDoc
+exportsOf st occ = do
+  idx <-
+    readIORef (stExports st) >>= \case
+      Just m -> pure m
+      Nothing -> do
+        env <- inGhc st getSession
+        pairs <- fmap concat . forM (listVisibleModuleNames (hsc_units env)) $ \mn -> do
+          r <- try (inGhc st (lookupModule mn Nothing >>= getModuleInfo))
+          pure $ case r of
+            Right (Just mi) -> [(occNameString (nameOccName n), [(moduleNameString mn, n)]) | n <- modInfoExports mi]
+            Right Nothing -> []
+            Left (_ :: SomeException) -> []
+        let m = M.fromListWith (flip (++)) pairs
+        writeIORef (stExports st) (Just m)
+        pure m
+  sums <- readIORef (stSummaries st)
+  home <- fmap concat . forM (M.elems sums) $ \ms -> do
+    r <- try (inGhc st (getModuleInfo (ms_mod ms)))
+    pure $ case r of
+      Right (Just mi) -> [(moduleNameString (ms_mod_name ms), n) | n <- modInfoExports mi, occNameString (nameOccName n) == occ]
+      Right Nothing -> []
+      Left (_ :: SomeException) -> []
+  found <- forM ([(m, n, True) | (m, n) <- home] ++ [(m, n, False) | (m, n) <- M.findWithDefault [] occ idx]) $ \(m, n, isHome) -> do
+    thing <- inGhc st (lookupName n)
+    let parent = case thing of
+          Just (AConLike (RealDataCon dc)) -> Just (nameItem (tyConName (dataConTyCon dc)))
+          _ -> Nothing
+    pure (obj [("module", str m), ("kind", str (nameKind n thing)), ("parent", maybe J.JSNull str parent), ("home", J.JSBool isHome)])
+  pure (J.JSArray found)
 
 -- * Run
 
