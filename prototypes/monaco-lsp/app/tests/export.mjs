@@ -188,9 +188,13 @@ async function typescript(name, files) {
 	step(`${name}: npm run mutate runs StrykerJS over the .ts files`, 'npm', ['run', 'mutate', '--silent'], dir, ' geometry.ts |');
 }
 
-async function web(name, files) {
-	const dir = await download(name, sample('web'), files);
+/** A web project (`web`, or the p5.js sketch `p5`) as a Vite project: it builds, and tsc finds no errors. */
+async function web(name, files, id = 'web') {
+	const dir = await download(name, sample(id), files);
 	if (!dir) return;
+	const json = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+	const p5 = Object.values(files).some((t) => /from 'p5'/.test(t));
+	check(p5 ? json.dependencies?.p5 === '^2.3.4' : !json.dependencies, `${name}: package.json ${p5 ? 'has p5 as a dependency, at the version Preview runs' : 'has no dependencies'}`, JSON.stringify(json));
 	const install = run('npm', ['install', '--no-audit', '--no-fund'], dir);
 	if (install.status !== 0) return skip(`${name}: npm install failed (no registry?): ${tail(install.output)}`);
 	step(`${name}: npm run build (vite build) builds the page`, 'npm', ['run', 'build'], dir, 'built in');
@@ -327,6 +331,7 @@ const cases = {
 	javascript: () => javascript('javascript', sample('javascript').sample),
 	typescript: () => typescript('typescript', sample('typescript').sample),
 	web: () => web('web', sample('web').sample),
+	p5: () => web('p5', sample('p5').sample, 'p5'),
 	python: () => python('python', sample('python').sample),
 	php: async () => {
 		await php('php', sample('php').sample, 'OK (5 tests, 5 assertions)');

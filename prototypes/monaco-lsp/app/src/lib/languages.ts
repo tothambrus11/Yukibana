@@ -5,7 +5,7 @@
  */
 
 /** Identifies a language, and with it a pack and a saved project. */
-export type LanguageId = 'python' | 'javascript' | 'typescript' | 'web' | 'cpp' | 'swift' | 'scala' | 'rust' | 'php' | 'java' | 'kotlin' | 'haskell';
+export type LanguageId = 'python' | 'javascript' | 'typescript' | 'web' | 'p5' | 'cpp' | 'swift' | 'scala' | 'rust' | 'php' | 'java' | 'kotlin' | 'haskell';
 
 /** Project files by path relative to the workspace root, `/`-separated. */
 export type Files = Record<string, string>;
@@ -435,6 +435,91 @@ export class Counter {
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "strict": true,
+    "noEmit": true
+  }
+}
+`,
+		},
+	},
+	{
+		// A web project whose page is a p5.js sketch: a canvas that fills the
+		// window and a circle that follows the mouse. p5.js comes from the
+		// JavaScript pack (packs/javascript/README.md, "Packages"): Preview
+		// loads it, and the editor its types, only for a project that imports
+		// it, so any web project may `import p5 from 'p5'`; this is the one
+		// that starts with it. Instance mode, because there every p5 function
+		// is a typed member of `p` and the sketch stays an ES module.
+		id: 'p5',
+		label: 'Web: p5.js sketch (TypeScript)',
+		pack: 'javascript',
+		monacoLanguages: ['typescript', 'javascript'],
+		settings: {},
+		entry: 'main.ts',
+		preview: 'index.html',
+		extension: '.ts',
+		runs: true,
+		sample: {
+			'index.html': `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>p5.js sketch</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
+`,
+			'style.css': `/* The canvas fills the page: no margin, no scroll bars. */
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* A canvas is inline by default, which leaves a gap below it. */
+canvas {
+  display: block;
+}
+`,
+			'main.ts': `import p5 from 'p5';
+
+// A p5.js sketch in instance mode: p5 calls the function with the sketch's
+// p5 instance, \`p\`, and everything p5 offers is a member of it.
+new p5((p: p5) => {
+  // Runs once, at the start.
+  p.setup = () => {
+    p.createCanvas(p.windowWidth, p.windowHeight);
+    p.noStroke();
+  };
+
+  // Keeps the canvas the size of the window.
+  p.windowResized = () => {
+    p.resizeCanvas(p.windowWidth, p.windowHeight);
+  };
+
+  // Runs every frame: paint over the last frame, then draw the circle
+  // where the mouse is.
+  p.draw = () => {
+    p.background(30, 32, 40);
+    p.fill(240, 120, 90);
+    p.circle(p.mouseX, p.mouseY, 60);
+  };
+});
+`,
+			'tsconfig.json': `{
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2023", "dom", "dom.iterable"],
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "strict": true,
+    "skipLibCheck": true,
     "noEmit": true
   }
 }

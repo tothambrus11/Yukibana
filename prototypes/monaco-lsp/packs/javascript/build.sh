@@ -29,6 +29,12 @@ PACK_VERSION="$(node -p 'require("./package.json").version')"
 FC_VERSION="$(node -p 'require("fast-check/package.json").version')"
 FC_FILE="fast-check-$FC_VERSION.js"
 PACKAGES_FILE="packages-fast-check-$FC_VERSION.json"
+# The npm packages a web page may import (README "Packages"): p5.js, its
+# own minified ES module build, for Preview, and its declarations, which the
+# server downloads only for a project that imports it.
+P5_VERSION="$(node -p 'require("./node_modules/p5/package.json").version')"  # p5's exports hide its package.json
+P5_FILE="p5-$P5_VERSION.js"
+P5_TYPES_FILE="packages-p5-$P5_VERSION.json"
 # StrykerJS for Mutate (README "Mutation testing"): its instrumenter, its
 # clear-text reporter and the metrics it reads, one ES module loaded only
 # when the user asks for mutation testing.
@@ -44,6 +50,7 @@ for f in "$OUT"/*; do
   case "$(basename "$f")" in
     server.js|server.js.*|runner.js|runner.js.*|strip.js|strip.js.*|"$TS_FILE"|"$TS_FILE".*|"$LIBS_FILE"|"$LIBS_FILE".*) ;;
     "$FC_FILE"|"$FC_FILE".*|"$PACKAGES_FILE"|"$PACKAGES_FILE".*|LICENSE-fast-check.txt|LICENSE-pure-rand.txt) ;;
+    "$P5_FILE"|"$P5_FILE".*|"$P5_TYPES_FILE"|"$P5_TYPES_FILE".*|LICENSE-p5.txt) ;;
     "$STRYKER_FILE"|"$STRYKER_FILE".*|LICENSE-stryker.txt|LICENSE-babel.txt) ;;
     *) rm -f "$f" ;;
   esac
@@ -76,6 +83,17 @@ node tools/package-types.mjs "$OUT/$PACKAGES_FILE" fast-check
 cp node_modules/fast-check/LICENSE "$OUT/LICENSE-fast-check.txt"
 cp node_modules/pure-rand/LICENSE "$OUT/LICENSE-pure-rand.txt"
 
+# p5.js for Preview: the package's own lib/p5.esm.min.js, copied as it is
+# (it is already one minified ES module with its dependencies, and it is
+# what p5.js publishes for `<script type="module">`). It is LGPL-2.1, so its
+# licence goes next to it, unmodified as the file is. Its declarations as
+# for fast-check: types/p5.d.ts, for
+# instance mode (`new p5((p) => …)`); `p5/global`'s 1.2 MB of global
+# declarations are not shipped.
+cp node_modules/p5/lib/p5.esm.min.js "$OUT/$P5_FILE"
+node tools/package-types.mjs "$OUT/$P5_TYPES_FILE" p5
+cp node_modules/p5/license.txt "$OUT/LICENSE-p5.txt"
+
 # StrykerJS, bundled by tools/stryker.mjs (which says what it stands in for
 # Node's modules, and why). Rebuilt when the lock file or the bundle's
 # sources change.
@@ -91,6 +109,7 @@ npx esbuild src/server.ts --bundle --minify --format=esm --target=es2022 --log-l
   --define:__LIBS_FILE__="\"$LIBS_FILE\"" --define:__LIBS_SIZE__="$(size "$OUT/$LIBS_FILE")" \
   --define:__PACK_VERSION__="\"$PACK_VERSION\"" \
   --define:__PACKAGES_FILE__="\"$PACKAGES_FILE\"" --define:__PACKAGES_SIZE__="$(size "$OUT/$PACKAGES_FILE")" \
+  --define:__LAZY_PACKAGES__="{\"p5\":{\"file\":\"$P5_TYPES_FILE\",\"size\":$(size "$OUT/$P5_TYPES_FILE")}}" \
   --define:__NODE_TYPES__="$(node -p 'JSON.stringify(require("fs").readFileSync("src/node/builtins.d.ts", "utf8"))')" \
   --outfile="$OUT/server.js"
 
@@ -101,6 +120,7 @@ npx esbuild src/server.ts --bundle --minify --format=esm --target=es2022 --log-l
 npx esbuild src/runner.ts --bundle --minify --format=esm --target=es2022 --log-level=warning \
   --define:__TS_FILE__="\"$TS_FILE\"" --define:__TS_SIZE__="$(size "$OUT/$TS_FILE")" \
   --define:__PACKAGES__="{\"fast-check\":\"$FC_FILE\"}" \
+  --define:__PAGE_PACKAGES__="{\"p5\":\"$P5_FILE\"}" \
   --define:__STRYKER_FILE__="\"$STRYKER_FILE\"" --define:__STRYKER_SIZE__="$(size "$OUT/$STRYKER_FILE")" \
   --outfile="$OUT/runner.js"
 npx esbuild src/strip.ts --bundle --minify --format=esm --target=es2022 --log-level=warning \

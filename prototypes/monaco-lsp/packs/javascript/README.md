@@ -28,6 +28,7 @@ that holds the project's documents and the bundled `lib.*.d.ts` files.
 | `libs-6.0.3.json` (64 lib files) | 2538.8 KiB | 387.0 KiB | 279.3 KiB |
 | `packages-fast-check-4.10.2.json` (fast-check's declarations, see "Packages") | 186.0 KiB | 38.0 KiB | 31.2 KiB |
 | **total** | **6278.3 KiB** | **1441.1 KiB** | **1100.9 KiB** |
+| `packages-p5-2.3.4.json` (p5.js's declarations, only for a project that imports p5, see "Packages") | 793.8 KiB | 170.3 KiB | 115.9 KiB |
 
 `build.sh` writes `.gz` and `.br` siblings for each file. On a local
 connection, `initialize` answers about 220 ms after the worker starts,
@@ -196,8 +197,8 @@ The alternative named in the task, `@typescript/vfs`, was not needed: the
 * `tools/libs.mjs`: collects and minifies the lib bundle and checks it.
 * `tools/compress.mjs`: writes the compressed siblings and prints the size
   table.
-* `tools/package-types.mjs`: the declarations of the packages the runner
-  ships (fast-check), as TypeScript resolves them (see "Packages").
+* `tools/package-types.mjs`: the declarations of the packages the pack
+  ships (fast-check, p5.js), as TypeScript resolves them (see "Packages").
 * `tools/stryker.mjs` and `src/stryker/index.ts`: StrykerJS's bundle for
   Mutate; `src/mutate.ts`: the loop around it (see "Mutation testing").
 * `src/node/`: the runner's `node:test` (`test.ts`), `node:assert`
@@ -223,7 +224,11 @@ The alternative named in the task, `@typescript/vfs`, was not needed: the
   `process.argv`/`exit`/`exitCode`/
   `stdout.write` and `node:readline` (`question`, `readline/promises`,
   `for await`, `'line'` events); the environment; and `preview` (the page
-  built, run in a sandboxed `srcdoc` iframe under COEP, a missing import).
+  built, run in a sandboxed `srcdoc` iframe under COEP, a missing import;
+  p5.js: no import map and no fetch for a page without it, one import map
+  and one copy for two modules importing it, fetched once per worker, and
+  a sketch whose canvas fills the iframe and whose circle follows the
+  mouse, read back pixel by pixel).
 * `test.mjs` also checks that a `.ts` CLI using `process` and
   `node:readline` type-checks and that what they lack is an error.
 * `test.mjs` (`node test.mjs` after `./build.sh`)
@@ -255,6 +260,10 @@ The alternative named in the task, `@typescript/vfs`, was not needed: the
     * a TypeScript test importing fast-check: no errors, the type of an
       arbitrary, hover and completion from fast-check's declarations, a
       type error in a property, no definition into the package
+    * p5.js: its declarations not downloaded until a file imports `p5`,
+      then once, with no "cannot find module" on the way; a sketch in
+      instance mode with no errors, hover with p5.js's documentation,
+      completion on `p.`, and a type error in a call
     * a second `initialize` refused, and a non-JSON-RPC message ignored
 
 ## Running
@@ -433,10 +442,14 @@ once per preview.
   Any other change rebuilds the page and reloads the iframe. This is live
   reload, not hot module replacement. A build error (a missing import)
   goes to the terminal, and the last page stays.
+* **Packages:** `import p5 from 'p5'` works in a page (see "Packages"):
+  the page gets an import map, right after the bridge, that maps `p5` to
+  p5.js as one `data:` URL. Every module keeps the bare specifier, so the
+  library is in the document once, however many modules import it.
 * **Limits:** relative URLs other than stylesheets and scripts (images,
   `fetch('./data.json')`, CSS `url()` and `@import`) do not resolve,
   because the document has no folder of its own. Project files are text,
-  so there are no images to serve anyway. There are no bare imports
+  so there are no images to serve anyway. There are no other bare imports
   (`'lit'`), no CSS modules and no `import.meta.env`. **Download** gives a
   Vite 8 project (`npm run dev` with real HMR, `npm run build`), which
   `app/tests/export.mjs` builds.
@@ -462,7 +475,7 @@ decision rather than a technical one:
 4. **None**: the platform's standard library and the Node built-ins
    listed above.
 
-What the pack does is the third, for one package so far: **fast-check
+What the pack does is the third, for two packages so far. The first is **fast-check
 4.10.2** (MIT), the property-based testing library, with its one
 dependency, pure-rand 8.4.2 (MIT). Both are pinned in `package-lock.json`
 with their npm integrity hashes; nothing in them is changed.
@@ -475,8 +488,8 @@ with their npm integrity hashes; nothing in them is changed.
   browser fetches it only when a module imports it, once per worker: the
   test files of one Test share one copy, so `fc.configureGlobal` in one
   applies to the next (with `node --test` each file has a process of its
-  own). A web project's Preview does not have it (its page loads nothing
-  from the pack). Any other bare import still fails.
+  own). A web project's Preview does not have it (a page gets only the
+  packages built for pages, p5.js). Any other bare import still fails.
 * **The editor.** `packages-fast-check-4.10.2.json` holds fast-check's
   declarations as installed, `/node_modules/fast-check/package.json` and
   `lib/fast-check.d.ts`, plus the pure-rand declarations they import:
@@ -490,13 +503,47 @@ with their npm integrity hashes; nothing in them is changed.
   what the arbitraries make. Results that point into these files
   (definitions, references) are dropped, as for the libs. It is downloaded
   with the libs when the server starts (31 KiB brotli), for every
-  JavaScript and TypeScript session: the server has no way to add files
-  after its first program is built without recreating it, and 31 KiB did
-  not seem worth one.
+  JavaScript and TypeScript session: adding files after the first program
+  is built means a new language service (as p5.js's do, below), and 31 KiB
+  did not seem worth one.
 * **Download** adds `"fast-check": "^4.10.2"` to `devDependencies` when a
   `.js` or `.ts` file imports it, and the README says `npm install` first;
   `app/tests/export.mjs` runs the samples' tests with real Node and the
   real fast-check from npm.
+
+The second is for web pages: **p5.js 2.3.4** (LGPL-2.1, its licence is
+`LICENSE-p5.txt` next to it), the creative-coding library, pinned in
+`package-lock.json` with its integrity hash. The app's **Web: p5.js
+sketch** project starts with it (a canvas that fills the page, a circle
+that follows the mouse), and any web project can import it.
+
+* **Preview.** `p5-2.3.4.js` is p5.js's own `lib/p5.esm.min.js`, copied
+  unchanged: it is already one minified ES module with its dependencies
+  (1076 KiB raw, 307 KiB gzip, 250 KiB brotli). When a module the page
+  reaches imports `p5`, the preview worker fetches it, once for as long as
+  it lives (rebuilds reuse it), and the page gets an import map from `p5`
+  to it as a `data:` URL (see "Preview"). A page that does not import p5
+  gets no import map and fetches nothing. Run and Test do not have p5,
+  since it needs a document: there the import fails as any unknown package
+  does.
+* **The editor.** `packages-p5-2.3.4.json` is p5.js's `package.json` and
+  `types/p5.d.ts`, collected by `tools/package-types.mjs` as for
+  fast-check (with `lib.dom`, which the declarations name). It is 116 KiB
+  brotli, four times fast-check's, so it is not downloaded when the server
+  starts: the server fetches it the first time an open file imports `p5`
+  (`import`, `export … from`, `import()`, `require()` or `/// <reference
+  types>`, also of a subpath), with progress, and holds that file's
+  diagnostics back until it has arrived, so `'p5'` is never reported
+  missing on the way. Then it replaces its language service with a new one
+  over the same document registry (TypeScript keeps a file's failed module
+  resolutions while its imports do not change; a new service resolves them
+  again, and reuses the parsed libs). Instance mode (`new p5((p: p5) =>
+  …)`) is fully typed: completion on `p.`, hover with p5.js's
+  documentation, and type errors such as `p.circle('x', 1, 2)`. Global
+  mode's `p5/global` declarations (1.2 MB more) are not shipped.
+* **Download** adds `"p5": "^2.3.4"` to `dependencies` of the Vite
+  project when a file imports it; Vite bundles it and `tsc` checks the
+  sketch against the same declarations (`app/tests/export.mjs`).
 
 ## Testing
 

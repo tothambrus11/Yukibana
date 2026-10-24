@@ -35,6 +35,13 @@ declare const __NODE_TYPES__: string;
  */
 declare const __PACKAGES_FILE__: string;
 declare const __PACKAGES_SIZE__: number;
+/**
+ * The declarations of the npm packages a web page may import (p5.js), by
+ * package name, each made by tools/package-types.mjs like
+ * `__PACKAGES_FILE__` and with its uncompressed size. Unlike those, each is
+ * downloaded only once a project file imports the package (`loadTypesFor`).
+ */
+declare const __LAZY_PACKAGES__: Record<string, { file: string; size: number }>;
 
 /** Libraries a project gets when its config names none. Must be in the bundle. */
 const DEFAULT_LIBS = ['lib.es2023.d.ts', 'lib.dom.d.ts', 'lib.dom.iterable.d.ts', 'lib.dom.asynciterable.d.ts'];
@@ -354,6 +361,7 @@ function changed(): void {
 
 function setDoc(uri: string, text: string, version: number): void {
   const path = uriToPath(uri);
+  loadTypesFor(text);
   const old = docs.get(path);
   if (old) {
     old.text = text;
@@ -364,6 +372,51 @@ function setDoc(uri: string, text: string, version: number): void {
   } else docs.set(path, { uri, text, version, rev: 1 });
   if (isConfig(path)) compilerOptions = undefined;
   changed();
+}
+
+/**
+ * The packages of `__LAZY_PACKAGES__` whose declarations are being
+ * downloaded or are in `libs`, by name: each is fetched at most once per
+ * session (once more after a failure, at the next edit that imports it).
+ */
+const lazyTypes = new Map<string, 'loading' | 'loaded'>();
+
+/**
+ * Starts downloading the declarations of each lazily typed package that
+ * `text` imports, names in `import`/`export … from`, `import()`,
+ * `require()` or `/// <reference types>`, alone or by a subpath
+ * (`p5/global`). Diagnostics wait for the download (`publishDiagnostics`),
+ * so an import of p5 is not reported missing while its types are on the way;
+ * once they are in the virtual `/node_modules/`, the language service is
+ * replaced (`renewService`) and the diagnostics follow.
+ */
+function loadTypesFor(text: string): void {
+  for (const [name, { file, size }] of Object.entries(__LAZY_PACKAGES__)) {
+    if (lazyTypes.has(name) || !importsPackage(text, name)) continue;
+    lazyTypes.set(name, 'loading');
+    download(file, size).then(
+      (bytes) => {
+        const files = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, string>;
+        for (const [path, source] of Object.entries(files)) libs.set(path, ts.ScriptSnapshot.fromString(source));
+        lazyTypes.set(name, 'loaded');
+        log(3, `${name}: ${Object.keys(files).length} declaration files loaded`);
+        renewService();
+        changed();
+      },
+      (e: unknown) => {
+        lazyTypes.delete(name);
+        log(1, `could not load the types of ${name}: ${e instanceof Error ? e.message : String(e)}`);
+        changed();
+      },
+    );
+  }
+}
+
+/** Whether `text` imports `name` or a subpath of it (see `loadTypesFor`). */
+function importsPackage(text: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^$()|[\]\\{}]/g, '\\$&');
+  const quoted = `['"]${escaped}(?:/[^'"]*)?['"]`;
+  return new RegExp(`(?:\\bfrom|\\bimport|\\brequire)\\s*\\(?\\s*${quoted}|<reference\\s+types\\s*=\\s*${quoted}`).test(text);
 }
 
 function isConfig(path: string): boolean {
@@ -440,7 +493,27 @@ function ls(): TS.LanguageService {
     useCaseSensitiveFileNames: () => true,
     getNewLine: () => '\n',
   };
-  return (service = ts.createLanguageService(host, ts.createDocumentRegistry(true, root)));
+  registry ??= ts.createDocumentRegistry(true, root);
+  return (service = ts.createLanguageService(host, registry));
+}
+
+/** Shared by every language service of the session, so a new one reuses the parsed libs. */
+let registry: TS.DocumentRegistry | undefined;
+
+/**
+ * Replaces the language service with a new one over the same files, after
+ * files appeared under `/node_modules/`. TypeScript keeps a file's module
+ * resolutions for as long as its imports are unchanged, a failed `'p5'`
+ * included; a new service resolves them again. Its program is built before
+ * the old service is disposed, so the source files they share (the libs,
+ * the project) stay in the registry and are not parsed again.
+ */
+function renewService(): void {
+  const old = service;
+  if (!old) return;
+  service = undefined;
+  ls().getProgram();
+  old.dispose();
 }
 
 // ---------------------------------------------------------------------------
@@ -460,6 +533,8 @@ function scheduleDiagnostics(): void {
 }
 
 async function publishDiagnostics(): Promise<void> {
+  // A package's declarations on their way: its arrival runs this again.
+  if ([...lazyTypes.values()].includes('loading')) return;
   const version = projectVersion;
   const service = ls();
   options(); // refreshes configErrors

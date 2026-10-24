@@ -29,6 +29,8 @@ const CASES = {
 	// TypeScript and web projects are served by the JavaScript pack (`pack`).
 	typescript: { pack: 'javascript', output: '(0, 0) to (3, 4): 5', testOutput: 'ℹ pass 4', mutateOutput: ' geometry.ts |', file: 'main.ts', error: '\nconst wrong: number = "no";\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'geometry.ts', hover: 'Point' },
 	web: { pack: 'javascript', file: 'main.ts', error: '\nconst wrong: number = "no";\n', access: '\ncounter.', member: 'increment', definition: 'Counter', definitionFile: 'counter.ts', hover: 'Counter' },
+	// One file, and p5.js's declarations, whose definitions are dropped as a lib's are: no definition to go to.
+	p5: { pack: 'javascript', file: 'main.ts', error: '\nconst wrong: number = "no";\n', access: '\nnew p5((q) => q.circ', member: 'circle', hover: 'createCanvas' },
 	cpp: { output: '5.000000', testOutput: '[  PASSED  ] 3 tests.', file: 'main.cpp', error: '\nint broken = undeclared_xyz;\n', access: '\nvoid f(Point p) { p.', member: 'norm', definition: 'distance', definitionFile: 'geometry', hover: 'Point' },
 	swift: { output: 'to', testOutput: 'Executed 2 tests, with 0 failures', file: 'main.swift', error: '\nlet x: Int = "no"\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'Geometry.swift', hover: 'Point' },
 	scala: { output: 'to', file: 'Main.scala', error: '\nval broken: Int = "no"\n', access: '\nval q = Point(1, 2)\nval r = q.', member: 'norm', definition: 'distance', definitionFile: 'Geometry.scala', hover: 'Point' },
@@ -145,10 +147,12 @@ async function run(language, c) {
 	check(hovered, `hover on ${c.hover} shows ${hovered ? JSON.stringify((await page.locator('.monaco-hover-content').first().textContent())?.slice(0, 80)) : 'nothing'}`);
 	await page.mouse.move(0, 0);
 
-	await word(c.definition).click();
-	await page.keyboard.press('F12');
-	const jumped = await page.locator('.dv-tab.dv-active-tab .dock-tab', { hasText: c.definitionFile }).first().waitFor({ timeout: 20_000 }).then(() => true, () => false);
-	check(jumped, `go to definition of ${c.definition} opens ${c.definitionFile}`);
+	if (c.definition) {
+		await word(c.definition).click();
+		await page.keyboard.press('F12');
+		const jumped = await page.locator('.dv-tab.dv-active-tab .dock-tab', { hasText: c.definitionFile }).first().waitFor({ timeout: 20_000 }).then(() => true, () => false);
+		check(jumped, `go to definition of ${c.definition} opens ${c.definitionFile}`);
+	}
 
 	if (c.output && existsSync(join(build, 'packs', c.pack ?? language, 'runner.js'))) {
 		await page.locator('header button.run').click();
@@ -187,6 +191,8 @@ async function run(language, c) {
 	if (language === 'javascript') await settings(page, check);
 	if (language === 'web') await previewing(page, check);
 	if (language === 'web') await webServices(page, check);
+	if (language === 'web') check(!requests.some((u) => /\/(p5-|packages-p5-)[\d.]+\.js(on)?$/.test(u)), 'a web project that does not import p5 downloads nothing of p5.js');
+	if (language === 'p5') await sketching(page, check, requests);
 	if (language === 'python') await peek(page, check);
 	if (language === 'cpp') await cppBridge(page, check, lspLog);
 	if (language === 'typescript') await renameFromUse(page, check);
@@ -623,6 +629,70 @@ async function previewing(page, check) {
 	}
 	const detached = await page.evaluate(() => window.yukibanaDetached);
 	check(detached === 0 && counts.every((c) => c === 1), `each Run loads the preview once, without moving its iframe (iframe detached ${detached} times; "page ready" per run: ${counts.join(', ')})`);
+}
+
+/**
+ * The p5.js sketch: its types came with it (hover on createCanvas has p5's
+ * documentation), and Run shows a canvas that fills the Preview, follows the
+ * panel's size (windowResized), and draws the circle under the mouse.
+ */
+async function sketching(page, check, requests) {
+	const fetched = (re) => requests.some((u) => re.test(u));
+	check(fetched(/\/packages-p5-[\d.]+\.json$/), 'the editor downloads the declarations of p5.js for a project that imports it');
+	await page.locator('.dv-groupview .view-line span', { hasText: /^[\s.]*createCanvas$/ }).first().hover();
+	const hover = page.locator('.monaco-hover-content').first();
+	const documented = await hover.filter({ hasText: /Creates a canvas element/ }).waitFor({ timeout: 20_000 }).then(() => true, () => false);
+	check(documented, `hover on createCanvas shows p5.js's documentation (${JSON.stringify((await hover.textContent().catch(() => ''))?.slice(0, 120))})`);
+	await page.mouse.move(0, 0);
+
+	await page.locator('header button.run').click();
+	const frameElement = page.locator('iframe.preview-frame');
+	const drawn = await page.frameLocator('iframe.preview-frame').locator('canvas').waitFor({ timeout: 60_000 }).then(() => true, () => false);
+	check(drawn && fetched(/\/p5-[\d.]+\.js$/), 'Run shows the sketch: p5.js, fetched for it, makes its canvas in the Preview');
+	if (!drawn) return;
+	const inner = page.frames().find((f) => f.parentFrame() === page.mainFrame() && f.url() === 'about:srcdoc');
+	const layout = () =>
+		inner.evaluate(() => {
+			const canvas = document.querySelector('canvas');
+			const root = document.documentElement;
+			return { canvas: [canvas?.clientWidth, canvas?.clientHeight], window: [innerWidth, innerHeight], scroll: [root.scrollWidth, root.scrollHeight] };
+		});
+	const fills = (l) => l.canvas[0] === l.window[0] && l.canvas[1] === l.window[1] && l.scroll[0] <= l.window[0] && l.scroll[1] <= l.window[1];
+	await page.waitForTimeout(500);
+	const first = await layout();
+	const box = await frameElement.boundingBox();
+	check(fills(first) && Math.abs(first.window[0] - (box?.width ?? 0)) <= 1 && Math.abs(first.window[1] - (box?.height ?? 0)) <= 1, `the canvas fills the Preview, without scroll bars (${JSON.stringify(first)}, frame ${box?.width}x${box?.height})`);
+
+	/** The colour at (x, y) in CSS pixels of the frame. */
+	const pixel = (x, y) =>
+		inner.evaluate(([x, y]) => {
+			const canvas = document.querySelector('canvas');
+			const scale = canvas.width / canvas.clientWidth;
+			return [...canvas.getContext('2d').getImageData(Math.round(x * scale), Math.round(y * scale), 1, 1).data.slice(0, 3)];
+		}, [x, y]);
+	const near = (rgb, want) => rgb.every((v, i) => Math.abs(v - want[i]) <= 2);
+	const BACKGROUND = [30, 32, 40];
+	const CIRCLE = [240, 120, 90];
+	const a = { x: 80, y: 80 };
+	const b = { x: Math.round(box.width) - 80, y: Math.round(box.height) - 80 };
+	const before = await pixel(a.x, a.y);
+	await page.mouse.move(box.x + a.x, box.y + a.y, { steps: 4 });
+	await page.waitForTimeout(300);
+	const underA = await pixel(a.x, a.y);
+	await page.mouse.move(box.x + b.x, box.y + b.y, { steps: 4 });
+	await page.waitForTimeout(300);
+	const underB = await pixel(b.x, b.y);
+	const leftA = await pixel(a.x, a.y);
+	check(near(before, BACKGROUND) && near(underA, CIRCLE) && near(underB, CIRCLE) && near(leftA, BACKGROUND), `the circle follows the mouse: drawn under it, gone from where it was (at A before ${before}, under A ${underA}, under B ${underB}, at A after ${leftA})`);
+
+	const viewport = page.viewportSize();
+	await page.setViewportSize({ width: viewport.width - 200, height: viewport.height - 100 });
+	await page.waitForTimeout(800);
+	const resized = await layout();
+	check(fills(resized) && resized.window[0] < first.window[0], `the canvas follows the Preview's size (windowResized): ${JSON.stringify(resized)}`);
+	await page.setViewportSize(viewport);
+	const shown = (await page.locator('.terminal pre').textContent()) ?? '';
+	check(!/Uncaught|Error/.test(shown), `the sketch logs no error (${JSON.stringify(shown.slice(0, 200))})`);
 }
 
 /** In the references peek, arrows preview each reference and Enter goes to it and closes the peek, as in VS Code. */

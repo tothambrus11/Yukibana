@@ -34,7 +34,9 @@ const options = {
   moduleResolution: ts.ModuleResolutionKind.Bundler,
   noEmit: true,
   types: [],
-  lib: ['lib.es2023.d.ts'],
+  // The server's default libs: p5.js's declarations name DOM types
+  // (HTMLCanvasElement, MouseEvent) and are not complete without them.
+  lib: ['lib.es2023.d.ts', 'lib.dom.d.ts'],
   strict: true,
 };
 const read = new Set();

@@ -399,6 +399,43 @@ check('a property whose predicate does not take what the arbitrary makes is a ty
 const fcDefinition = await request('textDocument/definition', { textDocument: { uri: W + 'tests/props.test.ts' }, position: { line: 3, character: 17 } });
 check('go to definition into fast-check finds nothing in the project (results in package declarations are dropped, as for libs)', Array.isArray(fcDefinition) ? fcDefinition.length === 0 : fcDefinition === null, fcDefinition);
 
+// p5.js, the package a web page may import: its declarations are not part
+// of the server's start (nothing above imported it), and arrive with the
+// first file that imports it, before that file's first diagnostics.
+const p5Loads = async () => (await notifications()).filter((n) => n.method === 'yukibana/loading' && /^packages-p5-/.test(n.params.label));
+check('p5.js declarations are not downloaded for a project that does not import p5', (await p5Loads()).length === 0, await p5Loads());
+const sketchFile = `import p5 from 'p5';
+
+new p5((p: p5) => {
+  p.setup = () => {
+    p.createCanvas(p.windowWidth, p.windowHeight);
+  };
+  p.windowResized = () => {
+    p.resizeCanvas(p.windowWidth, p.windowHeight);
+  };
+  p.draw = () => {
+    p.clear();
+    p.circle(p.mouseX, p.mouseY, 60);
+  };
+});
+`;
+await notify('textDocument/didOpen', { textDocument: { uri: W + 'sketch.ts', languageId: 'typescript', version: 1, text: sketchFile } });
+const sketchDiags = await diagnostics(W + 'sketch.ts', () => true, 30000);
+const sketchPublished = (await notifications()).filter((n) => n.method === 'textDocument/publishDiagnostics' && n.params.uri === W + 'sketch.ts');
+check('a p5.js sketch in instance mode has no errors', Array.isArray(sketchDiags) && sketchDiags.length === 0, sketchDiags?.map((x) => `${x.code} ${x.message}`));
+check("`import p5 from 'p5'` is never reported missing while its declarations download", sketchPublished.every((n) => !n.params.diagnostics.some((x) => x.code === 2307)), sketchPublished.map((n) => n.params.diagnostics.map((x) => x.code)));
+const p5Loaded = await p5Loads();
+check('p5.js declarations are downloaded once, when a file imports p5', p5Loaded.length > 0 && p5Loaded.at(-1).params.loaded === p5Loaded.at(-1).params.total && p5Loaded.at(-1).params.total > 500_000, p5Loaded.at(-1)?.params);
+const canvasHover = await request('textDocument/hover', { textDocument: { uri: W + 'sketch.ts' }, position: { line: 4, character: 8 } });
+check("hover on `p.createCanvas` shows its signature and p5.js's documentation", /createCanvas\(width\?: number/.test(canvasHover?.contents?.value ?? '') && /canvas/i.test((canvasHover?.contents?.value ?? '').split('```').at(-1)), (canvasHover?.contents?.value ?? '').slice(0, 300));
+const p5Completion = await request('textDocument/completion', { textDocument: { uri: W + 'sketch.ts' }, position: { line: 11, character: 6 } });
+const p5Labels = (p5Completion?.items ?? p5Completion ?? []).map((i) => i.label);
+check('completion after `p.` offers the p5.js API', ['circle', 'createCanvas', 'mouseX', 'mouseY', 'background', 'fill', 'windowWidth'].every((l) => p5Labels.includes(l)), p5Labels.length);
+await notify('textDocument/didChange', { textDocument: { uri: W + 'sketch.ts', version: 2 }, contentChanges: [{ text: sketchFile + "new p5((p) => { p.circle('x', 1, 2); });\n" }] });
+const p5Wrong = await diagnostics(W + 'sketch.ts', (d) => d.some((x) => x.severity === 1));
+check('a p5.js call with an argument of the wrong type is a type error', p5Wrong?.some((x) => x.code === 2345 && /string/.test(x.message) && /number/.test(x.message) && x.range.start.line === 14), p5Wrong?.map((x) => `${x.range.start.line}: ${x.code} ${x.message}`));
+check('p5.js declarations are downloaded only once per session', (await p5Loads()).filter((n) => n.params.loaded === 0).length === 1, (await p5Loads()).length);
+
 // Garbage on the wire is logged, not thrown; a second initialize is refused.
 await page.evaluate(() => window.lsp.worker.postMessage('not json-rpc'));
 let again;

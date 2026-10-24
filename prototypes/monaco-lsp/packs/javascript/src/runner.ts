@@ -42,7 +42,7 @@
  * projects: the worker stays alive and answers each request with the page
  * (`index.html`) as one self-contained document for a sandboxed iframe,
  * its stylesheets inlined and its module scripts linked as `data:` URLs
- * (see `buildPage`).
+ * (see `buildPage`), and the packages it imports (p5.js) in an import map.
  */
 import { init, parse } from 'es-module-lexer/minimal';
 import type * as TS from 'typescript';
@@ -64,6 +64,13 @@ declare const __TS_SIZE__: number;
  * `packageUrl`.
  */
 declare const __PACKAGES__: Record<string, string>;
+/**
+ * Injected by build.sh: the npm packages a web page may import, by bare
+ * specifier, each as one ES module file next to this script (`p5` is
+ * `p5-<version>.js`, p5.js's own `lib/p5.esm.min.js`). Only Preview has
+ * them: they need a document. See `pageImportMap`.
+ */
+declare const __PAGE_PACKAGES__: Record<string, string>;
 /** Injected by build.sh: StrykerJS's bundle (src/stryker/index.ts) next to this script, and its size. */
 declare const __STRYKER_FILE__: string;
 declare const __STRYKER_SIZE__: number;
@@ -525,6 +532,8 @@ interface LinkOptions {
 	builtins: boolean;
 	/** See `toJavaScript`. */
 	lenient: boolean;
+	/** When given, collects the bare specifiers left as written ('p5', 'lodash'). */
+	bare?: Set<string>;
 }
 
 function blobUrl(text: string, type: string): string {
@@ -590,7 +599,10 @@ function linker(files: Record<string, string>, options: LinkOptions): (path: str
 				let targetUrl = options.builtins ? (builtinUrl(specifier) ?? packageUrl(specifier)) : undefined;
 				if (targetUrl === undefined) {
 					// Other bare specifiers ('lodash') and computed ones stay as written, and fail as they would anyway.
-					if (!/^\.{1,2}\//.test(specifier) && !(options.resolution === 'bundler' && specifier.startsWith('/'))) continue;
+					if (!/^\.{1,2}\//.test(specifier) && !(options.resolution === 'bundler' && specifier.startsWith('/'))) {
+						options.bare?.add(specifier);
+						continue;
+					}
 					const target = specifier.startsWith('/') ? resolve('', specifier.slice(1)) : resolve(path, specifier);
 					if (target === null) throw new ProjectError(`${path}: '${specifier}' points outside the project`);
 					targetUrl = visit(candidates(target, options.resolution).find((c) => Object.hasOwn(files, c)) ?? target, path);
@@ -634,12 +646,52 @@ async function preview({ id, files, entry }: Preview): Promise<void> {
 	try {
 		await init();
 		await loadTypeScriptFor(files);
-		postMessage({ type: 'page', id, ...buildPage(files, entry) } satisfies Page);
+		const page = buildPage(files, entry);
+		const map = await pageImportMap(page.bare);
+		const html = page.html.replace(IMPORT_MAP_SLOT, () => map);
+		postMessage({ type: 'page', id, html, styles: page.styles, errors: [] } satisfies Page);
 	} catch (e) {
 		const error = e instanceof ProjectError ? e.message : e instanceof Error ? (e.stack ?? e.message) : String(e);
 		postMessage({ type: 'page', id, html: null, styles: [], errors: [error] } satisfies Page);
 	}
 }
+
+/** The `data:` URL of each page package fetched so far, kept for the worker's life: a rebuild reuses it. */
+const pagePackages = new Map<string, Promise<string>>();
+
+/**
+ * An import map for the packages this pack ships for pages
+ * (`__PAGE_PACKAGES__`) that the page's modules import, or '' when they
+ * import none: so the bare `import p5 from 'p5'` stays as written in every
+ * module and resolves, through the map, to one copy of the package, a
+ * `data:` URL. The page's other URLs are `data:` URLs too and the map is in
+ * the document, so a module that imports p5 does not carry another copy of
+ * it. The file is fetched once per preview worker, when a page first
+ * imports it. Other bare specifiers stay unmapped and fail as in a browser.
+ */
+async function pageImportMap(bare: ReadonlySet<string>): Promise<string> {
+	const shipped = [...bare].filter((s) => Object.hasOwn(__PAGE_PACKAGES__, s)).sort();
+	if (shipped.length === 0) return '';
+	const imports: Record<string, string> = {};
+	for (const specifier of shipped) {
+		let url = pagePackages.get(specifier);
+		if (!url) {
+			const file = __PAGE_PACKAGES__[specifier]!;
+			url = download(file, 0).then((bytes) => dataUrl(new TextDecoder().decode(bytes), 'text/javascript'));
+			// A failed download may succeed at the next rebuild.
+			url.catch(() => pagePackages.delete(specifier));
+			pagePackages.set(specifier, url);
+		}
+		imports[specifier] = await url;
+	}
+	return `<script type="importmap">${JSON.stringify({ imports }).replace(/</g, '\\u003c')}</script>`;
+}
+
+/**
+ * Where the import map goes in a built page: right after the bridge, so
+ * before any module script of the page, as an import map must be.
+ */
+const IMPORT_MAP_SLOT = '<!--yukibana-import-map-->';
 
 /**
  * What the page runs before anything else: `console` and uncaught errors
@@ -693,11 +745,12 @@ const escapeAttribute = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&
  * (an image, a CSS `url()`) does not resolve, since the document has no
  * folder of its own.
  */
-function buildPage(files: Record<string, string>, entry: string): Omit<Page, 'type' | 'id'> {
+function buildPage(files: Record<string, string>, entry: string): { html: string; styles: string[]; bare: Set<string> } {
 	const html = Object.hasOwn(files, entry) ? files[entry] : undefined;
 	if (html === undefined) throw new ProjectError(`There is no ${entry} to preview.`);
 	const sources = { ...files };
-	const visit = linker(sources, PAGE);
+	const bare = new Set<string>();
+	const visit = linker(sources, { ...PAGE, bare });
 	const styles: string[] = [];
 	let inline = 0;
 	const body = html.replace(TAGS, (whole: string, scriptAttributes: string | undefined, scriptText: string | undefined, linkAttributes: string | undefined) => {
@@ -735,7 +788,7 @@ function buildPage(files: Record<string, string>, entry: string): Omit<Page, 'ty
 	});
 	const head = /<head\b[^>]*>/i.exec(body) ?? /<html\b[^>]*>/i.exec(body) ?? /<!doctype\b[^>]*>/i.exec(body);
 	const at = head ? head.index + head[0].length : 0;
-	return { html: body.slice(0, at) + BRIDGE + body.slice(at), styles, errors: [] };
+	return { html: body.slice(0, at) + BRIDGE + IMPORT_MAP_SLOT + body.slice(at), styles, bare };
 }
 
 /** `console` methods write to the terminal: `error`, `warn` and `trace` to stderr. */

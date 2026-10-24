@@ -73,7 +73,9 @@ source and the output, and Ctrl+click on an output line goes to its source.
 
 A web project's Run opens a Preview panel with its `index.html` in a
 sandboxed iframe: a stylesheet edit is applied in place, any other edit
-reloads the page, and its console goes to the terminal. JavaScript and
+reloads the page, and its console goes to the terminal. A page may import
+p5.js 2.3.4; the **Web: p5.js sketch** project starts with a full-window
+canvas and a circle that follows the mouse. JavaScript and
 TypeScript programs run in a module worker with the browser's worker
 globals plus `process`, `node:readline`, `node:test` and `node:assert`, but
 no DOM and no npm packages except fast-check, for property-based tests
@@ -84,6 +86,7 @@ no DOM and no npm packages except fast-check, for property-based tests
 | JavaScript | TypeScript 6.0 language service | the browser, as ES modules | 1.1 MB | none; fast-check 48 KB when imported; StrykerJS 0.44 MB for Mutate |
 | TypeScript | the JavaScript pack's server, `strict` | the same, types stripped as `node main.ts` does | (JavaScript's) | 3 KB (strip.js; TypeScript is the server's file) |
 | Web (HTML, CSS, TypeScript) | the JavaScript pack's server for TypeScript; Monaco's own HTML and CSS (SCSS, Less) services: completion, hover, validation, formatting, colours | a live-reloading Preview panel (sandboxed iframe) | (JavaScript's), plus the CSS worker 0.2 MB and, once an HTML file is open, the HTML worker 0.15 MB | as TypeScript |
+| Web: p5.js sketch (TypeScript) | as Web, with p5.js's own declarations (instance mode) | as Web, p5.js 2.3.4 in the page | as Web, plus p5.js's declarations 0.12 MB | p5.js 0.25 MB |
 | Python | basedpyright 1.40 | Pyodide 314.0.7 (Python 3.14) | 1.1 MB | 4.5 MB |
 | Scala 3 | the Scala 3.7.4 compiler's interactive API, compiled with Scala.js | the same compiler and the Scala.js linker; ScalaCheck 1.18.1 | 2.6 MB; ScalaCheck 0.25 MB when a source names it | 3.7 MB; ScalaCheck 0.34 MB more when a source names it |
 | C and C++ | clangd 21 (Emscripten, threads) | clang 21 and wasm-ld, WASI; for a Linux target clang 21 and ld.lld, then Linux 6.12 under QEMU-Wasm (or QEMU's user mode) | 8.0 MB; a Linux target's headers 0.01 MB | 12.2 MB; Test 0.06 to 0.28 MB (the framework's libraries); a Linux target 18.8 to 19.1 MB to compile, plus 2.6 to 2.9 MB for the VM (0.5 to 0.7 MB in user mode) |
@@ -258,6 +261,8 @@ expected output, project switching keeps edits, and Download saves a valid
 zip; for C++, each Linux target from the picker (clangd's macros, Run,
 threads, a segfault's 139, user mode, Stop), the IR and assembly views
 with their line mapping, and the URLs each use case fetches; for web projects, HTML and CSS completion, CSS validation and colours;
+for the p5.js sketch, p5.js's hover documentation and a canvas that fills
+the Preview, follows its size and draws the circle under the mouse;
 that the HTML and CSS workers load only when needed; that Chromium finds
 the app installable; and that, once Python is made available offline, a
 reload without a network starts the app and runs an edited program.

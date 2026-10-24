@@ -40,6 +40,9 @@ reports that with a notification the client shows as a progress bar:
 
 `total` may be 0 when unknown. The client queues requests until the
 `initialize` response arrives, so a pack may simply delay answering it.
+A pack may also send it later in the session, for something it downloads
+only when a project needs it (the JavaScript pack, p5.js's declarations
+once a file imports `p5`); the bar shows until `loaded` reaches `total`.
 
 A pack sends `window/logMessage` for its own log lines and stderr; the app
 shows them in an output panel.
@@ -132,8 +135,8 @@ starts workers of its own); Stop must end all of it, which terminating the
 runner's worker does for workers it started.
 
 A language may use another language's pack (`pack` in
-`app/src/lib/languages.ts`): TypeScript and web projects use the
-`javascript` pack's server and runner. That runner also takes
+`app/src/lib/languages.ts`): TypeScript, web and p5.js sketch projects use
+the `javascript` pack's server and runner. That runner also takes
 `{ type: 'preview', id, files, entry }` for a web project's Preview panel
 and answers it with a page rather than a run (packs/javascript/README.md,
 "Preview"); this is the JavaScript pack's own addition, not something

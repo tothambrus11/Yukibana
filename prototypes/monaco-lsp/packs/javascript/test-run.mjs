@@ -504,6 +504,94 @@ check('preview: in a sandboxed srcdoc iframe under COEP the module runs and its 
 const broken = await page_preview({ 'index.html': '<script type="module" src="main.ts"></script>', 'main.ts': "import './missing.ts';\n" });
 check('preview: a missing import is an error and no page', broken.html === null && /cannot find module 'missing\.ts'/.test(broken.errors.join()), JSON.stringify(broken.errors));
 
+// p5.js, the package a page may import: an import map in the page maps the
+// bare 'p5' to one data: copy of p5-<version>.js, fetched by the preview
+// worker the first time a page imports it and reused by its rebuilds.
+const fetchedP5 = () => served.filter((p) => /\/p5-[\d.]+\.js$/.test(p)).length;
+check('p5: a page that does not import it gets no import map, and p5 is not fetched', fetchedP5() === 0 && !/importmap/.test(built.html ?? ''), JSON.stringify(served.filter((p) => /p5/.test(p))));
+const P5_PAGE = {
+	'index.html': '<!doctype html>\n<html>\n<head>\n<link rel="stylesheet" href="style.css">\n</head>\n<body>\n<script type="module" src="./main.ts"></script>\n</body>\n</html>\n',
+	'style.css': 'html, body { margin: 0; height: 100%; overflow: hidden; }\ncanvas { display: block; }\n',
+	'main.ts': `import p5 from 'p5';
+import { radius } from './size';
+
+new p5((p: p5) => {
+  p.setup = () => {
+    p.createCanvas(p.windowWidth, p.windowHeight);
+    p.pixelDensity(1);
+    p.noStroke();
+  };
+  p.windowResized = () => p.resizeCanvas(p.windowWidth, p.windowHeight);
+  p.draw = () => {
+    p.clear();
+    p.fill(255, 0, 0);
+    p.circle(p.mouseX, p.mouseY, radius * 2);
+  };
+  console.log('p5', p5.VERSION);
+});
+`,
+	'size.ts': "import p5 from 'p5';\nexport const radius: number = 20;\nexport const version: string = p5.VERSION;\n",
+};
+const twice = await page.evaluate(
+	(f) =>
+		new Promise((done) => {
+			const worker = new Worker('/packs/javascript/runner.js', { type: 'module' });
+			const pages = [];
+			worker.onmessage = ({ data: m }) => {
+				if (m.type !== 'page') return;
+				pages.push(m);
+				if (pages.length === 2) {
+					worker.terminate();
+					done(pages);
+				} else worker.postMessage({ type: 'preview', id: 2, files: { ...f, 'size.ts': f['size.ts'].replace('20', '25') }, entry: 'index.html' });
+			};
+			worker.postMessage({ type: 'preview', id: 1, files: f, entry: 'index.html' });
+		}),
+	P5_PAGE,
+);
+const p5Page = twice[0];
+const maps = (p5Page.html ?? '').match(/<script type="importmap">[^<]*<\/script>/g) ?? [];
+const p5Url = /"p5":"(data:text\/javascript;base64,[^"]+)"/.exec(maps[0] ?? '')?.[1] ?? '';
+check(
+	'p5: two modules that import it get one import map, before the first module script, with p5 as one data: URL',
+	p5Page.html !== null && maps.length === 1 && p5Url.length > 1_000_000 && (p5Page.html.split(p5Url).length - 1) === 1 && p5Page.html.indexOf('importmap') < p5Page.html.indexOf('<script type="module"'),
+	short(JSON.stringify(p5Page.errors), 200),
+);
+check('p5: the preview worker fetches it once, and a rebuild reuses it', fetchedP5() === 1 && twice[1].html !== null && twice[1].html.includes(p5Url), fetchedP5());
+const sketch = await page.evaluate(async (html) => {
+	const frame = document.createElement('iframe');
+	frame.sandbox = 'allow-scripts allow-forms allow-modals';
+	frame.name = 'p5-sketch';
+	frame.style.cssText = 'position: fixed; left: 0; top: 0; width: 400px; height: 300px; border: 0';
+	const messages = [];
+	addEventListener('message', (e) => e.source === frame.contentWindow && messages.push(e.data));
+	frame.srcdoc = html;
+	document.body.append(frame);
+	for (let i = 0; i < 100 && !messages.some((m) => /^p5 /.test(m.text)); i++) await new Promise((r) => setTimeout(r, 50));
+	return messages;
+}, p5Page.html ?? '');
+check('p5: the sketch runs in a sandboxed srcdoc iframe under COEP, with no error', sketch.some((m) => m.type === 'stdout' && m.text === 'p5 2.3.4\n') && !sketch.some((m) => m.type === 'stderr'), JSON.stringify(sketch).slice(0, 400));
+const p5Frame = await (await page.$('iframe[name="p5-sketch"]')).contentFrame();
+/** The canvas's size and the red channel at (x, y), read inside the sketch's frame. */
+const canvasAt = (x, y) =>
+	p5Frame.evaluate(([x, y]) => {
+		const canvas = document.querySelector('canvas');
+		if (!canvas) return null;
+		const red = canvas.getContext('2d').getImageData(x, y, 1, 1).data[0];
+		return { width: canvas.width, height: canvas.height, client: [canvas.clientWidth, canvas.clientHeight], red };
+	}, [x, y]);
+const before = await canvasAt(100, 100);
+check('p5: createCanvas(windowWidth, windowHeight) fills the frame', before?.width === 400 && before.height === 300 && before.client.join() === '400,300', JSON.stringify(before));
+await page.mouse.move(100, 100);
+await page.waitForTimeout(300);
+const under = await canvasAt(100, 100);
+await page.mouse.move(300, 200);
+await page.waitForTimeout(300);
+const left = await canvasAt(100, 100);
+const moved = await canvasAt(300, 200);
+check('p5: the circle follows the mouse: drawn under it, cleared where it was', before?.red === 0 && under?.red === 255 && left?.red === 0 && moved?.red === 255, JSON.stringify({ before: before?.red, under: under?.red, left: left?.red, moved: moved?.red }));
+await page.evaluate(() => document.querySelector('iframe[name="p5-sketch"]')?.remove());
+
 // 9. Mutate (`type: 'mutate'`): mutation testing with StrykerJS's instrumenter
 // and reporter, every test file run in a fresh worker per mutant.
 const mutateRun = async (files, entry = 'main.js', timeoutMs = 120000) => stripped(await page.evaluate(([f, e, t]) => window.runProgram('mutate', f, e, [], t), [files, entry, timeoutMs]));

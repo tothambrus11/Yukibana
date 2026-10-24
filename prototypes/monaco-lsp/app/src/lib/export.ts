@@ -50,7 +50,8 @@ const BUILD: Record<LanguageId, BuildFiles> = {
 	python: { paths: ['pyproject.toml'], generate: (p) => ({ 'pyproject.toml': pyprojectToml(p.files) }) },
 	javascript: { paths: ['package.json', 'stryker.config.json'], generate: (p) => ({ 'package.json': packageJson(p.language.entry, p.files), 'stryker.config.json': strykerConfig() }) },
 	typescript: { paths: ['package.json', 'stryker.config.json'], generate: (p) => ({ 'package.json': typescriptPackageJson(p.language.entry, p.files), 'stryker.config.json': strykerConfig() }) },
-	web: { paths: ['package.json'], generate: () => ({ 'package.json': vitePackageJson() }) },
+	web: { paths: ['package.json'], generate: (p) => ({ 'package.json': vitePackageJson('web-project', p.files) }) },
+	p5: { paths: ['package.json'], generate: (p) => ({ 'package.json': vitePackageJson('p5-project', p.files) }) },
 	scala: { paths: ['build.sbt', 'project/build.properties'], generate: (p) => ({ 'build.sbt': buildSbt(p.files), 'project/build.properties': `sbt.version=${SBT_VERSION}\n` }) },
 	php: { paths: ['composer.json', 'phpunit.xml'], generate: (p) => ({ 'composer.json': composerJson(p.language.entry, p.files), 'phpunit.xml': phpunitXml(p.files) }) },
 	rust: { paths: ['Cargo.toml'], generate: (p) => ({ 'Cargo.toml': cargoToml(p.files) }) },
@@ -573,9 +574,18 @@ const FAST_CHECK_VERSION = '4.10.2';
  * only, imported by its bare name from a script or module file.
  */
 function shippedPackages(files: Files): Record<string, string> {
-	const imports = /(?:^|[;\s])(?:import|export)\s[^'"]*?\bfrom\s*['"]fast-check['"]|\bimport\s*\(\s*['"]fast-check['"]\s*\)/m;
-	const uses = Object.entries(files).some(([path, text]) => /\.(?:[cm]?[jt]s|[jt]sx)$/.test(path) && imports.test(text));
-	return uses ? { 'fast-check': `^${FAST_CHECK_VERSION}` } : {};
+	return importsPackage(files, 'fast-check') ? { 'fast-check': `^${FAST_CHECK_VERSION}` } : {};
+}
+
+/**
+ * Whether a script or module file of the project imports `name` or a
+ * subpath of it (`p5/global`) by its bare name, statically or with
+ * `import()`.
+ */
+function importsPackage(files: Files, name: string): boolean {
+	const quoted = `['"]${name}(?:/[^'"]*)?['"]`;
+	const imports = new RegExp(`(?:^|[;\\s])(?:import|export)\\s[^'"]*?\\bfrom\\s*${quoted}|\\bimport\\s*(?:\\(\\s*)?${quoted}`, 'm');
+	return Object.entries(files).some(([path, text]) => /\.(?:[cm]?[jt]s|[jt]sx)$/.test(path) && imports.test(text));
 }
 
 /** The StrykerJS whose instrumenter and reporter the browser's Mutate runs (packs/javascript/package.json). */
@@ -667,18 +677,25 @@ const VITE_VERSION = '8.3.5';
 /** The TypeScript of the JavaScript pack's language server, for `npm run typecheck`. */
 const TYPESCRIPT_VERSION = '6.0.3';
 
+/** The p5.js a web page's Preview runs and the editor types (packs/javascript/package.json). */
+const P5_VERSION = '2.3.4';
+
 /**
  * package.json for a web project: Vite serves index.html at the project's
  * root as it is (`npm run dev`, with hot module replacement) and builds it
  * into dist/ (`npm run build`); `tsc` checks the types, which Vite does not.
+ * p5.js is a dependency when a file imports it, at the version Preview runs
+ * (packs/javascript/README.md, "Packages"): the page needs it at run time,
+ * and its types come with it.
  */
-export function vitePackageJson(): string {
+export function vitePackageJson(name: string, files: Files = {}): string {
 	const json = {
-		name: 'web-project',
+		name,
 		version: '0.1.0',
 		private: true,
 		type: 'module',
 		scripts: { dev: 'vite', build: 'vite build', preview: 'vite preview', typecheck: 'tsc' },
+		...(importsPackage(files, 'p5') ? { dependencies: { p5: `^${P5_VERSION}` } } : {}),
 		devDependencies: { typescript: TYPESCRIPT_VERSION, vite: VITE_VERSION },
 	};
 	return JSON.stringify(json, null, 2) + '\n';
@@ -1182,6 +1199,7 @@ function instructions(language: Language, files: Files): string[] {
 			];
 		}
 		case 'web':
+		case 'p5':
 			return [
 				'## Run\n\nWith Node.js 20.19 or later:\n\n```sh\nnpm install\nnpm run dev                 # a local server that reloads as you edit\nnpm run build               # the site, in dist/\nnpm run typecheck           # tsc: Vite does not check types\n```',
 				'## Editors\n\nVS Code and WebStorm open the folder as it is.',
@@ -1264,6 +1282,7 @@ const IGNORED: Record<LanguageId, readonly string[]> = {
 	javascript: ['node_modules/', '.stryker-tmp/', 'reports/'],
 	typescript: ['node_modules/', '.stryker-tmp/', 'reports/'],
 	web: ['node_modules/', 'dist/'],
+	p5: ['node_modules/', 'dist/'],
 	scala: ['target/', 'project/target/', 'project/project/', '.bsp/', '.bloop/', '.metals/', 'metals.sbt'],
 	php: ['vendor/', '.phpunit.cache/', '.phpunit.result.cache'],
 	rust: ['target/'],
