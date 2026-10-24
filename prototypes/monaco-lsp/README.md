@@ -149,7 +149,9 @@ after weeks without a visit, persistent storage or not.
 * **Scala**: not Metals, which cannot run in a browser. The LSP layer is
   ours; what it answers comes from the compiler. No libraries but
   ScalaCheck (for a project that names `org.scalacheck`; properties run
-  from a `main` with `.check()`, as there is no Test yet). No mutation
+  from a `main` with `.check()`, as there is no Test yet, and a `main` that
+  should exit 1 when one fails throws, as `System.exit` does not link in
+  Scala.js; packs/scala/README.md). No mutation
   testing: Stryker4s runs sbt on the JVM (packs/scala/README.md).
 * **Python**: the standard library only, plus pytest and Hypothesis
   (property-based tests, fetched only for a project that imports it); no

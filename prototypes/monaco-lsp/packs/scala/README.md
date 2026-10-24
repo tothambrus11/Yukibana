@@ -245,12 +245,12 @@ run from a `main`:
 import org.scalacheck.{Gen, Properties}
 import org.scalacheck.Prop.forAll
 
-object GeometrySpec extends Properties("Geometry"):
+class GeometrySpec extends Properties("Geometry"):
   val point = for x <- Gen.choose(-1e9, 1e9); y <- Gen.choose(-1e9, 1e9) yield (x, y)
   property("distance is symmetric") = forAll(point, point)((a, b) => distance(a, b) == distance(b, a))
   property("norm stays under 100") = forAll((n: Int) => distance((n.toDouble, 0.0), (0.0, 0.0)) < 100)
 
-@main def properties(): Unit = GeometrySpec.check()
+@main def properties(): Unit = GeometrySpec().check()
 ```
 
 prints ScalaCheck's own report, the failing case shrunk (the original
@@ -264,9 +264,40 @@ failing seed for Geometry.norm stays under 100 is gSDBwVAWsX6I_Dqn5rHoGZex0xCdkh
 > ARG_0_ORIGINAL: 2147483647
 ```
 
-Limits: `check()` prints and returns, so a falsified property does not make
-the run exit non-zero; `Properties.main` (what sbt's runner would call)
-does not link, because it calls `System.exit`, which Scala.js does not have.
+**Exit status.** `check()` prints and returns, so falsified properties
+leave the run's exit status 0, here as under `sbt run`. `Properties.main`,
+which exits 1 when a property fails, does not link: it calls `System.exit`,
+which Scala.js does not have (the same link error a Scala.js build with sbt
+gives; sbt runs Scala.js properties through ScalaCheck's test framework
+instead, and this pack has no Scala Test yet). Adding `System.exit` to
+Scala.js's class library would make programs link here that do not link
+anywhere else, so the pack does not. What ends a run non-zero in Scala.js,
+on Node.js or here, and on the JVM alike, is an uncaught exception
+(`Exception in thread "main"`, exit 1). So a `main` that should fail when a
+property does checks ScalaCheck's results itself, with the same report:
+
+```scala
+import org.scalacheck.{Gen, Properties, Test}
+import org.scalacheck.Prop.forAll
+import org.scalacheck.util.ConsoleReporter
+
+class GeometrySpec extends Properties("Geometry"):
+  // ... properties as above
+
+@main def properties(): Unit =
+  val results = Test.checkProperties(Test.Parameters.default.withTestCallback(ConsoleReporter(1)), GeometrySpec())
+  val failed = results.count((_, result) => !result.passed)
+  if failed > 0 then throw AssertionError(s"Found $failed failing properties.")
+```
+
+The report is `check()`'s (it is `ConsoleReporter(1)` too), then
+`Exception in thread "main" java.lang.AssertionError: Found 1 failing
+properties.` and exit 1; Download's `sbt run` exits non-zero the same way
+(`app/tests/export.mjs` checks both). `GeometrySpec` is a class here, not an
+object: an object extending `Properties` inherits a static `main` (that
+`Properties.main`), and a file with two mains runs whichever the compiler
+lists first, where sbt would ask which to run.
+
 ScalaCheck's shrinking of numbers halves them, so the shrunk value is a
 small failing one, not always the smallest (127 above, not 100). What
 `build.sh` does: the jar and the `scalajs-test-interface` it depends on

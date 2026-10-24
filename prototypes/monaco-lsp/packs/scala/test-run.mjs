@@ -272,19 +272,19 @@ lazy val big: Long = (1L to 20L).product
     check('sys.exit is not available (Scala.js has no System.exit): a link error, exit 1', exited.exit === 1 && /System\.exit/.test(exited.stderr),
         `stderr=${JSON.stringify(exited.stderr.split('\n').slice(0, 2).join('\n'))}`);
 
-    // ScalaCheck: a Properties object checked from main (Properties.main
+    // ScalaCheck: a Properties class checked from main (Properties.main
     // calls System.exit, which Scala.js does not have; check() reports).
     const PROPS = `import org.scalacheck.{Gen, Properties}
 import org.scalacheck.Prop.forAll
 
 def distance(a: (Double, Double), b: (Double, Double)): Double = math.hypot(a._1 - b._1, a._2 - b._2)
 
-object GeometrySpec extends Properties("Geometry"):
+class GeometrySpec extends Properties("Geometry"):
   val point = for x <- Gen.choose(-1e9, 1e9); y <- Gen.choose(-1e9, 1e9) yield (x, y)
   property("distance is symmetric") = forAll(point, point)((a, b) => distance(a, b) == distance(b, a))
   property("norm stays under 100") = forAll((n: Int) => distance((n.toDouble, 0.0), (0.0, 0.0)) < 100)
 
-@main def properties(): Unit = GeometrySpec.check()
+@main def properties(): Unit = GeometrySpec().check()
 `;
     const props = await runProgram({ 'Main.scala': PROPS }, 'Main.scala');
     const arg = /^> ARG_0: (-?\d+)$/m.exec(props.stdout);
@@ -294,6 +294,39 @@ object GeometrySpec extends Properties("Geometry"):
             /^! Geometry\.norm stays under 100: Falsified after \d+ passed tests\.$/m.test(props.stdout) &&
             !!arg && !!original && Math.abs(+arg[1]) >= 100 && Math.abs(+arg[1]) <= Math.abs(+original[1]),
         `(${props.ms} ms: ${phases(props)}) stdout=${JSON.stringify(props.stdout)} stderr=${JSON.stringify(props.stderr.slice(0, 600))}`);
+    // check() reports and returns, so falsified properties leave the exit
+    // status 0. A main that wants the status checks the results itself and
+    // throws, the one way a Scala.js program (here, or under Node with sbt)
+    // and a JVM program (Download's sbt run) both end non-zero.
+    // A class, not an object: an object extending Properties inherits a
+    // static `main` (Properties.main, which calls System.exit), and with two
+    // mains in a file which one runs is not up to the program (sbt asks).
+    const MAIN_EXIT = `import org.scalacheck.{Gen, Properties, Test}
+import org.scalacheck.Prop.forAll
+import org.scalacheck.util.ConsoleReporter
+
+def distance(a: (Double, Double), b: (Double, Double)): Double = math.hypot(a._1 - b._1, a._2 - b._2)
+
+class GeometrySpec extends Properties("Geometry"):
+  val point = for x <- Gen.choose(-1e9, 1e9); y <- Gen.choose(-1e9, 1e9) yield (x, y)
+  property("distance is symmetric") = forAll(point, point)((a, b) => distance(a, b) == distance(b, a))
+  property("norm stays under 100") = forAll((n: Int) => distance((n.toDouble, 0.0), (0.0, 0.0)) < 100)
+
+@main def properties(): Unit =
+  val results = Test.checkProperties(Test.Parameters.default.withTestCallback(ConsoleReporter(1)), GeometrySpec())
+  val failed = results.count((_, result) => !result.passed)
+  if failed > 0 then throw AssertionError(s"Found $failed failing properties.")
+`;
+    const propsExit = await runProgram({ 'Main.scala': MAIN_EXIT }, 'Main.scala');
+    check('ScalaCheck: a main that checks Test.checkProperties\' results and throws when one failed exits 1, after the same report with the shrunk case',
+        propsExit.exit === 1 && /^\+ Geometry\.distance is symmetric: OK, passed 100 tests\.$/m.test(propsExit.stdout) &&
+            /^! Geometry\.norm stays under 100: Falsified after \d+ passed tests\.$/m.test(propsExit.stdout) && /^> ARG_0: -?\d+$/m.test(propsExit.stdout) &&
+            /^Exception in thread "main" java\.lang\.AssertionError: Found 1 failing properties\.$/m.test(propsExit.stderr),
+        `exit=${propsExit.exit} stdout=${JSON.stringify(propsExit.stdout)} stderr=${JSON.stringify(propsExit.stderr.slice(0, 300))}`);
+    const propsPass = await runProgram({ 'Main.scala': MAIN_EXIT.replace(/\n  property\("norm stays under 100"\).*\n/, '\n') }, 'Main.scala');
+    check('ScalaCheck: the same main exits 0 when every property holds',
+        propsPass.exit === 0 && /^\+ Geometry\.distance is symmetric: OK, passed 100 tests\.$/m.test(propsPass.stdout) && !/norm stays/.test(propsPass.stdout) && propsPass.stderr === '',
+        `exit=${propsPass.exit} stdout=${JSON.stringify(propsPass.stdout)} stderr=${JSON.stringify(propsPass.stderr.slice(0, 300))}`);
     check('ScalaCheck: its class path and IR are downloaded for a project that names it',
         ['scalacheck-1.18.1-classpath.bin', 'scalacheck-1.18.1-sjsir.bin'].every((f) => props.loading[f]?.loaded > 0), Object.keys(props.loading).join(', '));
 

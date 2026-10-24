@@ -310,6 +310,15 @@ const cases = {
 		const props = 'import org.scalacheck.Prop.forAll\n\n@main def properties(): Unit =\n  forAll((a: Int, b: Int) => a + b == b + a).check()\n';
 		check(buildSbt({ 'Props.scala': props }).includes('"org.scalacheck" %% "scalacheck" % "1.18.1",'), 'scala-scalacheck: build.sbt has ScalaCheck as a dependency of the main sources');
 		await scalaRun('scala-scalacheck', { 'Props.scala': props }, '+ OK, passed 100 tests.');
+		// A main that throws when a property fails ends non-zero under sbt as
+		// in the browser (packs/scala/README.md, "Property-based tests").
+		const failing = 'import org.scalacheck.{Properties, Test}\nimport org.scalacheck.Prop.forAll\nimport org.scalacheck.util.ConsoleReporter\n\nclass Spec extends Properties("Spec"):\n  property("small") = forAll((n: Int) => n < 100)\n\n@main def properties(): Unit =\n  val failed = Test.checkProperties(Test.Parameters.default.withTestCallback(ConsoleReporter(1)), Spec()).count((_, r) => !r.passed)\n  if failed > 0 then throw AssertionError(s"Found $failed failing properties.")\n';
+		const dir = await download('scala-scalacheck-exit', sample('scala'), { 'Props.scala': failing });
+		const { sbt, flags } = sbtCommand();
+		if (dir && sbt) {
+			const r = run(sbt, [...flags, '--batch', 'run'], dir);
+			check(r.status !== 0 && r.output.includes('! Spec.small: Falsified') && r.output.includes('Found 1 failing properties.'), 'scala-scalacheck-exit: sbt run of a main that throws when a property fails prints the report and exits non-zero', tail(r.output));
+		} else if (dir) skip('scala-scalacheck-exit: sbt is missing');
 	},
 };
 // An empty folder survives the zip.
