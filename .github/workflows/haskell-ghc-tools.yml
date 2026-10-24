@@ -12,6 +12,7 @@ on:
       - claude/project-thread-3ei4fl
     paths:
       - prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh
+      - prototypes/monaco-lsp/packs/haskell/ghc/*.patch
       - .github/workflows/haskell-ghc-tools.yml
   workflow_dispatch:
 
@@ -32,10 +33,10 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: |
-            ~/.ghc-wasm-9.12
+            ~/.ghc-wasm
             /tmp/yk/tools-store
-          key: ghc-wasm-912-tools-${{ github.run_id }}
-          restore-keys: ghc-wasm-912-tools-
+          key: ghc-wasm-914-tools-${{ github.run_id }}
+          restore-keys: ghc-wasm-914-tools-
 
       - name: Install alex and happy
         run: sudo apt-get install -y --no-install-recommends alex happy
@@ -48,9 +49,9 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: |
-            ~/.ghc-wasm-9.12
+            ~/.ghc-wasm
             /tmp/yk/tools-store
-          key: ghc-wasm-912-tools-${{ github.run_id }}
+          key: ghc-wasm-914-tools-${{ github.run_id }}
 
       - uses: actions/upload-artifact@v6
         if: always()

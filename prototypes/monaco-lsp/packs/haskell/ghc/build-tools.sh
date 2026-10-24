@@ -16,28 +16,35 @@
 # ghc-lib-parser generates its lexer and parser when it is built, with the
 # build machine's alex and happy (the workflow installs them).
 #
-# Like build-rootfs.sh it needs GHC's wasm toolchain, so it runs in CI
-# (.github/workflows/haskell-ghc-tools.yml), which installs it the same way,
-# but GHC 9.12's, not the pack's 9.14: hlint's latest release (3.10, and
-# its master) parses with ghc-lib-parser 9.12, whose base stops before
-# GHC 9.14's, and the tools are commands of their own, linked with nothing
-# of the pack's GHC. ormolu is taken at its last release on the same
-# parser, so that one ghc-lib-parser (most of the build) serves both. Both
-# then parse what GHC 9.12 parses; what 9.14 added to the language is rare
-# in a course's code, and a module neither can parse gets GHC's error from
-# the language server all the same.
+# Like build-rootfs.sh it needs GHC's wasm toolchain, the same one (GHC
+# 9.14, the same ghc-wasm-meta commit and prefix), so it runs in CI
+# (.github/workflows/haskell-ghc-tools.yml). The tools are commands of
+# their own, linked with nothing of the pack's GHC, but they parse with
+# ghc-lib-parser 9.14, so they read what the pack's GHC reads.
+#
+# ormolu parses with ghc-lib-parser 9.14 since 0.8.2. hlint's latest release
+# (3.10) and its master still ask for ghc-lib-parser 9.12; hlint-3.10-ghc-9.14.patch
+# (next to this script) moves 3.10 to ghc-lib-parser 9.14 and
+# ghc-lib-parser-ex 9.14: the .cabal bounds, and the source changes GHC
+# 9.14's syntax tree asks for (right-hand sides are a NonEmpty, holes are
+# HsHole, PrefixCon lost its type arguments, record fields are
+# HsConDeclRecField, exact-print annotations changed). It is hlint's open
+# pull request 1673 ("updates for compatibility with ghc-9.14", against
+# master) carried back to the 3.10 tarball, with the two hunks master had
+# moved redone by hand and its macOS link flag left out; meant to be dropped
+# for the release that merges it.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 OUT=$(realpath -m "${1:?usage: build-tools.sh OUT}")
 META_REV=8079eb96bbc63823d99ad8acaff0765532625474
-FLAVOUR=9.12
-PREFIX=${GHC_WASM_TOOLS_PREFIX:-$HOME/.ghc-wasm-$FLAVOUR}
+FLAVOUR=9.14
+PREFIX=${GHC_WASM_PREFIX:-$HOME/.ghc-wasm}
 STORE=/tmp/yk/tools-store
 # Pinned: the formatter's output is the project's style, and hlint's hints
 # are what the editor offers.
-ORMOLU=0.8.0.2
-ORMOLU_SHA256=4d89f82ee87c3e4b4cafa490a1a8260ed3f5af1a81a48a43ddfd6fe435a902ba
+ORMOLU=0.9.0.0
+ORMOLU_SHA256=212ee5ec17638f802a406122c8b839e3e6aa05d9b5886bfeb46cc90935f0bc6f
 HLINT=3.10
 HLINT_SHA256=d99672337c06b455884ac14418d562701143141d0d7e46af476817c2ae3efe37
 # Their dependencies: what Hackage's index offered then.
@@ -60,11 +67,11 @@ wasm32-wasi-cabal update "hackage.haskell.org,$INDEX_STATE"
 mkdir -p "$OUT" "$STORE"
 BIN=$(mktemp -d)
 WORK=$(mktemp -d)
-# Each is built from its source as a local package: their executables ask
-# for GHC's threaded RTS (-threaded), which WebAssembly has not, so the flag
-# is taken out of the .cabal file first, and with it ormolu's
-# -with-rtsopts=-N (as many capabilities as cores), which the
-# non-threaded RTS refuses at start-up.
+# Each is built from its source as a local package. Their executables ask
+# for GHC's threaded RTS (-threaded), which WebAssembly has not: hlint has a
+# flag for it (-threaded below); ormolu has none, so the option is taken out
+# of its .cabal file, and with it -with-rtsopts=-N (as many capabilities as
+# cores), which the non-threaded RTS refuses at start-up.
 build() { # package version sha256 exe [cabal flags]
     log "$1 $2"
     (
@@ -73,7 +80,10 @@ build() { # package version sha256 exe [cabal flags]
         echo "$3  $1-$2.tar.gz" | sha256sum -c --quiet -
         tar xzf "$1-$2.tar.gz"
         cd "$1-$2"
-        sed -i -e 's/-threaded//g' -e 's/-with-rtsopts=-N\([[:space:]]\|$\)/\1/g' "$1.cabal"
+        if [[ -f "$HERE/$1-$2-ghc-9.14.patch" ]]; then patch -p1 < "$HERE/$1-$2-ghc-9.14.patch"; fi
+        if [[ $1 == ormolu ]]; then
+            sed -i -e 's/-threaded//g' -e 's/-with-rtsopts=-N\([[:space:]]\|$\)/\1/g' "$1.cabal"
+        fi
         wasm32-wasi-cabal --store-dir="$STORE" install "exe:$4" "${@:5}" \
             --installdir="$BIN" --install-method=copy --overwrite-policy=always \
             --disable-profiling --disable-documentation \
@@ -88,8 +98,9 @@ build() { # package version sha256 exe [cabal flags]
 }
 build ormolu "$ORMOLU" "$ORMOLU_SHA256" ormolu
 # -gpl: hlint without hscolour (GPL), as its own release builds are;
-# +ghc-lib: on ghc-lib-parser, as ormolu is, not on the toolchain's ghc.
-build hlint "$HLINT" "$HLINT_SHA256" hlint --flags='-gpl +ghc-lib'
+# +ghc-lib: on ghc-lib-parser, as ormolu is, not on the toolchain's ghc;
+# -threaded: the RTS WebAssembly has.
+build hlint "$HLINT" "$HLINT_SHA256" hlint --flags='-gpl +ghc-lib -threaded'
 
 # hlint's data files (hlint.yaml and the hints it includes), from the
 # package's source: hlint --datadir=/hlint finds them there.
@@ -101,7 +112,7 @@ cp -r "$WORK/hlint-$HLINT/data" "$OUT/hlint"
     printf '\n\nBoth link ghc-lib-parser (GHC'"'"'s parser, BSD-3-Clause) and other Hackage\npackages under BSD-style licences; their licences are in the source\ndistributions on hackage.haskell.org.\n'
 } > "$OUT/LICENSE-tools.txt"
 cat > "$OUT/tools.json" <<EOF
-{ "ormolu": "$ORMOLU", "hlint": "$HLINT", "ghc": "$(wasm32-wasi-ghc --numeric-version)", "ghcWasmMeta": "$META_REV" }
+{ "ormolu": "$ORMOLU", "hlint": "$HLINT", "hlintPatch": "hlint-3.10-ghc-9.14.patch", "ghc": "$(wasm32-wasi-ghc --numeric-version)", "ghcWasmMeta": "$META_REV" }
 EOF
 
 log "smoke test (wasmtime)"
@@ -111,6 +122,11 @@ wasmtime run "$OUT/ormolu.wasm" --stdin-input-file A.hs < "$WORK/A.hs"
 hints=$(wasmtime run --dir "$OUT/hlint::/hlint" --dir "$WORK::/w" "$OUT/hlint.wasm" --datadir=/hlint --json /w/A.hs || true)
 echo "$hints"
 grep -q '"hint"' <<<"$hints"
+# GHC 9.14's syntax (explicit level imports are new in 9.14): reported, not
+# fatal, as the pack's test.mjs asserts it.
+printf '{-# LANGUAGE ExplicitLevelImports, TemplateHaskell #-}\nmodule B where\nimport splice Data.List (sort)\nimport quote Data.Char\nb = map (\\x -> x+1) [1,2,3]\n' > "$WORK/B.hs"
+wasmtime run "$OUT/ormolu.wasm" --stdin-input-file B.hs < "$WORK/B.hs" || echo "ormolu: GHC 9.14 syntax NOT understood"
+wasmtime run --dir "$OUT/hlint::/hlint" --dir "$WORK::/w" "$OUT/hlint.wasm" --datadir=/hlint --json /w/B.hs || true
 # Every file's hash, for the pack's build.sh to pin (it pins this file's).
 (cd "$OUT" && find . -type f ! -name SHA256SUMS | sort | xargs sha256sum > SHA256SUMS)
 cat "$OUT/SHA256SUMS"
