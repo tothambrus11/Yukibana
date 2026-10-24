@@ -99,7 +99,8 @@ SRC="$CACHE/teavm-javac"
 B="$SRC/compiler/build"
 STAMP="$( (echo "$TEAVM_JAVAC_COMMIT $JDK25U_REVISION"; cat "$HERE/teavm-javac.patch"; \
     find "$HERE/compiler" "$HERE/classlib" -type f -name '*.java' | sort | xargs cat) | sha256sum | cut -d' ' -f1)"
-if [ "$(cat "$CACHE/build.stamp" 2>/dev/null)" != "$STAMP" ] || [ ! -f "$B/generated/teavm/wasm-gc/compiler.wasm" ]; then
+if [ "$(cat "$CACHE/build.stamp" 2>/dev/null)" != "$STAMP" ] || [ ! -f "$B/generated/teavm/wasm-gc/compiler.wasm" ] \
+    || [ ! -f "$B/generated/teavm/wasm-gc/compiler.wasm-runtime.js" ]; then
     if [ ! -d "$SRC/.git" ]; then
         git clone -q https://github.com/konsoletyper/teavm-javac "$SRC"
     fi
@@ -118,15 +119,18 @@ if [ "$(cat "$CACHE/build.stamp" 2>/dev/null)" != "$STAMP" ] || [ ! -f "$B/gener
 
     # 4. Build: the compiler module (javac + TeaVM + ours, to compiler.wasm)
     #    and the two class library archives. TeaVM compiles out of process
-    #    with 4 GB; about 3 minutes on 4 cores.
-    rm -f "$B/generated/teavm/wasm-gc/compiler.wasm"
+    #    with 4 GB; about 3 minutes on 4 cores. copyWasmGCRuntime writes
+    #    compiler.wasm-runtime.js (teavm-runtime.js): generateWasmGC does not,
+    #    and a cache whose first build ran Gradle's whole `build` hid that.
+    rm -f "$B/generated/teavm/wasm-gc/compiler.wasm" "$B/generated/teavm/wasm-gc/compiler.wasm-runtime.js"
     status=0
     ( cd "$SRC" && nice -n 10 ./gradlew --no-daemon -q \
         -Pjdk.zip="$JDK_ZIP" -Pyukibana.classlib="$HERE/classlib" \
-        :compiler:generateWasmGC :compiler:buildTeaVMClassLib :compiler:generateClassLib ) \
+        :compiler:generateWasmGC :compiler:copyWasmGCRuntime :compiler:buildTeaVMClassLib :compiler:generateClassLib ) \
         > "$CACHE/gradle.log" 2>&1 || status=$?
     grep -v -e '^Picked up JAVA_TOOL_OPTIONS' -e 'RELEASE_11' -e '^1 warning' -e '^Build daemon' "$CACHE/gradle.log" || true
-    if [ "$status" != 0 ] || [ ! -f "$B/generated/teavm/wasm-gc/compiler.wasm" ]; then
+    if [ "$status" != 0 ] || [ ! -f "$B/generated/teavm/wasm-gc/compiler.wasm" ] \
+        || [ ! -f "$B/generated/teavm/wasm-gc/compiler.wasm-runtime.js" ]; then
         echo "teavm-javac did not build (gradle exit $status; log in $CACHE/gradle.log)" >&2
         exit 1
     fi
