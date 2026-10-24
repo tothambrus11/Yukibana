@@ -81,12 +81,18 @@ async function run(language, c) {
 	const page = await browser.newPage({ viewport: { width: 1400, height: 850 } });
 	const errors = [];
 	page.on('pageerror', (e) => errors.push(e.message));
+	// `?trace` logs every LSP message to the console (cut at 2000 characters)
+	// and exposes `monaco`, for the checks that need to see what was asked.
+	const lspLog = [];
+	page.on('console', (m) => {
+		if (m.type() === 'debug' && m.text().startsWith('lsp ')) lspLog.push(m.text());
+	});
 	const check = (ok, what) => {
 		console.log(`${ok ? 'ok  ' : 'FAIL'} ${language}: ${what}`);
 		if (!ok) failures.push(`${language}: ${what}`);
 	};
 	const t0 = Date.now();
-	await page.goto(`http://127.0.0.1:${port}/`);
+	await page.goto(`http://127.0.0.1:${port}/?trace`);
 	await page.evaluate(() => localStorage.clear());
 	await page.reload();
 	await page.selectOption('header select', language);
@@ -162,6 +168,8 @@ async function run(language, c) {
 	if (language === 'web') await previewing(page, check);
 	if (language === 'web') await webServices(page, check);
 	if (language === 'python') await peek(page, check);
+	if (language === 'cpp') await cppBridge(page, check, lspLog);
+	if (language === 'typescript') await renameFromUse(page, check);
 	if (language === 'cpp' && existsSync(join(build, 'packs', 'cpp', 'runner.js'))) await testFrameworks(page, check);
 
 	check(errors.length === 0, `no page errors${errors.length ? ': ' + errors.join('; ') : ''}`);
@@ -191,6 +199,108 @@ async function testFrameworks(page, check) {
 		const clean = await errors.filter({ hasText: /^0$/ }).waitFor({ timeout: 30_000 }).then(() => true, () => false);
 		check(clean, `clangd resolves the ${framework} headers: ${(await errors.textContent())?.trim()} errors`);
 	}
+}
+
+/** Opens a project file from the explorer and waits for its tab. */
+async function openFile(page, name) {
+	await page.locator('.explorer .row .name', { hasText: new RegExp(`^${name.replace(/[.]/g, '\\.')}$`) }).click();
+	await page.locator('.dv-tab.dv-active-tab .dock-tab', { hasText: name }).first().waitFor({ timeout: 10_000 });
+}
+
+/** Puts the caret of the editor showing `needle` just inside its first occurrence, and focuses it. */
+async function place(page, needle) {
+	const ok = await page.evaluate((needle) => {
+		for (const e of globalThis.monaco.editor.getEditors()) {
+			const model = e.getModel();
+			const match = model?.findMatches(needle, false, false, true, null, false)[0];
+			if (!match) continue;
+			e.setPosition({ lineNumber: match.range.startLineNumber, column: match.range.startColumn + 1 });
+			e.focus();
+			return true;
+		}
+		return false;
+	}, needle);
+	if (!ok) throw new Error(`no editor shows ${needle}`);
+}
+
+/**
+ * Renames what is at `needle` through the UI: F2, the new name, Enter. The
+ * name is filled into the rename box rather than typed, because the box
+ * takes focus a moment after it appears and keys typed before then go to
+ * the editor.
+ */
+async function rename(page, needle, name) {
+	await place(page, needle);
+	await page.keyboard.press('F2');
+	const input = page.locator('.rename-box .rename-input');
+	await input.waitFor({ timeout: 15_000 });
+	await input.fill(name);
+	await input.press('Enter');
+}
+
+/** The text a model holds, by its project path. */
+function modelText(page, path) {
+	return page.evaluate((path) => globalThis.monaco.editor.getModels().find((m) => m.uri.path === `/workspace/${path}`)?.getValue() ?? null, path);
+}
+
+/** Whether some `method` request in the trace was answered with a non-empty result. */
+function answered(lspLog, method) {
+	const ids = new Set(lspLog.filter((l) => l.startsWith('lsp send') && l.includes(`"method":"${method}"`)).map((l) => /"id":(\d+)/.exec(l)?.[1]));
+	// Servers order a response's keys as they like, and a long one is cut,
+	// so the first `id` (the response's own) and the result's start are matched.
+	return lspLog.some((l) => l.startsWith('lsp receive') && ids.has(/"id":(\d+)/.exec(l)?.[1]) && /"result":(\[[^\]]|\{)/.test(l));
+}
+
+/**
+ * The capabilities clangd offers beyond the basics reach the editor: folding
+ * ranges, smart select (Shift+Alt+Right grows to the whole call), the
+ * `#include "geometry.h"` link (and none to `<vector>`, a file the project
+ * does not have), and a rename clangd refuses after the new name was typed
+ * says why instead of silently doing nothing.
+ */
+async function cppBridge(page, check, lspLog) {
+	await openFile(page, 'main.cpp');
+	for (let i = 0; i < 20 && !answered(lspLog, 'textDocument/foldingRange'); i++) await page.waitForTimeout(500);
+	check(answered(lspLog, 'textDocument/foldingRange'), 'folding ranges come from clangd');
+
+	await place(page, 'distance(points');
+	const selected = [];
+	for (let i = 0; i < 4; i++) {
+		await page.keyboard.press('Shift+Alt+ArrowRight');
+		await page.waitForTimeout(400);
+		selected.push(await page.evaluate(() => {
+			const e = globalThis.monaco.editor.getEditors().find((e) => e.hasTextFocus());
+			return e ? e.getModel().getValueInRange(e.getSelection()) : '';
+		}));
+	}
+	check(answered(lspLog, 'textDocument/selectionRange') && selected.includes('distance(points[0], points[1])'), `smart select grows to the call, from clangd (${JSON.stringify(selected)})`);
+	await page.keyboard.press('Escape');
+
+	const links = page.locator('.dv-groupview .view-line .detected-link');
+	const linked = await links.filter({ hasText: 'geometry.h' }).first().waitFor({ timeout: 15_000 }).then(() => true, () => false);
+	const texts = await links.allTextContents();
+	check(linked && !texts.some((t) => t.includes('vector')), `#include "geometry.h" is a link, <vector> is not (links: ${JSON.stringify(texts)})`);
+
+	const before = await modelText(page, 'main.cpp');
+	await rename(page, 'distance(points', 'int');
+	const message = page.locator('.monaco-editor-overlaymessage');
+	const said = await message.first().waitFor({ timeout: 15_000 }).then(() => true, () => false);
+	const reason = said ? ((await message.first().textContent()) ?? '').trim() : '';
+	check(said && /keyword/i.test(reason) && (await modelText(page, 'main.cpp')) === before, `renaming distance to int is refused with clangd's reason (${JSON.stringify(reason)})`);
+	await page.keyboard.press('Escape');
+}
+
+/**
+ * Renaming a call of an imported function renames the function: its
+ * declaration in geometry.ts and every use, not a local alias
+ * (`import { distance as dist3 }`).
+ */
+async function renameFromUse(page, check) {
+	await openFile(page, 'main.ts');
+	await rename(page, 'distance(a, b)', 'dist3');
+	const renamed = await page.waitForFunction(() => globalThis.monaco.editor.getModels().find((m) => m.uri.path === '/workspace/geometry.ts')?.getValue().includes('function dist3('), null, { timeout: 15_000 }).then(() => true, () => false);
+	const main = (await modelText(page, 'main.ts')) ?? '';
+	check(renamed && !/\bas dist3\b/.test(main) && main.includes('dist3(a, b)'), `renaming distance from its call in main.ts renames the function in geometry.ts, without an alias (main.ts: ${JSON.stringify(main.split('\n')[0])})`);
 }
 
 /** jsconfig.json is highlighted as JSON, completes compiler options from its schema and flags unknown values. */

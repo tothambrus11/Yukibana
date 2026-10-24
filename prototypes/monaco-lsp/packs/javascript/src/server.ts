@@ -659,7 +659,12 @@ const preferences = (): TS.UserPreferences => ({
   includeAutomaticOptionalChainCompletions: true,
   includeCompletionsWithClassMemberSnippets: clientSnippets,
   allowIncompleteCompletions: true,
-  providePrefixAndSuffixTextForRename: true,
+  // A rename edits the declaration and every use, in every file, whichever
+  // use it starts from. With prefix and suffix text (VS Code's default,
+  // `useAliasesForRenames`), renaming a call of an imported function only
+  // aliased it locally (`import { distance as dist3 }`), which is not what a
+  // beginner who asked for a rename expects.
+  providePrefixAndSuffixTextForRename: false,
   allowRenameOfImportPath: false,
 });
 

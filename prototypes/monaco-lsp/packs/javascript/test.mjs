@@ -265,6 +265,11 @@ check('references to `add` span both files', new Set(refs?.map((r) => r.uri)).si
 
 const rename = await request('textDocument/rename', { textDocument: { uri: W + 'math.js' }, position: { line: 6, character: 17 }, newName: 'sum' });
 check('rename `add` edits both files', Object.keys(rename?.changes ?? {}).length === 2, Object.fromEntries(Object.entries(rename?.changes ?? {}).map(([k, v]) => [k.slice(W.length), v.length])));
+// From a call in the importing file: the export itself is renamed, not
+// aliased locally as `import { add as sum }` (providePrefixAndSuffixTextForRename).
+const renameUse = await request('textDocument/rename', { textDocument: { uri: W + 'main.js' }, position: { line: 4, character: 11 }, newName: 'sum' });
+const useEdits = Object.values(renameUse?.changes ?? {}).flat();
+check('rename `add` from a call in main.js renames the export in math.js, without an alias', !!renameUse?.changes?.[W + 'math.js'] && useEdits.every((e) => e.newText === 'sum'), Object.fromEntries(Object.entries(renameUse?.changes ?? {}).map(([k, v]) => [k.slice(W.length), v.map((e) => e.newText)])));
 
 const sig = await request('textDocument/signatureHelp', { textDocument: { uri: W + 'main.js' }, position: { line: 6, character: 4 }, context: { triggerKind: 2, triggerCharacter: '(', isRetrigger: false } });
 check('signature help inside add(…)', sig?.signatures?.[0]?.label === 'add(a: number, b: number): number' && sig.activeParameter === 0, sig?.signatures?.[0]?.label);

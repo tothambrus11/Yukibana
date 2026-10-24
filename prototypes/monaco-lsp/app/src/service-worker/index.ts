@@ -17,7 +17,10 @@
  *
  * Updates: a new build's worker installs, then waits; the page offers a
  * reload (pwa.ts), which sends `skip-waiting`. Activating drops the old
- * app cache, and the pack files the new build changed.
+ * app cache, and the pack files the new build changed. Pages come from
+ * the worker's own cache, so a page never runs against another build's
+ * packs; a page of another build than its worker (one served by a worker
+ * from before this rule) switches at once (pwa.ts).
  *
  * Isolation: some language servers block on a `SharedArrayBuffer`, which a
  * page may only use when it is served with COOP and COEP headers. A static
@@ -108,6 +111,8 @@ sw.addEventListener('activate', (event) => {
 
 sw.addEventListener('message', (event) => {
 	if (event.data === 'skip-waiting') void sw.skipWaiting();
+	// Which build this worker is (pwa.ts compares it with the page's).
+	else if (event.data === 'version') event.ports[0]?.postMessage(version);
 });
 
 /** A copy of a response with the isolation headers added. Opaque and error responses pass unchanged. */
@@ -123,12 +128,20 @@ function isolated(response: Response): Response {
 async function respond(request: Request, event: FetchEvent): Promise<Response> {
 	const path = pathOf(request.url);
 	const app = await caches.open(APP);
-	// Pages: the network when it answers, so a new build is picked up; the cache offline.
+	// Pages: this worker's own build, from its cache, so the page and the
+	// pack files this worker serves are one build. It used to be the network
+	// first: after a deploy, the page was the new build while the old worker,
+	// still in control until the reload is accepted, served the packs it had
+	// cached, and a new page's C++ Test found no doctest headers in the old
+	// sysroot. A new build reaches the page through the update prompt. In
+	// development the page is always fresh.
 	if (request.mode === 'navigate') {
+		const own = import.meta.env.DEV ? undefined : ((await app.match(request, { ignoreSearch: true })) ?? (await app.match(url(''))));
+		if (own) return own;
 		try {
 			return await fetch(request);
 		} catch {
-			return (await app.match(request, { ignoreSearch: true })) ?? (await app.match(url(''))) ?? Response.error();
+			return Response.error();
 		}
 	}
 	if (path === null) return fetch(request);

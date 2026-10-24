@@ -8,6 +8,7 @@ import type * as lsp from 'vscode-languageserver-protocol';
 import { monaco } from '../monaco';
 import { Connection, REQUEST_CANCELLED, ResponseError } from './connection';
 import * as c from './convert';
+import { reasonOf, toFolds, toSelectionChain } from './plain';
 
 /** What a pack reports while it downloads, from the `yukibana/loading` notification. */
 export interface LoadingProgress {
@@ -66,6 +67,12 @@ export class LanguageClient {
 	private ready = false;
 	private stopping = false;
 	private readonly semanticTokensChanged = new monaco.Emitter<void>();
+	/**
+	 * Listeners for the errors a server shows (`window/showMessage` of type
+	 * Error) while a request that wants them is pending: Phpactor reports a
+	 * failed rename that way as well as in its answer.
+	 */
+	private readonly shownErrors = new Set<(message: string) => void>();
 
 	/** The pack's `server.js`. */
 	readonly serverUrl: URL;
@@ -205,6 +212,11 @@ export class LanguageClient {
 					rename: { prepareSupport: true },
 					formatting: {},
 					rangeFormatting: {},
+					onTypeFormatting: {},
+					// Monaco folds whole lines only.
+					foldingRange: { lineFoldingOnly: true, foldingRangeKind: { valueSet: ['comment', 'imports', 'region'] } },
+					selectionRange: {},
+					documentLink: { tooltipSupport: true },
 					codeAction: {
 						codeActionLiteralSupport: { codeActionKind: { valueSet: ['', 'quickfix', 'refactor', 'refactor.extract', 'refactor.inline', 'refactor.rewrite', 'source', 'source.organizeImports'] } },
 						isPreferredSupport: true,
@@ -237,6 +249,7 @@ export class LanguageClient {
 		conn.onNotification('window/showMessage', (p) => {
 			const m = p as lsp.ShowMessageParams;
 			events.log(LOG_LEVELS[m.type] ?? 'info', m.message);
+			if (m.type === 1) for (const listener of this.shownErrors) listener(m.message);
 		});
 		conn.onNotification('textDocument/publishDiagnostics', (p) => this.publishDiagnostics(p as lsp.PublishDiagnosticsParams));
 		conn.onNotification('$/progress', (p) => {
@@ -534,10 +547,26 @@ export class LanguageClient {
 			add(
 				L.registerRenameProvider(selector, {
 					provideRenameEdits: async (model, position, newName, token) => {
-						const edit = await this.ask<lsp.WorkspaceEdit>(model, 'textDocument/rename', { ...at(model, position), newName }, token);
-						if (!edit) return { edits: [] };
-						const { edit: converted, unsupported } = c.toWorkspaceEdit(edit);
+						// A refused rename says why, in the editor: it used to be
+						// only logged, and the rename silently did nothing. The
+						// reason is the error response or, when the server
+						// answered with nothing, an error it showed meanwhile.
+						let shown: string | undefined;
+						const listener = (message: string) => (shown ??= message);
+						this.shownErrors.add(listener);
+						let edit: lsp.WorkspaceEdit | null;
+						try {
+							edit = await this.askOrThrow<lsp.WorkspaceEdit>(model, 'textDocument/rename', { ...at(model, position), newName }, token);
+						} catch (e) {
+							const message = e instanceof Error ? e.message : String(e);
+							this.options.events.log('error', `textDocument/rename: ${message}`);
+							return { edits: [], rejectReason: reasonOf(message) };
+						} finally {
+							this.shownErrors.delete(listener);
+						}
+						const { edit: converted, unsupported } = edit ? c.toWorkspaceEdit(edit) : { edit: { edits: [] }, unsupported: [] };
 						if (unsupported.length) return { edits: [], rejectReason: `the rename needs file operations: ${unsupported.join(', ')}` };
+						if (converted.edits.length === 0 && shown !== undefined) return { edits: [], rejectReason: reasonOf(shown) };
 						return converted;
 					},
 					...(prepare && {
@@ -580,6 +609,76 @@ export class LanguageClient {
 				L.registerDocumentRangeFormattingEditProvider(selector, {
 					provideDocumentRangeFormattingEdits: async (model, range, options, token) =>
 						((await this.ask<lsp.TextEdit[]>(model, 'textDocument/rangeFormatting', { ...formatting(model, options), range: c.toLspRange(range) }, token)) ?? []).map(c.toTextEdit),
+				}),
+			);
+		}
+
+		if (caps.documentOnTypeFormattingProvider) {
+			const provider = caps.documentOnTypeFormattingProvider;
+			add(
+				L.registerOnTypeFormattingEditProvider(selector, {
+					autoFormatTriggerCharacters: [provider.firstTriggerCharacter, ...(provider.moreTriggerCharacter ?? [])],
+					provideOnTypeFormattingEdits: async (model, position, ch, options, token) =>
+						((await this.ask<lsp.TextEdit[]>(model, 'textDocument/onTypeFormatting', { ...formatting(model, options), position: c.toPosition(position), ch }, token)) ?? []).map(c.toTextEdit),
+				}),
+			);
+		}
+
+		if (caps.foldingRangeProvider) {
+			add(
+				L.registerFoldingRangeProvider(selector, {
+					// `null` when the server did not answer, not `[]`: Monaco then
+					// folds by indentation instead of folding nothing.
+					provideFoldingRanges: async (model, _context, token) => {
+						const ranges = await this.ask<lsp.FoldingRange[]>(model, 'textDocument/foldingRange', { textDocument: doc(model) }, token);
+						return ranges && toFolds(ranges).map((f) => ({ start: f.start, end: f.end, ...(f.kind !== undefined && { kind: monaco.languages.FoldingRangeKind.fromValue(f.kind) }) }));
+					},
+				}),
+			);
+		}
+
+		if (caps.selectionRangeProvider) {
+			add(
+				L.registerSelectionRangeProvider(selector, {
+					provideSelectionRanges: async (model, positions, token) => {
+						const ranges = await this.ask<lsp.SelectionRange[]>(model, 'textDocument/selectionRange', { textDocument: doc(model), positions: positions.map(c.toPosition) }, token);
+						// One chain per position, or none: Monaco pairs them by index.
+						return ranges && ranges.length === positions.length ? ranges.map(toSelectionChain) : null;
+					},
+				}),
+			);
+		}
+
+		if (caps.documentLinkProvider) {
+			const provider = caps.documentLinkProvider;
+			const original = new WeakMap<monaco.languages.ILink, lsp.DocumentLink>();
+			// A link to a file the project does not have (clangd's `#include
+			// <vector>`, into the sysroot) would open nothing, so it is not shown.
+			const opens = (target: string | undefined) => {
+				if (target === undefined) return true;
+				const uri = monaco.Uri.parse(target);
+				return uri.scheme !== 'file' || !!monaco.editor.getModel(uri.with({ fragment: '' }));
+			};
+			const toLink = (l: lsp.DocumentLink): monaco.languages.ILink => {
+				const link = { range: c.toRange(l.range), ...(l.target !== undefined && { url: l.target }), ...(l.tooltip !== undefined && { tooltip: l.tooltip }) };
+				original.set(link, l);
+				return link;
+			};
+			add(
+				L.registerLinkProvider(selector, {
+					provideLinks: async (model, token) => {
+						const links = await this.ask<lsp.DocumentLink[]>(model, 'textDocument/documentLink', { textDocument: doc(model) }, token);
+						return { links: (links ?? []).filter((l) => opens(l.target)).map(toLink) };
+					},
+					...(provider.resolveProvider && {
+						resolveLink: async (link, token) => {
+							const l = original.get(link);
+							const model = monaco.editor.getModels().find((m) => this.owns(m));
+							if (!l || l.target !== undefined || !model) return link;
+							const resolved = await this.ask<lsp.DocumentLink>(model, 'documentLink/resolve', l, token);
+							return resolved?.target !== undefined && opens(resolved.target) ? toLink(resolved) : link;
+						},
+					}),
 				}),
 			);
 		}

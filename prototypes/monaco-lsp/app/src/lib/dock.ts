@@ -99,6 +99,9 @@ class EditorRenderer implements IContentRenderer {
 			'semanticHighlighting.enabled': true,
 			fixedOverflowWidgets: true,
 			tabSize: 4,
+			// Servers that offer on-type formatting (clangd re-indents a line
+			// as `}` or Enter is typed) get to; the others are not asked.
+			formatOnType: true,
 		});
 		const editor = this.editor;
 		editor.onDidChangeCursorPosition((e) => this.navigation.record({ path, line: e.position.lineNumber, column: e.position.column }));

@@ -20,7 +20,8 @@ import CssWorker from 'monaco-editor/languages/features/css/css.worker?worker';
 import { jsonDefaults } from 'monaco-editor/languages/features/json/register';
 import 'monaco-editor/languages/features/html/register';
 import 'monaco-editor/languages/features/css/register';
-import { StandaloneServices } from 'monaco-editor/editor/standalone/browser/standaloneServices';
+import { StandaloneNotificationService, StandaloneServices } from 'monaco-editor/editor/standalone/browser/standaloneServices';
+import { MessageController } from 'monaco-editor/editor/contrib/message/browser/messageController';
 import { OneReference } from 'monaco-editor/editor/contrib/gotoSymbol/browser/referencesModel';
 import { ICommandService } from 'monaco-editor/platform/commands/common/commands';
 import { IListService } from 'monaco-editor/platform/list/browser/listService';
@@ -42,11 +43,31 @@ type List = {
 // workspace: a project file is shown by its project path, so a file at the
 // root has no folder to show. Monaco reads overrides only when its services
 // start, which is before any editor or other service exists: here.
+//
+// Monaco's notifications are shown too. Standalone Monaco writes them to the
+// console only, so a rename the language server refused after the new name
+// was typed (Phpactor's class rename, clangd's "the chosen name is a
+// keyword") looked like a rename that did nothing. This service also shows
+// each one as the inline message of the editor with focus, the place a
+// rename refused before the name was typed already says why.
+class EditorNotificationService extends StandaloneNotificationService {
+	override notify(notification: { severity: number; message: unknown }): unknown {
+		const shown = super.notify(notification);
+		const m = notification.message;
+		const text = typeof m === 'string' ? m : m instanceof Error ? m.message : '';
+		// Severity 0 is Ignore.
+		const editor = monaco.editor.getEditors().find((e) => e.hasWidgetFocus());
+		const position = editor?.getPosition();
+		if (text && notification.severity > 0 && editor && position) MessageController.get(editor)?.showMessage(text, position);
+		return shown;
+	}
+}
 StandaloneServices.initialize({
 	labelService: {
 		getUriLabel: (uri: monaco.Uri) => pathOf(uri) ?? (uri.scheme === 'file' ? uri.fsPath : uri.path),
 		getUriBasenameLabel: (uri: monaco.Uri) => uri.path.slice(uri.path.lastIndexOf('/') + 1),
 	},
+	notificationService: new EditorNotificationService(),
 });
 
 /** The editors' font stack; the first entry is the bundled web font. */
@@ -73,6 +94,7 @@ import 'monaco-editor/editor/contrib/documentSymbols/browser/documentSymbols';
 import 'monaco-editor/editor/contrib/dropOrPasteInto/browser/copyPasteContribution';
 import 'monaco-editor/editor/contrib/find/browser/findController';
 import 'monaco-editor/editor/contrib/folding/browser/folding';
+// Also format on type (FormatOnType), which needs `formatOnType` in the editor's options.
 import 'monaco-editor/editor/contrib/format/browser/formatActions';
 import 'monaco-editor/editor/contrib/gotoError/browser/gotoError';
 import 'monaco-editor/editor/contrib/gotoError/browser/markerSelectionStatus';
