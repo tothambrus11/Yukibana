@@ -179,6 +179,23 @@ differ only in wording ("Cannot satisfy constraint: Bool ~ Int").
   does not ship). No `text`, `bytestring`, `mtl`, `random` or QuickCheck;
   Test.Hspec is a subset (no `property`, `before`/`after` hooks or
   `parallel`).
+* **No QuickCheck**, though QuickCheck 2.19.0.0 itself supports MicroHs
+  (its cabal file has `impl(mhs)` options). It was tried and rejected,
+  because what it depends on does not build with MicroHs 0.16.0.0 as
+  released:
+  * random 1.3.1, which QuickCheck needs (`random >= 1.2`), imports
+    `GHC.Exts` with `MagicHash`, `UnboxedTuples` and `ByteArray#`.
+    MicroHs has no such module, so it stops at `Module not found: GHC.Exts`.
+  * splitmix 0.1.3.2, which QuickCheck needs on every compiler but Hugs,
+    seeds itself from the `time` package on any compiler but GHC
+    (`SPLITMIX_INIT_COMPAT`), and stops at `Module not found:
+    Data.Time.Clock.POSIX`. `time` 1.15 does build with MicroHs, but it
+    brings C sources and a configure-generated header. Its foreign calls
+    would also have to be compiled into `yuki.wasm`'s runtime.
+
+  Making it work would mean patching random, or rewriting it on top of
+  MicroHs's primitives, and changing the runtime for `time`. That is a fork,
+  not a library as released. transformers 0.6.3.0 does compile unchanged.
 * **Heap**: a fixed 24 million cells; a program that needs more stops with
   "Out of memory".
 * **Runtime error locations** point into MicroHs's library sources, not the
