@@ -47,6 +47,17 @@ cd "$CACHE"
 step() { printf '\n== %s\n' "$*"; }
 
 step "lld sources (ELF only)"
+# LLVM's CMake refuses LLVM_ENABLE_PROJECTS=lld unless llvm/../lld exists,
+# even with LLVM_EXTERNAL_LLD_SOURCE_DIR pointing elsewhere. build.sh runs
+# this script before build-runner.sh, which extracts that directory, so on a
+# clean machine it is not there yet: extracted here exactly as
+# build-runner.sh does it (with .patched, so that script then keeps it).
+if [ ! -f "$SRC/lld/.patched" ]; then
+  rm -rf "$SRC/lld"
+  tar xJf "llvm-project-$LLVM_VERSION.src.tar.xz" "llvm-project-$LLVM_VERSION.src/lld"
+  patch -d "$SRC" -p1 < "$HERE/patches/wasm-ld-only.patch"
+  touch "$SRC/lld/.patched"
+fi
 # A copy of lld/ of its own: build-runner.sh's $SRC/lld is patched to wasm
 # only and is never touched here. .patched holds the SHA-256 of the patch
 # the copy was made with; a changed patch means a fresh copy.
