@@ -1,0 +1,11 @@
+# java.base packages the class-path bundle keeps (public classes only).
+# Everything a Scala program commonly names; the rest of the JDK is absent.
+java/lang/
+java/io/
+java/math/
+java/net/URI
+java/net/URL.class
+java/nio/
+java/text/
+java/time/
+java/util/

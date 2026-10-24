@@ -1,0 +1,507 @@
+/**
+ * The window layout, made with dockview: the explorer on the left, editor
+ * tabs in the middle (one Monaco editor per open file), problems and output
+ * on the right, and, when asked for, the compiler output views (LLVM IR,
+ * assembly) right of the editors. Every panel can be dragged, split and
+ * resized; editor and view tabs close, the fixed panels do not.
+ */
+import {
+	createDockview,
+	type DockviewApi,
+	type GroupPanelPartInitParameters,
+	type IContentRenderer,
+	type IDockviewPanel,
+	type ITabRenderer,
+	type TabPartInitParameters,
+} from 'dockview';
+import 'dockview/dist/styles/dockview.css';
+import { mount, unmount, type Component } from 'svelte';
+import { EDITOR_FONT, monaco } from './monaco';
+import { NavigationHistory, type Place } from './history';
+import { baseName } from './project';
+import { pathOf } from './project';
+import type { EditorHost, Workspace } from './workspace.svelte';
+import type { ExploreKind } from './languages';
+import { languageOf } from './languages';
+import type { SourceLine } from './explorer-map';
+import type { CompilerView, ViewHost } from './compiler-view';
+import Explorer from './components/Explorer.svelte';
+import Problems from './components/Problems.svelte';
+import Output from './components/Output.svelte';
+import Terminal from './components/Terminal.svelte';
+
+const EDITOR_PREFIX = 'file:';
+const editorId = (path: string) => EDITOR_PREFIX + path;
+const isEditor = (panel: IDockviewPanel) => panel.id.startsWith(EDITOR_PREFIX);
+
+/** The compiler output views' panels: id, dockview component and tab title, by kind. */
+const VIEWS: Record<ExploreKind, { id: string; component: string; title: string }> = {
+	'llvm-ir': { id: 'view:llvm-ir', component: 'llvm-ir', title: 'LLVM IR' },
+	asm: { id: 'view:asm', component: 'assembly', title: 'Assembly' },
+};
+const VIEW_KINDS = Object.keys(VIEWS) as ExploreKind[];
+const viewOfPanel = (id: string): ExploreKind | undefined => VIEW_KINDS.find((k) => VIEWS[k].id === id);
+
+/**
+ * A compiler output view's panel. The view itself (compiler-view.ts, with
+ * its grammars) is loaded the first time one opens; until then the panel is
+ * empty. The panel tells the explorer when it opens, closes, and comes to
+ * the front or goes behind another tab, so a hidden view compiles nothing.
+ */
+class CompilerViewRenderer implements IContentRenderer {
+	readonly element = document.createElement('div');
+	private view: CompilerView | null = null;
+	private disposed = false;
+	private visibility: { dispose(): void } | null = null;
+
+	constructor(
+		private readonly kind: ExploreKind,
+		private readonly workspace: Workspace,
+		private readonly host: () => Omit<ViewHost, 'explorer'>,
+	) {
+		this.element.className = 'dock-panel';
+	}
+
+	init(params: GroupPanelPartInitParameters): void {
+		// The workspace loads the explorer before it asks for a view's panel.
+		const explorer = this.workspace.explorer;
+		if (!explorer) return;
+		this.visibility = params.api.onDidVisibilityChange((e) => explorer.setVisible(this.kind, e.isVisible));
+		explorer.opened(this.kind);
+		import('./compiler-view').then(
+			({ createCompilerView }) => {
+				if (!this.disposed) this.view = createCompilerView(this.element, this.kind, { ...this.host(), explorer });
+			},
+			(e: unknown) => {
+				this.element.textContent = `The ${VIEWS[this.kind].title} view could not be loaded: ${e instanceof Error ? e.message : String(e)}`;
+			},
+		);
+	}
+
+	dispose(): void {
+		this.disposed = true;
+		this.visibility?.dispose();
+		this.view?.dispose();
+	}
+}
+
+/** A dockview content renderer that shows a Svelte component. */
+class SvelteRenderer implements IContentRenderer {
+	readonly element = document.createElement('div');
+	private instance: ReturnType<typeof mount> | null = null;
+
+	constructor(
+		private readonly component: Component<{ workspace: Workspace }>,
+		private readonly workspace: Workspace,
+	) {
+		this.element.className = 'dock-panel';
+	}
+
+	init(): void {
+		this.instance = mount(this.component, { target: this.element, props: { workspace: this.workspace } });
+	}
+
+	dispose(): void {
+		if (this.instance) void unmount(this.instance);
+	}
+}
+
+/** The Preview panel: the workspace's preview puts its iframe here. */
+class PreviewRenderer implements IContentRenderer {
+	readonly element = document.createElement('div');
+
+	constructor(private readonly workspace: Workspace) {
+		this.element.className = 'dock-panel dock-preview';
+	}
+
+	init(): void {
+		this.workspace.preview.mount(this.element);
+	}
+
+	dispose(): void {
+		this.workspace.preview.unmount();
+	}
+}
+
+/** A dockview content renderer holding one Monaco editor on one project file. */
+class EditorRenderer implements IContentRenderer {
+	readonly element = document.createElement('div');
+	editor: monaco.editor.IStandaloneCodeEditor | null = null;
+	/** The project file shown. */
+	path = '';
+
+	constructor(
+		private readonly workspace: Workspace,
+		private readonly navigation: Navigation,
+	) {
+		this.element.className = 'dock-editor';
+	}
+
+	init(params: GroupPanelPartInitParameters): void {
+		const path = String(params.params['path']);
+		this.path = path;
+		const model = this.workspace.model(path);
+		this.editor = monaco.editor.create(this.element, {
+			model: model ?? null,
+			automaticLayout: true,
+			fontFamily: EDITOR_FONT,
+			fontSize: 13.5,
+			lineHeight: 21,
+			fontLigatures: false,
+			minimap: { enabled: false },
+			scrollBeyondLastLine: false,
+			renderLineHighlight: 'all',
+			padding: { top: 10 },
+			'semanticHighlighting.enabled': true,
+			fixedOverflowWidgets: true,
+			tabSize: 4,
+			// Servers that offer on-type formatting (clangd re-indents a line
+			// as `}` or Enter is typed) get to; the others are not asked.
+			formatOnType: true,
+		});
+		const editor = this.editor;
+		editor.onDidChangeCursorPosition((e) => {
+			this.navigation.record({ path, line: e.position.lineNumber, column: e.position.column });
+			this.navigation.cursorMoved(path);
+		});
+		// VS Code's keys: Alt+Left/Right, Ctrl+- / Ctrl+Shift+- on macOS (where Alt+Left moves by word).
+		const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+		const { KeyMod, KeyCode } = monaco;
+		editor.addAction({
+			id: 'yukibana.navigateBack',
+			label: 'Go Back',
+			keybindings: [mac ? KeyMod.WinCtrl | KeyCode.Minus : KeyMod.Alt | KeyCode.LeftArrow],
+			run: () => this.navigation.back(),
+		});
+		editor.addAction({
+			id: 'yukibana.navigateForward',
+			label: 'Go Forward',
+			keybindings: [mac ? KeyMod.WinCtrl | KeyMod.Shift | KeyCode.Minus : KeyMod.Alt | KeyCode.RightArrow],
+			run: () => this.navigation.forward(),
+		});
+		editor.addAction({
+			id: 'yukibana.run',
+			label: 'Run Project',
+			keybindings: [KeyMod.CtrlCmd | KeyCode.Enter],
+			run: () => this.workspace.run(),
+		});
+		editor.addAction({
+			id: 'yukibana.test',
+			label: 'Test Project',
+			keybindings: [KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.Enter],
+			run: () => this.workspace.run('test'),
+		});
+		editor.addAction({
+			id: 'yukibana.mutate',
+			label: 'Mutation Test Project',
+			run: () => this.workspace.run('mutate'),
+		});
+		editor.addAction({
+			id: 'yukibana.download',
+			label: 'Download Project for an IDE',
+			run: () => this.workspace.download(),
+		});
+		// Editors are made anew for each project, so only a language with the views offers them.
+		const explores = languageOf(this.workspace.language).explores ?? [];
+		if (explores.includes('llvm-ir')) editor.addAction({ id: 'yukibana.showIr', label: 'Show LLVM IR', run: () => void this.workspace.showView('llvm-ir') });
+		if (explores.includes('asm')) editor.addAction({ id: 'yukibana.showAsm', label: 'Show Assembly', run: () => void this.workspace.showView('asm') });
+	}
+
+	focus(): void {
+		this.editor?.focus();
+	}
+
+	dispose(): void {
+		this.editor?.dispose();
+	}
+}
+
+/** What an editor needs to take part in back/forward navigation, and to report its caret to the views. */
+interface Navigation {
+	record(place: Place): void;
+	back(): void;
+	forward(): void;
+	/** The caret of the editor on `path` moved. */
+	cursorMoved(path: string): void;
+}
+
+/** A tab with a title and, for editors, a close button and an error dot. */
+class TabRenderer implements ITabRenderer {
+	readonly element = document.createElement('div');
+	private readonly label = document.createElement('span');
+
+	constructor(private readonly closable: boolean) {
+		this.element.className = 'dock-tab';
+		this.element.append(this.label);
+	}
+
+	init(params: TabPartInitParameters): void {
+		this.label.textContent = params.title ?? '';
+		params.api.onDidTitleChange((e) => (this.label.textContent = e.title));
+		if (!this.closable) return;
+		const close = document.createElement('button');
+		close.className = 'dock-tab-close';
+		close.title = 'Close';
+		close.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
+		close.addEventListener('pointerdown', (e) => e.stopPropagation());
+		close.addEventListener('click', (e) => {
+			e.stopPropagation();
+			params.api.close();
+		});
+		this.element.append(close);
+	}
+}
+
+/**
+ * Builds the layout in `element` and returns the workspace's editor host.
+ * Tabs and the active file are reported back to the workspace so they are
+ * saved with the project.
+ */
+export function createDock(element: HTMLElement, workspace: Workspace): EditorHost & { setProblemCount(n: number): void; dispose(): void } {
+	const editors = new Map<string, EditorRenderer>();
+	const history = new NavigationHistory();
+	const exists = (path: string) => workspace.model(path) !== undefined;
+	const goTo = (place: Place | null) => {
+		if (place) host.open(place.path, monaco.Range.fromPositions({ lineNumber: place.line, column: place.column }));
+	};
+	/** Who follows the active source editor's caret: the open compiler output views. */
+	const cursorListeners = new Set<(place: SourceLine | null) => void>();
+	/** The active editor's caret, as the views see it: the last editor shown, even while a view has focus. */
+	const sourceCaret = (): SourceLine | null => {
+		const position = lastEditor ? editors.get(editorId(lastEditor))?.editor?.getPosition() : null;
+		return lastEditor && position ? { file: lastEditor, line: position.lineNumber } : null;
+	};
+	const emitCursor = () => {
+		const place = sourceCaret();
+		for (const listener of cursorListeners) listener(place);
+	};
+	const navigation: Navigation = {
+		record: (place) => history.record(place),
+		back: () => goTo(history.back(exists)),
+		forward: () => goTo(history.forward(exists)),
+		cursorMoved: (path) => {
+			if (path === lastEditor) emitCursor();
+		},
+	};
+	/** The source line a view points at, drawn in its file's editor. */
+	let sourceMark: monaco.editor.IEditorDecorationsCollection | null = null;
+	const viewHost: Omit<ViewHost, 'explorer'> = {
+		monaco,
+		editorFont: EDITOR_FONT,
+		isProjectFile: exists,
+		open: (path, selection) => host.open(path, selection),
+		onSourceCursor(listener) {
+			cursorListeners.add(listener);
+			listener(sourceCaret());
+			return { dispose: () => cursorListeners.delete(listener) };
+		},
+		markSource(place) {
+			sourceMark?.clear();
+			sourceMark = null;
+			const editor = place ? editors.get(editorId(place.file))?.editor : null;
+			if (!place || !editor) return;
+			sourceMark = editor.createDecorationsCollection([{ range: new monaco.Range(place.line, 1, place.line, 1), options: { isWholeLine: true, className: 'yk-mapped-source' } }]);
+		},
+	};
+	let lastEditor: string | null = null;
+	let replacing = false;
+	/** True while `open` changes tabs: it records where it lands itself, after placing the cursor. */
+	let opening = false;
+
+	const dock: DockviewApi = createDockview(element, {
+		className: 'dockview-theme-yukibana',
+		disableFloatingGroups: true,
+		createComponent: ({ id, name }) => {
+			switch (name) {
+				case 'explorer':
+					return new SvelteRenderer(Explorer, workspace);
+				case 'problems':
+					return new SvelteRenderer(Problems, workspace);
+				case 'output':
+					return new SvelteRenderer(Output, workspace);
+				case 'terminal':
+					return new SvelteRenderer(Terminal, workspace);
+				case 'preview':
+					return new PreviewRenderer(workspace);
+				case VIEWS['llvm-ir'].component:
+					return new CompilerViewRenderer('llvm-ir', workspace, () => viewHost);
+				case VIEWS.asm.component:
+					return new CompilerViewRenderer('asm', workspace, () => viewHost);
+				default: {
+					const r = new EditorRenderer(workspace, navigation);
+					editors.set(id, r);
+					return r;
+				}
+			}
+		},
+		createTabComponent: ({ name }) => new TabRenderer(name === 'editor' || name === 'view'),
+	});
+
+	const explorer = dock.addPanel({ id: 'explorer', component: 'explorer', tabComponent: 'fixed', title: 'Explorer' });
+	const terminal = dock.addPanel({ id: 'terminal', component: 'terminal', tabComponent: 'fixed', title: 'Terminal', position: { referencePanel: explorer, direction: 'right' } });
+	const output = dock.addPanel({ id: 'output', component: 'output', tabComponent: 'fixed', title: 'Output', position: { referencePanel: terminal, direction: 'within' }, inactive: true });
+	dock.addPanel({ id: 'problems', component: 'problems', tabComponent: 'fixed', title: 'Problems', position: { referencePanel: output, direction: 'within' }, inactive: true });
+	// The editors' group exists from the start, so the side columns can be
+	// sized once against the whole width; editors open into it.
+	let editorArea = dock.addGroup({ referencePanel: terminal, direction: 'left' });
+	dock.layout(element.clientWidth, element.clientHeight);
+	explorer.group.api.setSize({ width: 240 });
+	terminal.group.api.setSize({ width: Math.round(element.clientWidth * 0.3) });
+
+	const report = () => {
+		if (replacing) return;
+		const open = dock.panels.filter(isEditor).map((p) => p.id.slice(EDITOR_PREFIX.length));
+		const active = dock.activePanel;
+		if (active && isEditor(active)) {
+			lastEditor = active.id.slice(EDITOR_PREFIX.length);
+			// Switching tabs moves no cursor, but is a place to come back to.
+			const position = editors.get(active.id)?.editor?.getPosition();
+			if (position && !opening) history.record({ path: lastEditor, line: position.lineNumber, column: position.column });
+		}
+		if (lastEditor && !open.includes(lastEditor)) lastEditor = open.at(-1) ?? null;
+		workspace.tabsChanged(open, lastEditor);
+		emitCursor();
+	};
+	// The mouse's back and forward buttons do the same, anywhere in the layout.
+	const mouseButtons = (e: MouseEvent) => {
+		if (e.button !== 3 && e.button !== 4) return;
+		e.preventDefault();
+		if (e.button === 3) navigation.back();
+		else navigation.forward();
+	};
+	element.addEventListener('mouseup', mouseButtons);
+	const disposables = [
+		{ dispose: () => element.removeEventListener('mouseup', mouseButtons) },
+		dock.onDidAddPanel(report),
+		dock.onDidRemovePanel((panel) => {
+			editors.delete(panel.id);
+			const view = viewOfPanel(panel.id);
+			if (view) workspace.explorer?.closed(view);
+			report();
+		}),
+		dock.onDidActivePanelChange(report),
+		monaco.editor.registerEditorOpener({
+			openCodeEditor: (_source, resource, selection) => {
+				const path = pathOf(resource);
+				if (path === null || !workspace.model(path)) return false;
+				host.open(path, selection && 'startLineNumber' in selection ? selection : selection ? monaco.Range.fromPositions(selection) : undefined);
+				return true;
+			},
+		}),
+	];
+
+	/** Where a new editor goes: the editors' group while it exists, else a new one left of the output. */
+	const editorGroup = () => {
+		if (!dock.groups.includes(editorArea)) {
+			editorArea = dock.groups.find((g) => g.panels.some(isEditor)) ?? dock.addGroup({ referencePanel: 'terminal', direction: 'left' });
+		}
+		return editorArea;
+	};
+
+	/**
+	 * Brings `panel` to the front of its group, and does nothing when it is
+	 * already there. dockview's setActive on the active panel re-renders it,
+	 * and its default renderer does that by removing the panel's element and
+	 * appending it again: an iframe reloads when moved, so every Run loaded
+	 * the preview twice at once, and Chrome sometimes kept the document but
+	 * never painted it (a white preview until the page was reloaded).
+	 */
+	const reveal = (panel: IDockviewPanel | undefined): void => {
+		if (panel && panel.group.activePanel !== panel) panel.api.setActive();
+	};
+
+	const host = {
+		open(path: string, selection?: monaco.IRange): void {
+			const id = editorId(path);
+			opening = true;
+			try {
+				const panel = dock.getPanel(id);
+				if (panel) reveal(panel);
+				else {
+					dock.addPanel({
+						id,
+						component: 'editor',
+						tabComponent: 'editor',
+						title: baseName(path),
+						params: { path },
+						position: { referenceGroup: editorGroup() },
+					});
+				}
+			} finally {
+				opening = false;
+			}
+			const editor = editors.get(id)?.editor;
+			if (editor && selection) {
+				editor.setSelection(selection);
+				editor.revealRangeInCenterIfOutsideViewport(selection);
+			}
+			const position = editor?.getPosition();
+			if (position) history.record({ path, line: position.lineNumber, column: position.column });
+			editor?.focus();
+		},
+		close(path: string): void {
+			dock.getPanel(editorId(path))?.api.close();
+		},
+		closeAll(): void {
+			replacing = true;
+			for (const panel of dock.panels.filter(isEditor)) panel.api.close();
+			replacing = false;
+			lastEditor = null;
+			history.clear();
+		},
+		showTerminal(): void {
+			reveal(dock.getPanel('terminal'));
+		},
+		showPreview(): void {
+			const panel = dock.getPanel('preview');
+			if (panel) {
+				reveal(panel);
+				return;
+			}
+			// Above the terminal, so the page and its console are seen together.
+			const terminal = dock.getPanel('terminal');
+			dock.addPanel({
+				id: 'preview',
+				component: 'preview',
+				tabComponent: 'fixed',
+				title: 'Preview',
+				// Never moved in the DOM, so the iframe does not reload when the
+				// panel is shown again, dragged or its group rearranged.
+				renderer: 'always',
+				...(terminal ? { position: { referencePanel: terminal, direction: 'above' as const } } : {}),
+			});
+		},
+		hidePreview(): void {
+			dock.getPanel('preview')?.api.close();
+		},
+		showView(kind: ExploreKind): void {
+			const view = VIEWS[kind];
+			const panel = dock.getPanel(view.id);
+			if (panel) {
+				reveal(panel);
+				return;
+			}
+			// Beside the editors, so code and its output are seen together; the second view is a tab of the first.
+			const other = VIEW_KINDS.map((k) => dock.getPanel(VIEWS[k].id)).find((p) => p !== undefined);
+			dock.addPanel({
+				id: view.id,
+				component: view.component,
+				tabComponent: 'view',
+				title: view.title,
+				position: other ? { referencePanel: other, direction: 'within' } : { referenceGroup: editorGroup(), direction: 'right' },
+			});
+		},
+		hideViews(): void {
+			viewHost.markSource(null);
+			for (const kind of VIEW_KINDS) dock.getPanel(VIEWS[kind].id)?.api.close();
+		},
+		setProblemCount(n: number): void {
+			dock.getPanel('problems')?.api.setTitle(n ? `Problems ${n}` : 'Problems');
+		},
+		dispose(): void {
+			for (const d of disposables) d.dispose();
+			dock.dispose();
+		},
+	};
+	return host;
+}

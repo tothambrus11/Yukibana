@@ -1,0 +1,209 @@
+diff --git a/compiler/build.gradle b/compiler/build.gradle
+index f359f95..ca949b7 100644
+--- a/compiler/build.gradle
++++ b/compiler/build.gradle
+@@ -40,6 +40,22 @@ dependencies {
+ sourceSets {
+     classlibEmu {
+     }
++    // Yukibana: replacements for classes of TeaVM's class library (System.in
++    // from the terminal, System.exit, java.util.Scanner), from packs/java/classlib.
++    yukibanaClasslib {
++        java {
++            srcDir providers.gradleProperty("yukibana.classlib").get()
++        }
++    }
++}
++
++dependencies {
++    yukibanaClasslibCompileOnly libs.teavm.classlib
++    yukibanaClasslibCompileOnly libs.teavm.core
++    yukibanaClasslibCompileOnly libs.teavm.interop
++    yukibanaClasslibCompileOnly libs.teavm.platform
++    yukibanaClasslibCompileOnly libs.teavm.jso
++    yukibanaClasslibCompileOnly libs.teavm.jso.apis
+ }
+ 
+ compileJava {
+@@ -54,6 +70,10 @@ teavm {
+         outOfProcess = true
+         processMemory = 4096
+         modularRuntime = true
++        // Yukibana: javac relies on Java's runtime checks (its constant
++        // folder catches the ArithmeticException of `1 / 0`); without strict
++        // mode TeaVM leaves them to WebAssembly traps, which end the worker.
++        strict = true
+     }
+ }
+ 
+@@ -63,7 +83,11 @@ tasks.register("generateClassLib", JavaExec) {
+     def output = classlibOutDir.map { it.file("compile-classlib-teavm.bin") }
+     dependsOn configurations.classlibInput
+     dependsOn sourceSets.classlibEmu.output
++    dependsOn sourceSets.yukibanaClasslib.output
+     inputs.files configurations.classlibInput
++    inputs.files {
++        sourceSets.yukibanaClasslib.output.classesDirs.collect { fileTree(it) }
++    }
+     inputs.files {
+         sourceSets.classlibEmu.output.classesDirs.collect { fileTree(it) }
+     }
+@@ -72,7 +96,9 @@ tasks.register("generateClassLib", JavaExec) {
+         [
+             output.get().asFile.absolutePath,
+             *configurations.classlibInput.files.collect { it.absolutePath },
+-            *sourceSets.classlibEmu.output.classesDirs.files.collect { it.absolutePath }
++            *sourceSets.classlibEmu.output.classesDirs.files.collect { it.absolutePath },
++            // Last, so that its classes replace TeaVM's (later entries win when the archive is read).
++            *sourceSets.yukibanaClasslib.output.classesDirs.files.collect { it.absolutePath }
+         ].iterator()
+     }
+     classpath sourceSets.main.output, sourceSets.main.runtimeClasspath
+@@ -100,6 +126,9 @@ def repackCldr = tasks.register("repackCldr", Zip) {
+     destinationDirectory.set project.layout.buildDirectory.dir("tmp")
+     archiveFileName = "cldr-json.zip"
+     include "en/**"
++    // Yukibana: CLDR's root locale too, which "en" falls back to; without
++    // it every DecimalFormat (String.format("%.2f"), printf) traps on null.
++    include "root/**"
+     include "supplemental/**"
+ }
+ 
+@@ -123,6 +152,16 @@ def prepareTeaVMClassLib = tasks.register("prepareTeaVMClassLib", Copy) {
+         include "org/teavm/backend/wasm/WasmHeap*.class"
+         include "com/jcraft/jzlib/**"
+     }
++    dependsOn sourceSets.yukibanaClasslib.output
++    inputs.files sourceSets.yukibanaClasslib.output.classesDirs
++    // Yukibana: copied over TeaVM's own classes of the same name, afterwards
++    // (a Copy with two sources of one file keeps the first).
++    doLast {
++        project.copy {
++            from sourceSets.yukibanaClasslib.output.classesDirs
++            into project.layout.buildDirectory.dir("tmp/classlib-runtime")
++        }
++    }
+     from(repackCldr) {
+         eachFile {
+             path = "org/teavm/classlib/impl/unicode/" + path
+diff --git a/compiler/src/main/java/org/teavm/javac/Compiler.java b/compiler/src/main/java/org/teavm/javac/Compiler.java
+index 2702efa..8c45124 100644
+--- a/compiler/src/main/java/org/teavm/javac/Compiler.java
++++ b/compiler/src/main/java/org/teavm/javac/Compiler.java
+@@ -277,9 +277,21 @@ public final class Compiler {
+                 .setStrict(strictMode)
+                 .build();
+         teavm.setOptimizationLevel(TeaVMOptimizationLevel.ADVANCED);
+-        new JSOPlugin().install(teavm);
++        // Yukibana: one locale, en_US, as the default and the only one
++        // available: the class library archive carries CLDR's "en" and "root".
++        var properties = new java.util.Properties();
++        properties.setProperty("java.util.Locale.default", "en_US");
++        properties.setProperty("java.util.Locale.available", "en_US");
++        teavm.setProperties(properties);
++        // The order TeaVM's plugin loader gives them (JCLPlugin before
++        // JSOPlugin): the class library's platform markers must fold
++        // `PlatformDetector.isJavaScript()` branches before JSO checks their
++        // bodies, or a program that reaches java.nio (an InputStreamReader)
++        // fails with "@JSByRef, which is not supported in Wasm GC".
+         new PlatformPlugin().install(teavm);
+         new JCLPlugin().install(teavm);
++        new BootstrapDependencies().install(teavm);
++        new JSOPlugin().install(teavm);
+         teavm.setEntryPoint(mainClass);
+         target.setObfuscated(false);
+         target.setDebugInfoLocation(WasmDebugInfoLocation.EMBEDDED);
+diff --git a/compiler/src/main/java/org/teavm/javac/CompilerLib.java b/compiler/src/main/java/org/teavm/javac/CompilerLib.java
+index e175ee0..d247990 100644
+--- a/compiler/src/main/java/org/teavm/javac/CompilerLib.java
++++ b/compiler/src/main/java/org/teavm/javac/CompilerLib.java
+@@ -24,6 +24,24 @@ public class CompilerLib {
+         return new Compiler();
+     }
+ 
++    /** Yukibana: javac's analysis for the language server (LanguageService.java). */
++    @JSExport
++    public static LanguageService createLanguageService() {
++        return new LanguageService();
++    }
++
++    /** Yukibana: the mains and JUnit tests of a jar of class files, as JSON (EntryPoints.java). */
++    @JSExport
++    public static String findEntryPoints(org.teavm.jso.typedarrays.Int8Array jar) throws java.io.IOException {
++        return EntryPoints.find(jar.copyToJavaArray());
++    }
++
++    /** Yukibana: the class TeaVM starts a program from (EntryPoints.makeEntry), as a class file. */
++    @JSExport
++    public static org.teavm.jso.typedarrays.Int8Array makeEntry(String mainClass, boolean isStatic, boolean args) {
++        return org.teavm.jso.typedarrays.Int8Array.copyFromJavaArray(EntryPoints.makeEntry(mainClass, isStatic, args));
++    }
++
+     @JSExport
+     public static void installWorker() {
+         new Worker(new Compiler());
+diff --git a/compiler/src/main/java/org/teavm/javac/StdlibConverter.java b/compiler/src/main/java/org/teavm/javac/StdlibConverter.java
+index dbc902a..07679a0 100644
+--- a/compiler/src/main/java/org/teavm/javac/StdlibConverter.java
++++ b/compiler/src/main/java/org/teavm/javac/StdlibConverter.java
+@@ -101,6 +101,17 @@ public class StdlibConverter extends ClassVisitor {
+         if (superName.equals(name)) {
+             superName = null;
+         }
++        // Yukibana: TAnnotation extends java.lang.annotation.Annotation, so
++        // renamed it extends itself, and javac reports "cyclic inheritance"
++        // (or overflows its stack) at the first annotation with an element
++        // value, @Disabled("..."); it is also no annotation type itself.
++        if (interfaces != null) {
++            final String self = name;
++            interfaces = java.util.Arrays.stream(interfaces).filter(i -> !i.equals(self)).toArray(String[]::new);
++        }
++        if (name.equals("java/lang/annotation/Annotation")) {
++            access &= ~Opcodes.ACC_ANNOTATION;
++        }
+         super.visit(version, access, name, signature, superName, interfaces);
+     }
+ 
+diff --git a/javac/build.gradle b/javac/build.gradle
+index 3cbe476..a823f93 100644
+--- a/javac/build.gradle
++++ b/javac/build.gradle
+@@ -5,15 +5,10 @@ plugins {
+ 
+ def revision = providers.gradleProperty("jdk.revision").get()
+ 
+-def downloadJDK = tasks.register("downloadJDK", Download) {
+-    src "https://github.com/openjdk/jdk25u/archive/${revision}.zip"
+-    dest layout.buildDirectory.file("jdk-${revision}.zip")
+-    overwrite false
+-}
+-
+ def unpackJDK = tasks.register("unpackJDK", Sync) {
+-    dependsOn downloadJDK
+-    from downloadJDK.map { it.outputs.files.collect { zipTree(it) } }
++    // Yukibana: the sources come from a sparse git checkout zipped by packs/java/build.sh
++    // (GitHub archive downloads are refused through the build proxy).
++    from zipTree(providers.gradleProperty("jdk.zip").get())
+     into layout.buildDirectory.dir("jdk")
+     exclude "**/module-info.java"
+ }
+diff --git a/settings.gradle b/settings.gradle
+index ffbfff4..a61eb8e 100644
+--- a/settings.gradle
++++ b/settings.gradle
+@@ -17,6 +17,7 @@
+ pluginManagement {
+      repositories {
+          maven { url = uri("https://teavm.org/maven/repository") }
++         maven { url = uri("https://maven-central.storage-download.googleapis.com/maven2") }
+          mavenCentral()
+          mavenLocal()
+          gradlePluginPortal()
+@@ -26,6 +27,7 @@ pluginManagement {
+ dependencyResolutionManagement {
+     repositories {
+         maven { url = uri("https://teavm.org/maven/repository") }
++        maven { url = uri("https://maven-central.storage-download.googleapis.com/maven2") }
+         mavenCentral()
+         mavenLocal()
+         ivy {

@@ -1,0 +1,45 @@
+Emscripten 4.0.22, system/lib/pthread/proxying.c: signal a synchronous
+proxied call's condition variable before unlocking its mutex, as upstream
+does since 5.0.5 (emscripten-core/emscripten#26582, "Fixed a race condition
+in syscall proxying that caused some hangs and ASan errors"). Applied by
+build.sh to the emsdk clangd is linked with.
+
+Every file system and stdout call clangd's threads make is proxied
+synchronously to the Worker that loaded clangd (server.js), with the
+em_proxying_ctx on the calling thread's stack. emscripten_proxy_finish set
+DONE and unlocked, then signalled. In between, the caller could take the
+mutex, see DONE without ever waiting, return, and reuse that stack; the
+signal then ran musl's pthread_cond_signal on whatever was there and
+followed its waiter list. An odd "pointer" there made Wasm trap on server.js
+with "operation does not support unaligned accesses" (an uncaught error in
+the LSP Worker, so a page error, about one C++ e2e run in four while the
+machine was busy); an aligned one corrupted memory or spun in the cond's lock.
+cancel_ctx had the same order. QEMU (vm/build-qemu.sh) uses 6.0.13, which
+has the fix. test-proxying.mjs (tests/proxying-race/race.c) catches the old order.
+
+--- a/system/lib/pthread/proxying.c
++++ b/system/lib/pthread/proxying.c
+@@ -339,8 +339,11 @@
+     pthread_mutex_lock(&ctx->sync.mutex);
+     ctx->sync.state = DONE;
+     remove_active_ctx(ctx);
+-    pthread_mutex_unlock(&ctx->sync.mutex);
++    // Signal must come before unlock to avoid emscripten_proxy_sync_with ctx
++    // seeing the state as DONE and freeing the ctx before we call unlock.
++    // See https://github.com/emscripten-core/emscripten/pull/26582
+     pthread_cond_signal(&ctx->sync.cond);
++    pthread_mutex_unlock(&ctx->sync.mutex);
+   } else {
+     // Schedule the callback on the caller thread. If the caller thread has
+     // already died or dies before the callback is executed, then at least make
+@@ -365,8 +368,9 @@
+   if (ctx->kind == SYNC) {
+     pthread_mutex_lock(&ctx->sync.mutex);
+     ctx->sync.state = CANCELED;
+-    pthread_mutex_unlock(&ctx->sync.mutex);
++    // Signal must be first, see comment in emscripten_proxy_finish.
+     pthread_cond_signal(&ctx->sync.cond);
++    pthread_mutex_unlock(&ctx->sync.mutex);
+   } else {
+     if (ctx->cb.cancel == NULL ||
+         !do_proxy(ctx->cb.queue,

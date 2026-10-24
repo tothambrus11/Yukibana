@@ -1,0 +1,4 @@
+# rust-analyzer drops parse trees on a background thread unless this cfg is
+# set (ra_ap_syntax, ra_ap_span); a WebAssembly worker has no threads.
+[target.wasm32-wasip1]
+rustflags = ["--cfg", "no_salsa_async_drops"]

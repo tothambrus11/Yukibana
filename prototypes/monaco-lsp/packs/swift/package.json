@@ -1,0 +1,18 @@
+{
+  "name": "yukibana-pack-swift",
+  "private": true,
+  "type": "module",
+  "description": "Swift language pack: sourcekit-lsp-lite over sourcekitd 6.3.3 and the Swift 6.3.3 compiler in one wasm-hosted module (swift-toolchain-wasm), swift-syntax formatting and semantic tokens, and a runner",
+  "scripts": {
+    "build": "./build.sh",
+    "test": "node test.mjs",
+    "test:run": "node test-run.mjs",
+    "test:xctest": "node tools/xctest-subset.mjs"
+  },
+  "devDependencies": {
+    "@bjorn3/browser_wasi_shim": "0.4.2",
+    "binaryen": "132.0.0",
+    "esbuild": "0.25.11",
+    "playwright-core": "1.56.1"
+  }
+}

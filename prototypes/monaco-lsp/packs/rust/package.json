@@ -1,0 +1,15 @@
+{
+    "name": "yukibana-pack-rust",
+    "private": true,
+    "description": "Yukibana Rust pack: rust-analyzer's IDE crates compiled to wasm32-wasip1 in a module Web Worker, and a runner on Miri compiled to WebAssembly. build.sh builds both; this file holds the bundler, the WASI file system the runner uses, and the test's browser driver.",
+    "type": "module",
+    "scripts": {
+        "build": "./build.sh",
+        "test": "node test.mjs && node test-run.mjs"
+    },
+    "devDependencies": {
+        "@bjorn3/browser_wasi_shim": "0.4.2",
+        "esbuild": "0.25.10",
+        "playwright-core": "1.56.1"
+    }
+}

@@ -1,0 +1,177 @@
+--- a/compiler/dotty/tools/backend/sjs/JSCodeGen.scala
++++ b/compiler/dotty/tools/backend/sjs/JSCodeGen.scala
+@@ -278,7 +278,7 @@
+        * without argument, which is not deterministic.
+        */
+       def caseInsensitiveNameOf(classDef: js.ClassDef): String =
+-        classDef.name.name.nameString.toLowerCase(java.util.Locale.ENGLISH)
++        classDef.name.name.nameString.toLowerCase() // yukibana: no java.util.Locale in Scala.js; its toLowerCase() is locale-independent
+ 
+       val generatedCaseInsensitiveNames =
+         generatedClasses.map(caseInsensitiveNameOf).toSet
+@@ -298,7 +298,7 @@
+ 
+   private def genIRFile(cunit: CompilationUnit, tree: ir.Trees.ClassDef): Unit = {
+     val outfile = getFileFor(cunit, tree.name.name, ".sjsir")
+-    val output = outfile.bufferedOutput
++    val output = outfile.output // yukibana: no java.io.BufferedOutputStream in Scala.js; the output is in memory anyway
+     try {
+       ir.Serializers.serialize(output, tree)
+     } finally {
+--- a/compiler/dotty/tools/dotc/config/ScalaVersion.scala
++++ b/compiler/dotty/tools/dotc/config/ScalaVersion.scala
+@@ -111,7 +111,9 @@
+   /**
+    * The version of the compiler running now
+    */
+-  val current: ScalaVersion = parse(util.Properties.versionNumberString).get
++  // yukibana: scala.util.Properties reads library.properties and jar manifests
++  // through the class loader; this is the scala-library version 3.7.4 uses.
++  val current: ScalaVersion = parse("2.13.16").get
+ }
+ 
+ /**
+--- a/compiler/dotty/tools/dotc/core/tasty/TreePickler.scala
++++ b/compiler/dotty/tools/dotc/core/tasty/TreePickler.scala
+@@ -151,10 +151,10 @@
+       writeLongInt(c.longValue)
+     case FloatTag =>
+       writeByte(FLOATconst)
+-      writeInt(java.lang.Float.floatToRawIntBits(c.floatValue))
++      writeInt(java.lang.Float.floatToIntBits(c.floatValue)) // yukibana: Raw is not in Scala.js (differs only for NaN payloads)
+     case DoubleTag =>
+       writeByte(DOUBLEconst)
+-      writeLongInt(java.lang.Double.doubleToRawLongBits(c.doubleValue))
++      writeLongInt(java.lang.Double.doubleToLongBits(c.doubleValue)) // yukibana: as above
+     case StringTag =>
+       writeByte(STRINGconst)
+       pickleName(c.stringValue.toTermName)
+--- a/compiler/dotty/tools/dotc/transform/MacroAnnotations.scala
++++ b/compiler/dotty/tools/dotc/transform/MacroAnnotations.scala
+@@ -54,41 +54,11 @@
+     else
+       debug.println(i"Expanding macro annotations of:\n$tree")
+       report.error("macro annotations are not supported by the in-browser Scala compiler", tree)
+-      return (List(tree), companion) // yukibana
+-      val macroInterpreter = new Interpreter(tree.srcPos, MacroClassLoader.fromContext)
+-
+-      val prefixedTrees = List.newBuilder[MemberDef]
+-
+-      // Apply all macro annotation to `tree` and collect new definitions in order
+-      val unprocessed = (tree, companion, List.empty[MemberDef])
+-      val (transformedTree, transformedCompanion, suffixed) =
+-        tree.symbol.annotations.foldLeft(unprocessed): (lastResult, annot) =>
+-          if annot.isMacroAnnotation then
+-            val (tree, companion, suffixed) = lastResult
+-            debug.println(i"Expanding macro annotation: ${annot}")
+-            // Interpret call to `new myAnnot(..).transform(using <Quotes>)(<tree>, <companion>)`
+-            val (transformedTrees, transformedCompanion) = callMacro(macroInterpreter, tree, companion, annot)
+-            // Establish the trees order and check the integrity of the trees
+-            transformedTrees.span(_.symbol != tree.symbol) match
+-              case (newPrefixed, newTree :: newSuffixed) =>
+-                // Check the integrity of the generated trees
+-                for prefixedTree <- newPrefixed do checkMacroDef(prefixedTree, tree, annot)
+-                for suffixedTree <- newSuffixed do checkMacroDef(suffixedTree, tree, annot)
+-                for tcompanion <- transformedCompanion do TreeChecker.checkMacroGeneratedTree(companion.get, tcompanion)
+-                TreeChecker.checkMacroGeneratedTree(tree, newTree)
+-                prefixedTrees ++= newPrefixed
+-                (newTree, transformedCompanion, newSuffixed ::: suffixed)
+-              case (_, Nil) =>
+-                report.error(i"Transformed tree for ${tree.symbol} was not return by `(${annot.tree}).transform(..)` during macro expansion", annot.tree.srcPos)
+-                lastResult
+-          else
+-            lastResult
+-      end val
+-
+-      // Complete the list of transformed/generated definitions
+-      val result = prefixedTrees.result() ::: transformedTree :: suffixed
+-      debug.println(result.map(_.show).mkString("expanded to:\n", "\n", ""))
+-      (result, transformedCompanion)
++      // yukibana: what followed ran the annotation's compiled JVM code through
++      // quoted.Interpreter (reflection, a class loader). It is removed rather
++      // than skipped by the `return` above: the Scala.js linker follows calls
++      // in dead code too, and the runner's full pipeline reaches this phase.
++      (List(tree), companion)
+   end expandAnnotations
+ 
+   /** Interpret the code `new annot(..).transform(using <Quotes(ctx)>)(<tree>, <companion>)` */
+--- a/compiler/dotty/tools/dotc/transform/Pickler.scala
++++ b/compiler/dotty/tools/dotc/transform/Pickler.scala
+@@ -201,11 +201,8 @@
+   // when `-Xjava-tasty` is set we actually want to run this phase on Java sources
+   override def skipIfJava(using Context): Boolean = false
+ 
+-  private def output(name: String, msg: String) = {
+-    val s = new PrintStream(name)
+-    s.print(msg)
+-    s.close
+-  }
++  // yukibana: only -Ytest-pickler writes files; there are none here.
++  private def output(name: String, msg: String) = ()
+ 
+   // Maps that keep a record if -Ytest-pickler is set.
+   private val beforePickling = new mutable.HashMap[ClassSymbol, String]
+@@ -241,10 +238,11 @@
+       res
+     }
+ 
+-  private val executor = Executor[Array[Byte]]()
++  // yukibana: parallel pickling runs on a java.lang.Thread; there is one
++  // thread here. Never constructed, so the linker never reaches Thread.
++  private def executor: Executor[Array[Byte]] = throw new UnsupportedOperationException("no threads")
+ 
+-  private def useExecutor(using Context) =
+-    Pickler.ParallelPickling && !ctx.isBestEffort && !ctx.settings.YtestPickler.value
++  private def useExecutor(using Context) = false
+ 
+   private def printerContext(isOutline: Boolean)(using Context): Context =
+     if isOutline then ctx.fresh.setPrinterFn(OutlinePrinter(_))
+@@ -380,27 +378,16 @@
+   override def runOn(units: List[CompilationUnit])(using Context): List[CompilationUnit] = {
+     val useExecutor = this.useExecutor
+ 
+-    val writeTask: Option[() => Unit] =
+-      ctx.run.nn.asyncTasty.map: async =>
+-        fastDoAsyncTasty = true
+-        () =>
+-          given ReadOnlyContext = if useExecutor then ReadOnlyContext.buffered else ReadOnlyContext.eager
+-          val writer = Pickler.EarlyFileWriter(async.earlyOut)
+-          writeSigFilesAsync(serialized.result(), writer, async)
++    // yukibana: early TASTy output (-Xearly-tasty-output, for sbt's
++    // pipelining) writes files and jars; it is never on in the browser, and
++    // leaving the code here would make the Scala.js linker require java.nio
++    // channels and java.util.jar.
++    val writeTask: Option[() => Unit] = None
+ 
+     def runPhase(writeCB: (doWrite: () => Unit) => Unit) =
+       super.runOn(units).tap(_ => writeTask.foreach(writeCB))
+ 
+-    val result =
+-      if useExecutor then
+-        executor.start()
+-        try
+-          runPhase: doWrite =>
+-            // unless we redesign executor to have "Unit" schedule overload, we need some sentinel value.
+-            executor.schedule(() => { doWrite(); Array.emptyByteArray })
+-        finally executor.close()
+-      else
+-        runPhase(_())
++    val result = runPhase(_()) // yukibana: no executor thread (see `executor`)
+     if ctx.settings.YtestPickler.value then
+       val ctx2 = ctx.fresh
+         .setSetting(ctx.settings.XreadComments, true)
+@@ -411,13 +398,7 @@
+           .setReporter(new ThrowingReporter(ctx.reporter))
+           .addMode(Mode.ReadPositions)
+       )
+-    if ctx.isBestEffort then
+-      val outpath =
+-        ctx.settings.outputDir.value.jpath.nn.toAbsolutePath.normalize
+-          .resolve("META-INF")
+-          .resolve("best-effort")
+-      Files.createDirectories(outpath)
+-      BestEffortTastyWriter.write(outpath, result)
++    // yukibana: best-effort TASTy (-Ybest-effort) is written to directories; not here.
+     result
+   }
+ 

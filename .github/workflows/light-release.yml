@@ -1,0 +1,292 @@
+# Builds Yukibana Light (prototypes/monaco-lsp) with every language pack and
+# uploads the release archive as a workflow artifact,
+# yukibana-light-preview-<run number>: yukibana-light/{build/, serve.py,
+# README.md, RUN.txt}, the layout of the previews shared so far. Download it
+# from the run's page (Summary, Artifacts); nothing is published as a GitHub
+# release.
+#
+# One job per pack runs that pack's own build.sh, exactly as its README says
+# (packs/<pack>/README.md), on a clean ubuntu-24.04 runner. Each keeps its
+# $PACK_CACHE in the Actions cache, saved even when the build fails, so a
+# rerun resumes where the last one stopped: the pack scripts skip every step
+# whose output and stamp are in the cache. The C++ pack is one job: build.sh
+# runs clangd, the WebAssembly compiler, the Linux cross compiler (three LLVM
+# builds) and then the Linux VM (build-vm.sh: QEMU, kernels, strace), about
+# three hours from nothing on a 4-core runner and minutes with a warm cache.
+#
+# The assemble job puts the packs' outputs in app/static/packs, builds the
+# app, type-checks it, smoke-tests the built app in Chromium and uploads the
+# archive.
+name: Yukibana Light release archive
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - light-v*
+
+# A second run of the same ref waits for the first rather than cancelling
+# it: a run that finishes leaves its caches for the next.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read # the Haskell pack's GHC root file system, another run's artifact
+
+env:
+  PACK_CACHE: /home/runner/.cache/yukibana-packs
+  JOBS: 4
+
+jobs:
+  pack:
+    name: Pack ${{ matrix.pack }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # apt: what the pack's build.sh says it needs beyond the runner
+          # image (git, curl, python3, make, rustup and PHP are there).
+          - pack: cpp
+            timeout: 355
+            free-disk: true
+            # build.sh: clang, cmake, ninja; build-vm.sh: clang-18, lld,
+            # llvm-strip, clang-tidy-18, flex, bison, bc, cpio, autoconf,
+            # automake, libtool, pkg-config, jq (and libelf for the x86-64
+            # kernel's objtool, python3-venv for meson, libltdl-dev for
+            # libffi's LT_SYS_SYMBOL_USCORE, which is in ltdl.m4).
+            apt: >-
+              clang clang-18 clang-tidy-18 lld llvm cmake ninja-build flex bison bc cpio
+              autoconf automake libtool libltdl-dev pkg-config jq libelf-dev python3-venv
+          - pack: haskell
+            timeout: 60
+          - pack: java
+            timeout: 60
+          - pack: javascript
+            timeout: 30
+          - pack: kotlin
+            timeout: 20
+          - pack: php
+            timeout: 30
+          - pack: python
+            timeout: 60
+          - pack: rust
+            timeout: 90
+            free-disk: true
+          - pack: scala
+            timeout: 90
+            java: true
+          - pack: swift
+            timeout: 120
+            free-disk: true
+            # What the Swift toolchain for Ubuntu 24.04 links against.
+            apt: >-
+              binutils libc6-dev libcurl4-openssl-dev libedit2 libgcc-13-dev libncurses-dev
+              libpython3-dev libsqlite3-0 libstdc++-13-dev libxml2-dev libz3-dev pkg-config
+              tzdata unzip zlib1g-dev
+    defaults:
+      run:
+        working-directory: prototypes/monaco-lsp/packs/${{ matrix.pack }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Free disk space
+        if: matrix.free-disk
+        working-directory: /
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift
+          sudo docker image prune --all --force >/dev/null || true
+          df -h /
+
+      - name: Install build dependencies
+        if: matrix.apt
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ${{ matrix.apt }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v5
+        if: matrix.java
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install uv
+        if: matrix.pack == 'python'
+        run: pipx install uv
+
+      - name: Restore the pack cache
+        id: cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ env.PACK_CACHE }}
+            !${{ env.PACK_CACHE }}/swift/toolchain
+          key: light-${{ matrix.pack }}-${{ hashFiles(format('prototypes/monaco-lsp/packs/{0}/**', matrix.pack)) }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            light-${{ matrix.pack }}-${{ hashFiles(format('prototypes/monaco-lsp/packs/{0}/**', matrix.pack)) }}-
+            light-${{ matrix.pack }}-
+
+      # The Haskell pack's inputs, for either of its build.sh:
+      # - on GHC, it takes the "haskell-ghc-rootfs" artifact of the
+      #   haskell-ghc.yml run it pins (ROOTFS_RUN) from $HASKELL_GHC_ROOTFS,
+      #   and ormolu and hlint, the "haskell-ghc-tools" artifact of the
+      #   haskell-ghc-tools.yml run it pins (TOOLS_RUN), from $HASKELL_GHC_TOOLS;
+      # - on MicroHs, it uses the C++ pack's Emscripten when that is there,
+      #   and its own fallback fetch passes its fetch() the arguments in the
+      #   C++ pack's order (url, sha256, file; its own takes url, file,
+      #   sha256), so on a clean machine it fails its checksum. The same
+      #   emsdk is installed here where it looks first, pinned by the
+      #   values in that build.sh.
+      - name: Haskell's inputs
+        id: haskell
+        if: matrix.pack == 'haskell'
+        run: |
+          run=$(sed -n 's/^ROOTFS_RUN=\([0-9][0-9]*\).*/\1/p' build.sh)
+          echo "rootfs-run=$run" >> "$GITHUB_OUTPUT"
+          echo "tools-run=$(sed -n 's/^TOOLS_RUN=\([0-9][0-9]*\).*/\1/p' build.sh)" >> "$GITHUB_OUTPUT"
+          [ -z "$run" ] || exit 0
+          E="$PACK_CACHE/cpp/emsdk"
+          eval "$(grep -E '^EMSDK_(VERSION|COMMIT|RELEASE|BINARIES_SHA256|NODE|NODE_SHA256)=' build.sh)"
+          [ "$(cat "$E/upstream/emscripten/emscripten-version.txt" 2>/dev/null)" != "\"$EMSDK_VERSION\"" ] || exit 0
+          rm -rf "$E" && mkdir -p "$(dirname "$E")"
+          git clone --quiet --depth 1 --branch "$EMSDK_VERSION" https://github.com/emscripten-core/emsdk "$E"
+          [ "$(git -C "$E" rev-parse HEAD)" = "$EMSDK_COMMIT" ]
+          mkdir -p "$E/downloads"
+          base=https://storage.googleapis.com/webassembly/emscripten-releases-builds
+          curl -sSfL -o "$E/downloads/$EMSDK_RELEASE-wasm-binaries.tar.xz" "$base/linux/$EMSDK_RELEASE/wasm-binaries.tar.xz"
+          curl -sSfL -o "$E/downloads/$EMSDK_NODE" "$base/deps/$EMSDK_NODE"
+          printf '%s  %s\n' "$EMSDK_BINARIES_SHA256" "$E/downloads/$EMSDK_RELEASE-wasm-binaries.tar.xz" \
+            "$EMSDK_NODE_SHA256" "$E/downloads/$EMSDK_NODE" | sha256sum -c -
+          (cd "$E" && EMSDK_KEEP_DOWNLOADS=1 ./emsdk install "$EMSDK_VERSION" >/dev/null && ./emsdk activate "$EMSDK_VERSION" >/dev/null)
+          rm -rf "$E/downloads"
+
+      - uses: actions/download-artifact@v7
+        if: steps.haskell.outputs.rootfs-run
+        with:
+          name: haskell-ghc-rootfs
+          run-id: ${{ steps.haskell.outputs.rootfs-run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/haskell-ghc-rootfs
+
+      # ormolu and hlint, built by haskell-ghc-tools.yml.
+      - uses: actions/download-artifact@v7
+        if: steps.haskell.outputs.tools-run
+        with:
+          name: haskell-ghc-tools
+          run-id: ${{ steps.haskell.outputs.tools-run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/haskell-ghc-tools
+
+      - name: Build
+        run: ./build.sh
+        env:
+          HASKELL_GHC_ROOTFS: ${{ steps.haskell.outputs.rootfs-run && format('{0}/haskell-ghc-rootfs', runner.temp) || '' }}
+          HASKELL_GHC_TOOLS: ${{ steps.haskell.outputs.tools-run && format('{0}/haskell-ghc-tools', runner.temp) || '' }}
+
+      - name: Disk and cache usage
+        if: always()
+        run: |
+          df -h /
+          du -sh "$PACK_CACHE"/* 2>/dev/null || true
+
+      # Saved also when the build failed or was cancelled, so the next run
+      # does not start again from nothing.
+      - name: Save the pack cache
+        if: always() && steps.cache.outcome == 'success'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ env.PACK_CACHE }}
+            !${{ env.PACK_CACHE }}/swift/toolchain
+          key: light-${{ matrix.pack }}-${{ hashFiles(format('prototypes/monaco-lsp/packs/{0}/**', matrix.pack)) }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # The artifact's root is static/packs, so it holds <pack>/ and the
+      # assemble job can merge every pack into one static/packs.
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pack-${{ matrix.pack }}
+          path: prototypes/monaco-lsp/app/static/packs/
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 1
+          retention-days: 3
+
+  assemble:
+    name: Assemble the archive
+    needs: pack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: prototypes/monaco-lsp/app
+    steps:
+      - uses: actions/checkout@v6
+
+      # 24: setup-node's npm cache runs npm at the repository root, whose
+      # package.json (the IDE's) requires Node 24 (devEngines).
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: prototypes/monaco-lsp/app/package-lock.json
+
+      - name: Install the app's dependencies
+        run: npm ci --no-audit --no-fund
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: pack-*
+          merge-multiple: true
+          path: prototypes/monaco-lsp/app/static/packs
+
+      - name: Packs
+        run: |
+          for p in cpp haskell java javascript kotlin php python rust scala swift; do
+            [ -f "static/packs/$p/server.js" ] || { echo "pack $p is missing server.js" >&2; exit 1; }
+            echo "$p: $(du -sh "static/packs/$p" | cut -f1)"
+          done
+
+      - name: Type-check
+        run: npm run check
+
+      - name: Build
+        run: npm run build
+
+      - name: Install Chromium
+        run: |
+          npx playwright-core install --with-deps chromium
+          echo "CHROMIUM=$(node -e "import('playwright-core').then((m) => console.log(m.chromium.executablePath()))")" >> "$GITHUB_ENV"
+
+      - name: Smoke test (JavaScript, in the built app)
+        run: node tests/e2e.mjs javascript
+
+      - name: Lay out the archive
+        run: |
+          root="$RUNNER_TEMP/release/yukibana-light"
+          mkdir -p "$root"
+          mv build "$root/build"
+          cp ../serve.py ../README.md "$root/"
+          printf 'python3 serve.py build --port 8080\nthen open http://localhost:8080/\n' > "$root/RUN.txt"
+          du -sh "$root"
+          find "$root" -type f | wc -l
+
+      # The artifact's root is release/, so the downloaded zip holds
+      # yukibana-light/. Level 0: the packs are .wasm with .br and .gz
+      # siblings already, and zipping them again buys little.
+      - uses: actions/upload-artifact@v6
+        with:
+          name: yukibana-light-preview-${{ github.run_number }}
+          path: ${{ runner.temp }}/release/
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 0
+          retention-days: 30

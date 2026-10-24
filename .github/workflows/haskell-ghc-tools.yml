@@ -1,0 +1,62 @@
+# Builds the Haskell pack's formatter and linter, ormolu and hlint, as
+# WebAssembly commands with
+# prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh, and uploads them
+# as an artifact for the pack's build.sh. Apart from haskell-ghc.yml:
+# ghc-lib-parser takes most of an hour to build, and only a change to
+# build-tools.sh needs it built again.
+name: Haskell pack formatter and linter
+
+on:
+  push:
+    branches:
+      - claude/project-thread-3ei4fl
+    paths:
+      - prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh
+      - .github/workflows/haskell-ghc-tools.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tools:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+
+      # Restored and saved apart, the store kept even when the build fails:
+      # ghc-lib-parser is most of the build, and a failure after it is the
+      # usual one.
+      - name: Restore GHC's wasm toolchain and the tools' package store
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/.ghc-wasm-9.12
+            /tmp/yk/tools-store
+          key: ghc-wasm-912-tools-${{ github.run_id }}
+          restore-keys: ghc-wasm-912-tools-
+
+      - name: Install alex and happy
+        run: sudo apt-get install -y --no-install-recommends alex happy
+
+      - name: Build
+        run: prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh "$RUNNER_TEMP/tools"
+
+      - name: Save GHC's wasm toolchain and the tools' package store
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.ghc-wasm-9.12
+            /tmp/yk/tools-store
+          key: ghc-wasm-912-tools-${{ github.run_id }}
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: haskell-ghc-tools
+          path: ${{ runner.temp }}/tools
+          # The pack's build.sh pins a run's artifact, so it is kept as long
+          # as GitHub allows.
+          retention-days: 90

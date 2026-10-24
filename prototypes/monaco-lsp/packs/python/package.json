@@ -1,0 +1,13 @@
+{
+    "name": "yukibana-pack-python",
+    "private": true,
+    "description": "Yukibana Python pack: basedpyright in a module Web Worker, and a Pyodide runner. Build tooling comes from upstream's lockfile (see build.sh); this file only holds the test's dependency.",
+    "type": "module",
+    "scripts": {
+        "build": "./build.sh",
+        "test": "node test.mjs && node test-run.mjs"
+    },
+    "devDependencies": {
+        "playwright-core": "1.56.1"
+    }
+}

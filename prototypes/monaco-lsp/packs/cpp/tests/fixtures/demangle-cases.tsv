@@ -1,0 +1,17 @@
+# mangled<TAB>demangled: checked by test-demangle.mjs on demangle.wasm and on a native build
+_Z8distanceRK5PointS1_	distance(Point const&, Point const&)
+_ZNK5Point4normEv	Point::norm() const
+_Znwm	operator new(unsigned long)
+_ZdlPvm	operator delete(void*, unsigned long)
+_ZNSt3__16vectorI5PointNS_9allocatorIS1_EEEixB8fe210108Em	std::__1::vector<Point, std::__1::allocator<Point>>::operator[][abi:fe210108](unsigned long)
+_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEC2B8fe210108ILi0EEEPKc	std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>::basic_string[abi:fe210108]<0>(char const*)
+_ZTVSt12length_error	vtable for std::length_error
+_ZTISt9exception	typeinfo for std::exception
+_ZN3foo3barIiEEvT_	void foo::bar<int>(int)
+_ZZ4mainENK3$_0clEv	main::$_0::operator()() const
+_ZL6squarei	square(int)
+__Z8distanceRK5PointS1_	distance(Point const&, Point const&)
+_RNvC6_123foo3bar	_RNvC6_123foo3bar
+main	main
+printf	printf
+hypot	hypot

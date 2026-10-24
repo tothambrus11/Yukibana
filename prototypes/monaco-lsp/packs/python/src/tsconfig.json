@@ -1,0 +1,5 @@
+{
+    "//": "Copied next to upstream's packages/browser-pyright/tsconfig.json by build.sh, which this extends.",
+    "extends": "../tsconfig.json",
+    "include": ["./**/*.ts"]
+}

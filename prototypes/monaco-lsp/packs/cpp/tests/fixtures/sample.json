@@ -1,0 +1,6 @@
+{
+ "main.cpp": "#include <cstdio>\n#include <vector>\n\n#include \"geometry.h\"\n\nint main() {\n    std::vector<Point> points{{0, 0}, {3, 4}};\n    std::printf(\"%f\\n\", distance(points[0], points[1]));\n    std::printf(\"%f\\n\", points[1].norm());\n    return 0;\n}\n",
+ "geometry.h": "#pragma once\n\n/// A point in the plane.\nstruct Point {\n    double x;\n    double y;\n\n    /// Distance from the origin.\n    double norm() const;\n};\n\n/// Euclidean distance between two points.\ndouble distance(const Point &a, const Point &b);\n",
+ "geometry.cpp": "#include \"geometry.h\"\n\n#include <cmath>\n\ndouble Point::norm() const { return std::hypot(x, y); }\n\ndouble distance(const Point &a, const Point &b) {\n    return std::hypot(a.x - b.x, a.y - b.y);\n}\n",
+ "compile_flags.txt": "-std=c++20\n-Wall\n-Wextra\n-I.\n"
+}

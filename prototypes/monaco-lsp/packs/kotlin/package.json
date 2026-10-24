@@ -1,0 +1,13 @@
+{
+    "name": "yukibana-pack-kotlin",
+    "private": true,
+    "description": "Yukibana Kotlin pack: a syntax-level language server on tree-sitter (web-tree-sitter and tree-sitter-kotlin), in a module Web Worker. See build.sh; this file only holds the test's dependency.",
+    "type": "module",
+    "scripts": {
+        "build": "./build.sh",
+        "test": "node test.mjs"
+    },
+    "devDependencies": {
+        "playwright-core": "1.56.1"
+    }
+}

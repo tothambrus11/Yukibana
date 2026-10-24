@@ -1,0 +1,33 @@
+{
+	"name": "yukibana-monaco-lsp",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build && node scripts/compress.mjs && node scripts/offline-manifest.mjs",
+		"preview": "vite preview",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && tsc -p src/service-worker --noEmit",
+		"prepare": "svelte-kit sync",
+		"test:unit": "node --test tests/ansi.mjs tests/lsp.mjs tests/cpp-targets.mjs tests/optimization.mjs tests/explorer-map.mjs tests/haskell-export.mjs tests/cpp-sanitizers.mjs tests/terminal-links.mjs tests/undo-text.mjs",
+		"test:e2e": "node tests/e2e.mjs",
+		"test:e2e:targets": "node tests/e2e-targets.mjs",
+		"test:export": "node tests/export.mjs"
+	},
+	"devDependencies": {
+		"@sveltejs/adapter-static": "4.0.0",
+		"@sveltejs/kit": "3.1.0",
+		"@sveltejs/vite-plugin-svelte": "7.3.1",
+		"playwright-core": "1.56.1",
+		"svelte": "5.57.2",
+		"svelte-check": "4.7.7",
+		"typescript": "6.0.3",
+		"vite": "8.3.5"
+	},
+	"dependencies": {
+		"@fontsource-variable/jetbrains-mono": "5.3.0",
+		"dockview": "8.6.1",
+		"monaco-editor": "0.57.0",
+		"vscode-languageserver-protocol": "3.17.5"
+	}
+}

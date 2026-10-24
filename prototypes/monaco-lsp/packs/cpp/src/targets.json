@@ -1,0 +1,4 @@
+[{"id":"wasm32-wasi","label":"WebAssembly (WASI)","triple":"wasm32-wasip1","runtime":"wasi","compiler":"cc","default":true},
+ {"id":"x86_64-linux","label":"x86-64 Linux","triple":"x86_64-linux-musl","runtime":"linux","arch":"x86_64","multiarch":"x86_64-linux-gnu","compiler":"cc-cross","asm":"asm-x86_64"},
+ {"id":"aarch64-linux","label":"AArch64 Linux","triple":"aarch64-linux-musl","runtime":"linux","arch":"aarch64","multiarch":"aarch64-linux-gnu","compiler":"cc-cross","asm":"asm-aarch64"},
+ {"id":"riscv64-linux","label":"RISC-V 64 Linux","triple":"riscv64-linux-musl","runtime":"linux","arch":"riscv64","multiarch":"riscv64-linux-gnu","compiler":"cc-cross","asm":"asm-riscv64"}]

@@ -1,0 +1,62 @@
+--- /dev/null
++++ b/wasm-host-syscall.h
+@@ -0,0 +1,59 @@
++/*
++ * Host syscall numbering for linux-user on Emscripten (force-included).
++ *
++ * Emscripten has no syscall numbers (its SYS_x macros expand to function
++ * names), but linux-user both tests `defined(__NR_x)` to decide what the
++ * host offers and calls syscall(__NR_x, ...). We give it the asm-generic
++ * (aarch64/riscv-style, 32-bit long) numbering; wasm_host_syscall6() in
++ * common-user/host/wasm32/wasm-host.c maps each number onto Emscripten's
++ * libc or returns -ENOSYS.
++ */
++#ifndef WASM_HOST_SYSCALL_H
++#define WASM_HOST_SYSCALL_H
++#ifndef __ASSEMBLER__
++#ifndef __BITS_PER_LONG
++#define __BITS_PER_LONG 32
++#endif
++/* Names only: time32 variants are what linux-user calls on a 32-bit host. */
++#define __ARCH_WANT_TIME32_SYSCALLS 1
++#include <asm-generic/unistd.h>
++#ifdef __cplusplus
++extern "C" {
++#endif
++long syscall(long n, ...);
++long wasm_host_syscall6(long n, long a, long b, long c, long d, long e, long f);
++#ifdef __cplusplus
++}
++#endif
++
++/*
++ * Host memory mapping, redirected everywhere. Inside the guest region
++ * (allocated once by wasm_guest_region_alloc, from load_elf_image) mappings
++ * are emulated on the existing allocation; outside it they go to
++ * Emscripten's mmap without the address hint it rejects. mprotect/madvise
++ * are no-ops: Wasm memory has no protection, so guest page permissions are
++ * QEMU's page flags alone.
++ */
++#include <stddef.h>
++#include <sys/types.h>
++void *wasm_guest_region_alloc(size_t size, size_t align);
++/* Records sig for the embedder and exits with 128 + sig (die_with_signal). */
++void wasm_host_exit_signal(int sig) __attribute__((noreturn));
++/* The guest's standard input ring, for the embedder (wasm-host.c). */
++void *wasm_host_stdin(void);
++void *wasm_mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off);
++int wasm_munmap(void *addr, size_t len);
++int wasm_mprotect(void *addr, size_t len, int prot);
++int wasm_madvise(void *addr, size_t len, int advice);
++void *wasm_mremap(void *old, size_t old_len, size_t new_len, int flags, ...);
++#define mmap wasm_mmap
++#define mmap64 wasm_mmap
++#define munmap wasm_munmap
++#define mprotect wasm_mprotect
++#define madvise wasm_madvise
++#define mremap wasm_mremap
++#ifndef SYS_gettid
++#define SYS_gettid __NR_gettid
++#endif
++#endif
++#endif

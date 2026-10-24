@@ -1,0 +1,30 @@
+[package]
+name = "yukibana-rust-analyzer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+ide = { package = "ra_ap_ide", version = "=0.0.358" }
+ide_db = { package = "ra_ap_ide_db", version = "=0.0.358" }
+base_db = { package = "ra_ap_base_db", version = "=0.0.358" }
+cfg = { package = "ra_ap_cfg", version = "=0.0.358" }
+vfs = { package = "ra_ap_vfs", version = "=0.0.358" }
+paths = { package = "ra_ap_paths", version = "=0.0.358" }
+syntax = { package = "ra_ap_syntax", version = "=0.0.358" }
+hir = { package = "ra_ap_hir", version = "=0.0.358" }
+intern = { package = "ra_ap_intern", version = "=0.0.358" }
+triomphe = "0.1.14"
+semver = "1.0.26"
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
