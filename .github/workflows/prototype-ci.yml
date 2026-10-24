@@ -1,0 +1,119 @@
+# Checks Yukibana Light (prototypes/monaco-lsp) on every push to a pull
+# request and to main, in a few minutes:
+#
+# - app: type-check (svelte-check, the service worker), the unit tests, and
+#   the Download test for the languages whose tools the runner image has
+#   (Node: JavaScript, TypeScript, web, p5.js).
+# - javascript: the JavaScript/TypeScript pack built from npm (no toolchain
+#   to compile, so a cold build is a minute or two), its own tests, then the
+#   app built with that pack alone and driven in Chromium for the four
+#   languages it serves.
+#
+# The other packs build compilers to Wasm and take from twenty minutes to
+# hours cold; light-release.yml builds all of them, by hand or on a light-v*
+# tag, and its packs' own tests are run there by their build scripts.
+name: Yukibana Light
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - prototypes/monaco-lsp/**
+      - .github/workflows/prototype-ci.yml
+  pull_request:
+    paths:
+      - prototypes/monaco-lsp/**
+      - .github/workflows/prototype-ci.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PACK_CACHE: /home/runner/.cache/yukibana-packs
+
+jobs:
+  app:
+    name: App
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: prototypes/monaco-lsp/app
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: prototypes/monaco-lsp/app/package-lock.json
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Type-check
+        run: npm run check
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Download test (Node languages)
+        run: node tests/export.mjs javascript typescript web p5
+
+  javascript:
+    name: JavaScript pack and e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: prototypes/monaco-lsp
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: prototypes/monaco-lsp/app/package-lock.json
+
+      # The app's playwright-core installs the Chromium that the pack's tests
+      # and the e2e both launch (as $CHROMIUM).
+      - name: Install the app and Chromium
+        working-directory: prototypes/monaco-lsp/app
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright-core install --with-deps chromium
+          echo "CHROMIUM=$(node -e "import('playwright-core').then((m) => console.log(m.chromium.executablePath()))")" >> "$GITHUB_ENV"
+
+      # The pack's npm cache: its build.sh installs from it.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PACK_CACHE }}/javascript
+          key: ci-javascript-${{ hashFiles('prototypes/monaco-lsp/packs/javascript/package-lock.json') }}
+          restore-keys: ci-javascript-
+
+      - name: Build the pack
+        working-directory: prototypes/monaco-lsp/packs/javascript
+        run: ./build.sh
+
+      - name: Type-check the pack
+        working-directory: prototypes/monaco-lsp/packs/javascript
+        run: npm run typecheck
+
+      - name: Pack tests
+        working-directory: prototypes/monaco-lsp/packs/javascript
+        run: npm test
+
+      - name: Build the app
+        working-directory: prototypes/monaco-lsp/app
+        run: npm run build
+
+      - name: End-to-end (JavaScript, TypeScript, web, p5.js)
+        working-directory: prototypes/monaco-lsp/app
+        run: node tests/e2e.mjs javascript typescript web p5
