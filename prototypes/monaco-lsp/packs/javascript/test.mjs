@@ -152,8 +152,8 @@ check('initialize answers with capabilities', !!init?.capabilities?.completionPr
 const loading = (await notifications()).filter((n) => n.method === 'yukibana/loading').map((n) => n.params);
 const finals = Object.values(Object.fromEntries(loading.map((l) => [l.label, l])));
 check(
-  'yukibana/loading reports every download to completion',
-  finals.length === 2 && finals.every((l) => l.total > 0 && l.loaded === l.total),
+  'yukibana/loading reports every download to completion (TypeScript, the libs, the shipped packages\' declarations)',
+  finals.length === 3 && finals.every((l) => l.total > 0 && l.loaded === l.total),
   finals,
 );
 
@@ -372,6 +372,32 @@ check('a .ts CLI using process and node:readline(/promises) has no errors', cliD
 await notify('textDocument/didChange', { textDocument: { uri: W + 'cli.ts', version: 2 }, contentChanges: [{ text: cliFile + 'process.hrtime();\nrl.history;\n' }] });
 const cliMissing = await diagnostics(W + 'cli.ts', (d) => d.filter((x) => x.severity === 1).length >= 2);
 check('what process and readline lack here is an error (process.hrtime, rl.history)', cliMissing?.filter((x) => x.code === 2339).length === 2, cliMissing?.map((x) => `${x.code} ${x.message}`));
+
+// fast-check, the package the runner ships: its own declarations resolve
+// `import fc from 'fast-check'` the way TypeScript resolves a package.
+const propsFile = `import { test } from 'node:test';
+import fc from 'fast-check';
+
+const point = fc.record({ x: fc.integer(), y: fc.integer() });
+test('symmetric', () => {
+  fc.assert(fc.property(point, point, (a, b) => Math.hypot(a.x - b.x, a.y - b.y) === Math.hypot(b.x - a.x, b.y - a.y)));
+});
+`;
+await notify('textDocument/didOpen', { textDocument: { uri: W + 'tests/props.test.ts', languageId: 'typescript', version: 1, text: propsFile } });
+const propsDiags = await diagnostics(W + 'tests/props.test.ts', () => true);
+check('a TypeScript test importing fast-check has no errors', Array.isArray(propsDiags) && propsDiags.length === 0, propsDiags?.map((x) => `${x.code} ${x.message}`));
+const pointHover = await request('textDocument/hover', { textDocument: { uri: W + 'tests/props.test.ts' }, position: { line: 3, character: 7 } });
+check("`fc.record({ x: fc.integer(), ... })` is typed Arbitrary<{ x: number; y: number; }>", /Arbitrary<\{\s*x: number;\s*y: number;\s*\}>/.test(pointHover?.contents?.value ?? ''), pointHover?.contents);
+const propertyHover = await request('textDocument/hover', { textDocument: { uri: W + 'tests/props.test.ts' }, position: { line: 5, character: 17 } });
+check('hover on `fc.property` shows fast-check\'s documentation', /property/.test(JSON.stringify(propertyHover?.contents)) && /Instantiate a new/.test(JSON.stringify(propertyHover?.contents)), JSON.stringify(propertyHover?.contents).slice(0, 200));
+const fcCompletion = await request('textDocument/completion', { textDocument: { uri: W + 'tests/props.test.ts' }, position: { line: 3, character: 17 } });
+const fcLabels = (fcCompletion?.items ?? fcCompletion ?? []).map((i) => i.label);
+check('completion after `fc.` offers the arbitraries', ['integer', 'record', 'array', 'string', 'property', 'assert'].every((l) => fcLabels.includes(l)), fcLabels.slice(0, 10));
+await notify('textDocument/didChange', { textDocument: { uri: W + 'tests/props.test.ts', version: 2 }, contentChanges: [{ text: propsFile + "fc.property(fc.integer(), (s: string) => s.length > 0);\n" }] });
+const fcWrong = await diagnostics(W + 'tests/props.test.ts', (d) => d.some((x) => x.severity === 1));
+check('a property whose predicate does not take what the arbitrary makes is a type error', fcWrong?.some((x) => x.code === 2345 && /string/.test(x.message) && /number/.test(x.message)), fcWrong?.map((x) => `${x.code} ${x.message}`));
+const fcDefinition = await request('textDocument/definition', { textDocument: { uri: W + 'tests/props.test.ts' }, position: { line: 3, character: 17 } });
+check('go to definition into fast-check finds nothing in the project (results in package declarations are dropped, as for libs)', Array.isArray(fcDefinition) ? fcDefinition.length === 0 : fcDefinition === null, fcDefinition);
 
 // Garbage on the wire is logged, not thrown; a second initialize is refused.
 await page.evaluate(() => window.lsp.worker.postMessage('not json-rpc'));

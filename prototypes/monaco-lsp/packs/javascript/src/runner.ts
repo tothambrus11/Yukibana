@@ -49,6 +49,13 @@ import type * as Strip from './strip';
 // language server downloads) and its uncompressed size, for the progress bar.
 declare const __TS_FILE__: string;
 declare const __TS_SIZE__: number;
+/**
+ * Injected by build.sh: the npm packages this pack ships, by bare specifier,
+ * each as one ES module file next to this script (`fast-check` is
+ * `fast-check-<version>.js`, fast-check bundled with pure-rand). See
+ * `packageUrl`.
+ */
+declare const __PACKAGES__: Record<string, string>;
 
 type ToApp =
 	| { type: 'loading'; label: string; loaded: number; total: number }
@@ -232,6 +239,20 @@ BUILTINS['assert/strict'] = BUILTINS['node:assert/strict']!;
 Object.defineProperty(globalThis, Symbol.for('yukibana.builtins'), { value: BUILTINS });
 const builtinUrls = new Map<string, string>();
 
+/**
+ * The URL of a package this pack ships (`__PACKAGES__`), for a bare import
+ * of it in Run and Test: the file next to this script, which the browser
+ * fetches only when a module imports it, and then once per worker, so every
+ * test file shares one copy of it (Node would load it once per test file's
+ * process; fast-check's `configureGlobal` is therefore shared by the files
+ * of one Test). Any other bare specifier stays as written and fails as it
+ * would without `node_modules`.
+ */
+function packageUrl(specifier: string): string | undefined {
+	const file = Object.hasOwn(__PACKAGES__, specifier) ? __PACKAGES__[specifier] : undefined;
+	return file === undefined ? undefined : new URL(file, import.meta.url).href;
+}
+
 function builtinUrl(specifier: string): string | undefined {
 	const module = BUILTINS[specifier];
 	if (!module) return undefined;
@@ -391,7 +412,10 @@ interface LinkOptions {
 	 * or `x/index.ts`) and `./x.js` for `x.ts`.
 	 */
 	resolution: 'exact' | 'bundler';
-	/** Whether `node:test`, `node:assert` and the rest resolve to the runner's own. */
+	/**
+	 * Whether `node:test`, `node:assert` and the rest resolve to the runner's
+	 * own, and the packages it ships (`packageUrl`) to theirs.
+	 */
 	builtins: boolean;
 	/** See `toJavaScript`. */
 	lenient: boolean;
@@ -457,9 +481,9 @@ function linker(files: Record<string, string>, options: LinkOptions): (path: str
 			for (const i of imports) {
 				const specifier = i.n;
 				if (specifier === undefined) continue;
-				let targetUrl = options.builtins ? builtinUrl(specifier) : undefined;
+				let targetUrl = options.builtins ? (builtinUrl(specifier) ?? packageUrl(specifier)) : undefined;
 				if (targetUrl === undefined) {
-					// Bare specifiers ('lodash') and computed ones stay as written, and fail as they would anyway.
+					// Other bare specifiers ('lodash') and computed ones stay as written, and fail as they would anyway.
 					if (!/^\.{1,2}\//.test(specifier) && !(options.resolution === 'bundler' && specifier.startsWith('/'))) continue;
 					const target = specifier.startsWith('/') ? resolve('', specifier.slice(1)) : resolve(path, specifier);
 					if (target === null) throw new ProjectError(`${path}: '${specifier}' points outside the project`);

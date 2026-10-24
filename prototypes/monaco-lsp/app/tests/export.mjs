@@ -126,9 +126,20 @@ async function swift(name, files) {
 	step(`${name}: swift test runs the XCTest tests`, 'swift', ['test'], dir, 'Executed 2 tests, with 0 failures', env);
 }
 
+/** `npm install` for a download whose package.json has dependencies (fast-check); false, after a skip, when it fails. */
+function npmInstall(name, dir) {
+	const json = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+	if (!json.dependencies && !json.devDependencies) return true;
+	const install = run('npm', ['install', '--no-audit', '--no-fund'], dir);
+	if (install.status === 0) return true;
+	skip(`${name}: npm install failed (no registry?): ${tail(install.output)}`);
+	return false;
+}
+
 async function javascript(name, files) {
 	const dir = await download(name, sample('javascript'), files);
 	if (!dir) return;
+	if (!npmInstall(name, dir)) return;
 	step(`${name}: npm start prints the distance`, 'npm', ['start', '--silent'], dir, '(0, 0) to (3, 4): 5');
 	step(`${name}: npm test runs node --test`, 'npm', ['test', '--silent'], dir, 'pass 4');
 }
@@ -139,6 +150,7 @@ async function typescript(name, files) {
 	// Node 22.18 and later run .ts files by stripping their types; earlier ones cannot run this project.
 	const [major, minor] = process.versions.node.split('.').map(Number);
 	if (major < 22 || (major === 22 && minor < 18)) return skip(`${name}: node ${process.version} cannot strip types (22.18 or later can)`);
+	if (!npmInstall(name, dir)) return;
 	step(`${name}: npm start runs main.ts with Node's type stripping`, 'npm', ['start', '--silent'], dir, '(0, 0) to (3, 4): 5');
 	step(`${name}: npm test runs node --test, which finds tests/*.test.ts`, 'npm', ['test', '--silent'], dir, 'pass 4');
 }

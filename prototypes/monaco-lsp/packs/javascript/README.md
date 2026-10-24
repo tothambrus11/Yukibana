@@ -26,7 +26,8 @@ that holds the project's documents and the bundled `lib.*.d.ts` files.
 | `server.js` (adapter, with the types of the runner's Node modules) | 33.4 KiB | 10.6 KiB | 9.4 KiB |
 | `typescript-6.0.3.js` (minified ESM) | 3520.1 KiB | 1005.5 KiB | 781.0 KiB |
 | `libs-6.0.3.json` (64 lib files) | 2538.8 KiB | 387.0 KiB | 279.3 KiB |
-| **total** | **6092.3 KiB** | **1403.1 KiB** | **1069.7 KiB** |
+| `packages-fast-check-4.10.2.json` (fast-check's declarations, see "Packages") | 186.0 KiB | 38.0 KiB | 31.2 KiB |
+| **total** | **6278.3 KiB** | **1441.1 KiB** | **1100.9 KiB** |
 
 `build.sh` writes `.gz` and `.br` siblings for each file. On a local
 connection, `initialize` answers about 220 ms after the worker starts,
@@ -139,7 +140,8 @@ TypeScript, which answers every request with an error.
   `tools/libs.mjs` call in `build.sh`.
 * **npm packages and `@types`:** there is no `node_modules` and no package
   download, so `import x from 'lodash'` is unresolved (an error only in
-  checked files).
+  checked files). The exception is fast-check, which the runner ships (see
+  "Packages").
 * **The project is the set of files the client opened.** The `include`,
   `exclude` and `files` keys of a config file are not applied. Project
   references and `extends` pointing outside the project are not supported.
@@ -194,6 +196,8 @@ The alternative named in the task, `@typescript/vfs`, was not needed: the
 * `tools/libs.mjs`: collects and minifies the lib bundle and checks it.
 * `tools/compress.mjs`: writes the compressed siblings and prints the size
   table.
+* `tools/package-types.mjs`: the declarations of the packages the runner
+  ships (fast-check), as TypeScript resolves them (see "Packages").
 * `src/node/`: the runner's `node:test` (`test.ts`), `node:assert`
   (`assert.ts`, with `inspect.ts` for its messages), `process` and
   `node:readline` (`process.ts`), and their types for the server
@@ -207,7 +211,10 @@ The alternative named in the task, `@typescript/vfs`, was not needed: the
   files, an uncaught error during a test, `test/` files and `console.log` in
   tests, and `node:test` in a plain run; TypeScript (a run, a stack trace
   at the `.ts` line, an `enum` refused, tests in `*.test.ts`, a failure
-  located in the `.ts` file); `process.argv`/`exit`/`exitCode`/
+  located in the `.ts` file); fast-check (fetched only when imported, a
+  passing and a failing property with its shrunk counterexample and cause,
+  a TypeScript program using it, another bare import still failing);
+  `process.argv`/`exit`/`exitCode`/
   `stdout.write` and `node:readline` (`question`, `readline/promises`,
   `for await`, `'line'` events); the environment; and `preview` (the page
   built, run in a sandboxed `srcdoc` iframe under COEP, a missing import).
@@ -239,11 +246,14 @@ The alternative named in the task, `@typescript/vfs`, was not needed: the
     * a `.ts` file importing JavaScript
     * a checked test file using `node:test` and `node:assert(/strict)` with no
       errors, hover on `describe`, and errors for what the runner lacks
+    * a TypeScript test importing fast-check: no errors, the type of an
+      arbitrary, hover and completion from fast-check's declarations, a
+      type error in a property, no definition into the package
     * a second `initialize` refused, and a non-JSON-RPC message ignored
 
 ## Running
 
-`runner.js` (48.0 KiB raw, 20.0 KiB gzip, 17.6 KiB brotli; 14.2 KiB
+`runner.js` (48.2 KiB raw, 20.1 KiB gzip, 17.6 KiB brotli; 14.2 KiB
 brotli before TypeScript, `process` and `readline`, 8.9 KiB before test
 mode) runs the project in its own module worker, as
 `CONTRACT.md` ("Running a program") describes. Every project file is an ES
@@ -272,7 +282,8 @@ imported with `with { type: 'json' }`.
 
 Limits: circular imports between project files cannot be linked this way
 and are reported; bare imports (`'lodash'`) fail, since there are no
-packages (see "Packages"); the program runs in a worker, so there is no DOM.
+packages but fast-check (see "Packages"); the program runs in a worker, so
+there is no DOM.
 
 ## Environment
 
@@ -307,7 +318,8 @@ What a program run with **Run** (or **Test**) has, checked by
   cross-origin response without CORS is refused. This is the user's
   program talking to the network; the app's own code still loads nothing
   from a third party.
-* **No packages:** no npm and no `node_modules`. See "Packages".
+* **No packages** but fast-check: no npm and no `node_modules`. See
+  "Packages".
 
 ## Command-line programs
 
@@ -425,9 +437,9 @@ once per preview.
 
 ## Packages
 
-Bare imports (`import _ from 'lodash'`) are not implemented. These are the
-options, and choosing one is a product decision rather than a technical
-one:
+Bare imports (`import _ from 'lodash'`) are not implemented, with one
+exception, below. These are the options, and choosing one is a product
+decision rather than a technical one:
 
 1. **An import map to a CDN** (esm.sh, jsDelivr) inside the run. It is
    simple, but the program's code then comes from a third party at run
@@ -441,8 +453,44 @@ one:
 3. **A curated set shipped in the pack**: a few packages, pre-bundled as
    ES modules with their types. This works offline and fits the contract,
    but each package is a decision about size and maintenance.
-4. **None**, as now: the platform's standard library and the Node built-ins
+4. **None**: the platform's standard library and the Node built-ins
    listed above.
+
+What the pack does is the third, for one package so far: **fast-check
+4.10.2** (MIT), the property-based testing library, with its one
+dependency, pure-rand 8.4.2 (MIT). Both are pinned in `package-lock.json`
+with their npm integrity hashes; nothing in them is changed.
+
+* **Run and Test.** `import fc from 'fast-check'` (or `import * as fc`, or
+  named imports) in a program or a test resolves to
+  `fast-check-4.10.2.js` next to `runner.js`: fast-check's published ES
+  module (`lib/fast-check.js`) bundled by esbuild with the pure-rand modules
+  it imports, minified (167 KiB raw, 57 KiB gzip, 48 KiB brotli). The
+  browser fetches it only when a module imports it, once per worker: the
+  test files of one Test share one copy, so `fc.configureGlobal` in one
+  applies to the next (with `node --test` each file has a process of its
+  own). A web project's Preview does not have it (its page loads nothing
+  from the pack). Any other bare import still fails.
+* **The editor.** `packages-fast-check-4.10.2.json` holds fast-check's
+  declarations as installed, `/node_modules/fast-check/package.json` and
+  `lib/fast-check.d.ts`, plus the pure-rand declarations they import:
+  exactly the files TypeScript reads to resolve the import with the
+  server's settings (`tools/package-types.mjs` asks TypeScript which). The
+  server puts them in its virtual file system at `/node_modules/`, so the
+  import resolves by TypeScript's own rules, in JavaScript and TypeScript
+  alike: types (`fc.record({ x: fc.integer() })` is
+  `Arbitrary<{ x: number }>`), completion, hover with fast-check's
+  documentation, and type errors such as a predicate that does not take
+  what the arbitraries make. Results that point into these files
+  (definitions, references) are dropped, as for the libs. It is downloaded
+  with the libs when the server starts (31 KiB brotli), for every
+  JavaScript and TypeScript session: the server has no way to add files
+  after its first program is built without recreating it, and 31 KiB did
+  not seem worth one.
+* **Download** adds `"fast-check": "^4.10.2"` to `devDependencies` when a
+  `.js` or `.ts` file imports it, and the README says `npm install` first;
+  `app/tests/export.mjs` runs the samples' tests with real Node and the
+  real fast-check from npm.
 
 ## Testing
 
@@ -499,9 +547,39 @@ does with no arguments, in the browser:
   `FORCE_COLOR=1`), and requires the two reports to agree line for line,
   escape sequences included, durations and Node's internal stack frames
   aside.
+* **Property-based tests** with fast-check (see "Packages"): `fc.assert(
+  fc.property(arb, ..., predicate))` inside a test. A failing property
+  throws fast-check's own error, which the report prints as Node's does:
+  `Property failed after N tests`, the seed and path to replay it,
+  `Counterexample: [100]` after `Shrunk 8 time(s)`, and, as the error's
+  `[cause]`, the assertion that failed for that counterexample (Node's
+  reporter prints an error's `cause`; this one does too, without the
+  error's other own properties). The samples' "distance is symmetric" is a
+  property over two random points.
 * **Limits.** Tests run one at a time. An uncaught error or unhandled
   rejection fails the test running at the time (Node tracks the async
   context and blames the test that caused it; a worker cannot). A
   `describe` callback that registers tests after an `await` is not
   supported. A test that never settles needs Stop, unless it has a
   `timeout`.
+
+## Mutation testing: not available
+
+StrykerJS, the mutation testing tool for JavaScript and TypeScript, cannot
+run in the browser, and nothing here imitates it. Checked with
+`@stryker-mutator/core` 10.1.1 (2026-10-24):
+
+* It is a Node program (`engines: node >=22`): it copies the project into a
+  sandbox directory on disk, and runs the tests of each batch of mutants
+  in worker processes it starts with `child_process.fork`
+  (`dist/src/child-proxy/child-process-proxy.js`), killing and restarting
+  them on timeouts (`tree-kill`).
+* Its test runners are plugins for Jest, Mocha, Jasmine, Karma, Vitest and
+  TAP (which spawns `node` per test file), or the `command` runner, which
+  runs a shell command with `execa`. None of them runs `node:test` in a
+  Web Worker, and the runner here has no processes, no file system and no
+  `child_process` to give them.
+
+What would be left is Stryker's instrumenter (Babel-based, which could run
+in a worker) driven by a new test loop written for this runner: a new tool,
+not Stryker.

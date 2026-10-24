@@ -47,8 +47,8 @@ const BUILD: Record<LanguageId, BuildFiles> = {
 	cpp: { paths: ['CMakeLists.txt'], generate: (p) => ({ 'CMakeLists.txt': cmakeLists(p.files, p.language.entry) }) },
 	swift: { paths: ['Package.swift'], generate: (p) => ({ 'Package.swift': packageSwift(p.files, p.paths) }) },
 	python: { paths: ['pyproject.toml'], generate: (p) => ({ 'pyproject.toml': pyprojectToml(p.files) }) },
-	javascript: { paths: ['package.json'], generate: (p) => ({ 'package.json': packageJson(p.language.entry) }) },
-	typescript: { paths: ['package.json'], generate: (p) => ({ 'package.json': typescriptPackageJson(p.language.entry) }) },
+	javascript: { paths: ['package.json'], generate: (p) => ({ 'package.json': packageJson(p.language.entry, p.files) }) },
+	typescript: { paths: ['package.json'], generate: (p) => ({ 'package.json': typescriptPackageJson(p.language.entry, p.files) }) },
 	web: { paths: ['package.json'], generate: () => ({ 'package.json': vitePackageJson() }) },
 	scala: { paths: ['build.sbt', 'project/build.properties'], generate: (p) => ({ 'build.sbt': buildSbt(p.files), 'project/build.properties': `sbt.version=${SBT_VERSION}\n` }) },
 	php: { paths: ['composer.json', 'phpunit.xml'], generate: (p) => ({ 'composer.json': composerJson(p.language.entry), 'phpunit.xml': phpunitXml(p.files) }) },
@@ -484,13 +484,29 @@ export function pyprojectToml(files: Files): string {
 
 // ---- JavaScript: package.json
 
+/** The fast-check the browser runs and types (packs/javascript/package.json). */
+const FAST_CHECK_VERSION = '4.10.2';
+
+/**
+ * The npm packages a JavaScript or TypeScript project imports out of those
+ * the browser ships (packs/javascript/README.md, "Packages"): fast-check
+ * only, imported by its bare name from a script or module file.
+ */
+function shippedPackages(files: Files): Record<string, string> {
+	const imports = /(?:^|[;\s])(?:import|export)\s[^'"]*?\bfrom\s*['"]fast-check['"]|\bimport\s*\(\s*['"]fast-check['"]\s*\)/m;
+	const uses = Object.entries(files).some(([path, text]) => /\.(?:[cm]?[jt]s|[jt]sx)$/.test(path) && imports.test(text));
+	return uses ? { 'fast-check': `^${FAST_CHECK_VERSION}` } : {};
+}
+
 /**
  * package.json for Node: ES modules (the browser runs every .js as one),
  * `npm start` runs the entry file and `npm test` is `node --test`, whose
- * file discovery the browser's Test copies. No dependencies, since the
- * browser has none to offer.
+ * file discovery the browser's Test copies. Dependencies only for what the
+ * browser ships and the project imports (fast-check, for the tests, so a
+ * development dependency).
  */
-export function packageJson(entry: string): string {
+export function packageJson(entry: string, files: Files = {}): string {
+	const dev = shippedPackages(files);
 	const json = {
 		name: 'javascript-project',
 		version: '0.1.0',
@@ -499,6 +515,7 @@ export function packageJson(entry: string): string {
 		main: entry,
 		scripts: { start: `node ${entry}`, test: 'node --test' },
 		engines: { node: '>=22' },
+		...(Object.keys(dev).length ? { devDependencies: dev } : {}),
 	};
 	return JSON.stringify(json, null, 2) + '\n';
 }
@@ -509,9 +526,11 @@ export function packageJson(entry: string): string {
  * package.json for a TypeScript project run as the browser runs it: Node
  * 22.18 and later strip the types of a `.ts` file themselves, so `npm start`
  * is `node main.ts` and `npm test` is `node --test` (which finds
- * `*.test.ts`), with nothing to install.
+ * `*.test.ts`), with nothing to install but fast-check when the project
+ * imports it.
  */
-export function typescriptPackageJson(entry: string): string {
+export function typescriptPackageJson(entry: string, files: Files = {}): string {
+	const dev = shippedPackages(files);
 	const json = {
 		name: 'typescript-project',
 		version: '0.1.0',
@@ -520,6 +539,7 @@ export function typescriptPackageJson(entry: string): string {
 		main: entry,
 		scripts: { start: `node ${entry}`, test: 'node --test' },
 		engines: { node: '>=22.18' },
+		...(Object.keys(dev).length ? { devDependencies: dev } : {}),
 	};
 	return JSON.stringify(json, null, 2) + '\n';
 }
@@ -859,6 +879,13 @@ export function buildGradleKts(files: Files, entry: string): string {
 
 // ---- Every language: README.md and .gitignore
 
+/** The README's Test section for a Node project: `node --test`, after `npm install` when it uses fast-check. */
+function testSection(files: Files): string {
+	return Object.keys(shippedPackages(files)).length
+		? '## Test\n\nThe tests use `node:test` and fast-check (property-based tests):\n\n```sh\nnpm install               # fast-check\nnode --test               # or: npm test\n```'
+		: '## Test\n\nThe tests use `node:test`:\n\n```sh\nnode --test               # or: npm test\n```';
+}
+
 /** How to build, run and test with each language's tools, as Markdown sections. */
 function instructions(language: Language, files: Files): string[] {
 	const paths = Object.keys(files);
@@ -894,15 +921,15 @@ function instructions(language: Language, files: Files): string[] {
 			const tests = paths.some((p) => /(^|\/)test\//.test(p) || /(^|\/)([^/]+[.\-_]test|test-[^/]*|test)\.m?js$/.test(p));
 			return [
 				`## Run\n\nWith Node.js 22 or later:\n\n\`\`\`sh\nnode ${language.entry}     # or: npm start\n\`\`\``,
-				...(tests ? ['## Test\n\nThe tests use `node:test`:\n\n```sh\nnode --test               # or: npm test\n```'] : []),
-				'## Editors\n\nVS Code and WebStorm open the folder as it is; there is nothing to install.',
+				...(tests ? [testSection(files)] : []),
+				`## Editors\n\nVS Code and WebStorm open the folder as it is; ${Object.keys(shippedPackages(files)).length ? 'run `npm install` first, for fast-check' : 'there is nothing to install'}.`,
 			];
 		}
 		case 'typescript': {
 			const tests = paths.some((p) => /(^|\/)test\//.test(p) || /(^|\/)([^/]+[.\-_]test|test-[^/]*|test)\.m?[jt]s$/.test(p));
 			return [
 				`## Run\n\nWith Node.js 22.18 or later, which runs TypeScript by stripping its types (nothing to install):\n\n\`\`\`sh\nnode ${language.entry}     # or: npm start\n\`\`\``,
-				...(tests ? ['## Test\n\nThe tests use `node:test`:\n\n```sh\nnode --test               # or: npm test\n```'] : []),
+				...(tests ? [testSection(files)] : []),
 				'## Editors\n\nVS Code and WebStorm open the folder as it is. Node only strips types, so `tsconfig.json` sets `erasableSyntaxOnly` (no `enum` or `namespace`) and imports name their `.ts` files. For the types of `node:test` and `process` outside Yukibana, `npm install -D @types/node` and add `"types": ["node"]` to `tsconfig.json`.',
 			];
 		}

@@ -24,6 +24,11 @@ esac
 TS_FILE="typescript-$TS_VERSION.js"
 LIBS_FILE="libs-$TS_VERSION.json"
 PACK_VERSION="$(node -p 'require("./package.json").version')"
+# The npm packages the runner ships for bare imports (README "Packages"):
+# fast-check, bundled with its one dependency, pure-rand, as one ES module.
+FC_VERSION="$(node -p 'require("fast-check/package.json").version')"
+FC_FILE="fast-check-$FC_VERSION.js"
+PACKAGES_FILE="packages-fast-check-$FC_VERSION.json"
 
 npx tsc -p tsconfig.json
 
@@ -33,6 +38,7 @@ for f in "$OUT"/*; do
   [[ -e "$f" ]] || continue
   case "$(basename "$f")" in
     server.js|server.js.*|runner.js|runner.js.*|strip.js|strip.js.*|"$TS_FILE"|"$TS_FILE".*|"$LIBS_FILE"|"$LIBS_FILE".*) ;;
+    "$FC_FILE"|"$FC_FILE".*|"$PACKAGES_FILE"|"$PACKAGES_FILE".*|LICENSE-fast-check.txt|LICENSE-pure-rand.txt) ;;
     *) rm -f "$f" ;;
   esac
 done
@@ -54,11 +60,22 @@ if [[ ! -f "$OUT/$LIBS_FILE" || "$STAMP" -nt "$OUT/$LIBS_FILE" || tools/libs.mjs
   node tools/libs.mjs node_modules/typescript/lib "$OUT/$LIBS_FILE" es2023 dom dom.iterable dom.asynciterable
 fi
 
+# fast-check for the runner: its published ES module (lib/fast-check.js) and
+# the pure-rand modules it imports, bundled into one file and minified, with
+# nothing changed. Its declarations for the server, exactly the files
+# TypeScript reads to resolve an import of it (tools/package-types.mjs).
+npx esbuild node_modules/fast-check/lib/fast-check.js --bundle --minify --format=esm --target=es2022 \
+  --log-level=warning --outfile="$OUT/$FC_FILE"
+node tools/package-types.mjs "$OUT/$PACKAGES_FILE" fast-check
+cp node_modules/fast-check/LICENSE "$OUT/LICENSE-fast-check.txt"
+cp node_modules/pure-rand/LICENSE "$OUT/LICENSE-pure-rand.txt"
+
 size() { node -p "require('fs').statSync(process.argv[1]).size" "$1"; }
 npx esbuild src/server.ts --bundle --minify --format=esm --target=es2022 --log-level=warning \
   --define:__TS_FILE__="\"$TS_FILE\"" --define:__TS_SIZE__="$(size "$OUT/$TS_FILE")" \
   --define:__LIBS_FILE__="\"$LIBS_FILE\"" --define:__LIBS_SIZE__="$(size "$OUT/$LIBS_FILE")" \
   --define:__PACK_VERSION__="\"$PACK_VERSION\"" \
+  --define:__PACKAGES_FILE__="\"$PACKAGES_FILE\"" --define:__PACKAGES_SIZE__="$(size "$OUT/$PACKAGES_FILE")" \
   --define:__NODE_TYPES__="$(node -p 'JSON.stringify(require("fs").readFileSync("src/node/builtins.d.ts", "utf8"))')" \
   --outfile="$OUT/server.js"
 
@@ -68,6 +85,7 @@ npx esbuild src/server.ts --bundle --minify --format=esm --target=es2022 --log-l
 # one download) and strip.js, ts-blank-space bundled against that copy.
 npx esbuild src/runner.ts --bundle --minify --format=esm --target=es2022 --log-level=warning \
   --define:__TS_FILE__="\"$TS_FILE\"" --define:__TS_SIZE__="$(size "$OUT/$TS_FILE")" \
+  --define:__PACKAGES__="{\"fast-check\":\"$FC_FILE\"}" \
   --outfile="$OUT/runner.js"
 npx esbuild src/strip.ts --bundle --minify --format=esm --target=es2022 --log-level=warning \
   --alias:typescript=./src/typescript-global.ts --outfile="$OUT/strip.js"

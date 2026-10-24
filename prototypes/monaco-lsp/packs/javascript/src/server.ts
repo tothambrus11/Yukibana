@@ -28,6 +28,13 @@ declare const __LIBS_SIZE__: number;
 declare const __PACK_VERSION__: string;
 /** src/node/builtins.d.ts, embedded by build.sh. */
 declare const __NODE_TYPES__: string;
+/**
+ * The declarations of the npm packages the runner ships (fast-check and the
+ * pure-rand types it imports), made by tools/package-types.mjs: a JSON
+ * object from `/node_modules/...` path to text, and its uncompressed size.
+ */
+declare const __PACKAGES_FILE__: string;
+declare const __PACKAGES_SIZE__: number;
 
 /** Libraries a project gets when its config names none. Must be in the bundle. */
 const DEFAULT_LIBS = ['lib.es2023.d.ts', 'lib.dom.d.ts', 'lib.dom.iterable.d.ts', 'lib.dom.asynciterable.d.ts'];
@@ -173,9 +180,10 @@ const libs = new Map<string, TS.IScriptSnapshot>();
 
 async function load(): Promise<void> {
   const started = performance.now();
-  const [tsBytes, libBytes] = await Promise.all([
+  const [tsBytes, libBytes, packageBytes] = await Promise.all([
     download(__TS_FILE__, __TS_SIZE__),
     download(__LIBS_FILE__, __LIBS_SIZE__),
+    download(__PACKAGES_FILE__, __PACKAGES_SIZE__),
   ]);
   // typescript.js is fetched by hand (for progress) and imported from the
   // bytes we already have, so it is downloaded exactly once.
@@ -188,6 +196,13 @@ async function load(): Promise<void> {
   const bundle = JSON.parse(new TextDecoder().decode(libBytes)) as Record<string, string>;
   for (const [name, text] of Object.entries(bundle)) libs.set(`${LIB_DIR}/${name}`, ts.ScriptSnapshot.fromString(text));
   libs.set(NODE_TYPES, ts.ScriptSnapshot.fromString(__NODE_TYPES__));
+  // The shipped packages as they are installed: `/node_modules/<name>/` is
+  // where TypeScript's own resolution (Bundler, the `import` condition)
+  // looks for `import fc from 'fast-check'` from any project directory, so
+  // nothing about them is special-cased. Kept with the libs, so results
+  // pointing into them are dropped like those into a lib.
+  const packages = JSON.parse(new TextDecoder().decode(packageBytes)) as Record<string, string>;
+  for (const [path, text] of Object.entries(packages)) libs.set(path, ts.ScriptSnapshot.fromString(text));
   log(3, `TypeScript ${ts.version} loaded with ${libs.size} lib files in ${Math.round(performance.now() - started)} ms`);
 }
 

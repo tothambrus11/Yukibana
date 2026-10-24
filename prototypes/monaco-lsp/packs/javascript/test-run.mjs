@@ -27,8 +27,11 @@ const CHROMIUM = process.env.CHROMIUM ?? '/opt/pw-browsers/chromium';
 const TYPES = { '.js': 'text/javascript', '.mjs': 'text/javascript', '.json': 'application/json', '.html': 'text/html' };
 const ISOLATION = { 'cross-origin-opener-policy': 'same-origin', 'cross-origin-embedder-policy': 'require-corp' };
 
+/** Every path the server was asked for, so a check can tell what a run fetched. */
+const served = [];
 const server = createServer(async (req, res) => {
 	const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+	served.push(path);
 	if (path === '/__test.html') {
 		res.writeHead(200, { 'content-type': 'text/html', ...ISOLATION });
 		res.end('<!doctype html><link rel=icon href="data:,"><title>javascript runner test</title>');
@@ -429,6 +432,51 @@ console.log(canvas.getContext('2d') !== null);
 `,
 });
 check('environment: worker globals (fetch, WebAssembly, crypto, OffscreenCanvas, ...) are there; DOM and Node globals other than process are not', environment.code === 0 && environment.stdout === 'missing none\npresent none\nstring function true\ntrue\n', `stdout=${short(environment.stdout)} stderr=${short(environment.stderr)}`);
+
+// 7b. fast-check, the package this pack ships for property-based tests:
+// fetched only by a run that imports it; a passing property, and a failing
+// one reported with fast-check's shrunk counterexample.
+const fetchedFastCheck = () => served.some((p) => /\/fast-check-[\d.]+\.js$/.test(p));
+check('fast-check: not fetched by runs and tests that do not import it', !fetchedFastCheck(), JSON.stringify(served.filter((p) => /fast-check/.test(p))));
+const PROPERTIES = `import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fc from 'fast-check';
+import { Point, distance } from '../geometry.js';
+
+const coordinate = fc.double({ min: -1e9, max: 1e9, noNaN: true });
+const point = fc.tuple(coordinate, coordinate).map(([x, y]) => new Point(x, y));
+
+test('distance is symmetric', () => {
+  fc.assert(fc.property(point, point, (a, b) => distance(a, b) === distance(b, a)));
+});
+
+test('norm stays under 100', () => {
+  fc.assert(
+    fc.property(fc.integer({ min: 0, max: 1000 }), (x) => {
+      assert.ok(new Point(x, 0).norm() < 100);
+    }),
+  );
+});
+`;
+const fc1 = await test({ ...SAMPLE, 'tests/properties.test.js': PROPERTIES });
+check(
+	'fast-check: a passing property passes; a failing one fails with its counterexample shrunk to [100] and, as its cause, the assertion that failed',
+	fc1.code === 1 &&
+		/✔ distance is symmetric/.test(fc1.stdout) &&
+		/✖ norm stays under 100/.test(fc1.stdout) &&
+		/Property failed after \d+ tests/.test(fc1.stdout) &&
+		/Counterexample: \[100\]/.test(fc1.stdout) &&
+		/\[cause\]: AssertionError \[ERR_ASSERTION\]: The expression evaluated to a falsy value:\n\s*\n\s*assert\.ok\(new Point\(x, 0\)\.norm\(\) < 100\)/.test(fc1.stdout) &&
+		/Shrunk \d+ time\(s\)/.test(fc1.stdout) &&
+		/ℹ pass 5\n/.test(fc1.stdout) &&
+		/ℹ fail 1\n/.test(fc1.stdout),
+	`code ${fc1.code}\n${block(fc1.stdout.slice(fc1.stdout.indexOf('✖ failing')))}`,
+);
+check('fast-check: fetched once a test imports it', fetchedFastCheck());
+const fc2 = await run({ 'main.ts': "import fc from 'fast-check';\nconst [xs] = fc.sample(fc.array(fc.nat(), { minLength: 3, maxLength: 3 }), { numRuns: 1, seed: 42 });\nconst n: number = xs!.length;\nconsole.log(n, fc.check(fc.property(fc.string(), (s) => s.length >= 0)).failed);\n" }, 'main.ts');
+check('fast-check: a TypeScript program can import it too (Run)', fc2.code === 0 && fc2.stdout === '3 false\n', `stdout=${short(fc2.stdout)} stderr=${short(fc2.stderr)}`);
+const fc3 = await run({ 'main.js': "import _ from 'lodash';\n" });
+check('packages: a bare import of a package the pack does not ship still fails', fc3.code === 1 && /lodash/.test(fc3.stderr), short(fc3.stderr));
 
 // 8. Preview (this pack's `type: 'preview'`): the page as one document.
 const built = await page_preview({

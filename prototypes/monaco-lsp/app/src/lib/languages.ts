@@ -183,7 +183,11 @@ export function distance(a, b) {
 			'tests/geometry.test.js': `// @ts-check
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fc from 'fast-check';
 import { Point, distance } from '../geometry.js';
+
+const coordinate = fc.double({ min: -1e9, max: 1e9, noNaN: true });
+const point = fc.tuple(coordinate, coordinate).map(([x, y]) => new Point(x, y));
 
 describe('Point', () => {
   it('has norm 5 at (3, 4)', () => {
@@ -197,9 +201,7 @@ describe('Point', () => {
 
 describe('distance', () => {
   it('is symmetric', () => {
-    const a = new Point(1, 2);
-    const b = new Point(-2, 6);
-    assert.equal(distance(a, b), distance(b, a));
+    fc.assert(fc.property(point, point, (a, b) => distance(a, b) === distance(b, a)));
   });
 
   it('is 0 from a point to itself', () => {
@@ -286,7 +288,11 @@ export function area(shape: Shape): number {
 `,
 			'tests/geometry.test.ts': `import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fc from 'fast-check';
 import { Point, area, distance } from '../geometry.ts';
+
+const coordinate = fc.double({ min: -1e9, max: 1e9, noNaN: true });
+const point = fc.tuple(coordinate, coordinate).map(([x, y]) => new Point(x, y));
 
 describe('Point', () => {
   it('has norm 5 at (3, 4)', () => {
@@ -300,9 +306,7 @@ describe('Point', () => {
 
 describe('distance and area', () => {
   it('distance is symmetric', () => {
-    const a = new Point(1, 2);
-    const b = new Point(-2, 6);
-    assert.equal(distance(a, b), distance(b, a));
+    fc.assert(fc.property(point, point, (a, b) => distance(a, b) === distance(b, a)));
   });
 
   it('a square of side 3 has area 9', () => {

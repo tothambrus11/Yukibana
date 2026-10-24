@@ -45,7 +45,7 @@ formatting and semantic highlighting, as far as each language server offers
 them. Run (Ctrl+Enter) compiles and runs the project in a worker, with a
 terminal that can read input. Test (Ctrl+Shift+Enter) runs the project's
 tests in `tests/` (`Tests/` for Swift): pytest (with Hypothesis for
-property-based tests), `node:test`, GoogleTest,
+property-based tests), `node:test` (with fast-check), GoogleTest,
 doctest or Catch2 (chosen next to Test), XCTest, or JUnit Jupiter (Java, in
 `src/test/java/`); Scala has no Test yet, and Kotlin neither Run nor Test. Download saves the project as
 `<language>-project.zip` for an IDE: its files as they are, at the same
@@ -59,11 +59,12 @@ sandboxed iframe: a stylesheet edit is applied in place, any other edit
 reloads the page, and its console goes to the terminal. JavaScript and
 TypeScript programs run in a module worker with the browser's worker
 globals plus `process`, `node:readline`, `node:test` and `node:assert`, but
-no DOM and no npm packages (packs/javascript/README.md, "Environment").
+no DOM and no npm packages except fast-check, for property-based tests
+(packs/javascript/README.md, "Environment" and "Packages").
 
 | Language | Language server | Runs with | Download to edit | More to run |
 | --- | --- | --- | --- | --- |
-| JavaScript | TypeScript 6.0 language service | the browser, as ES modules | 1.1 MB | none |
+| JavaScript | TypeScript 6.0 language service | the browser, as ES modules | 1.1 MB | none; fast-check 48 KB when imported |
 | TypeScript | the JavaScript pack's server, `strict` | the same, types stripped as `node main.ts` does | (JavaScript's) | 3 KB (strip.js; TypeScript is the server's file) |
 | Web (HTML, CSS, TypeScript) | the JavaScript pack's server for TypeScript; Monaco's own HTML and CSS (SCSS, Less) services: completion, hover, validation, formatting, colours | a live-reloading Preview panel (sandboxed iframe) | (JavaScript's), plus the CSS worker 0.2 MB and, once an HTML file is open, the HTML worker 0.15 MB | as TypeScript |
 | Python | basedpyright 1.40 | Pyodide 314.0.7 (Python 3.14) | 1.1 MB | 4.5 MB |

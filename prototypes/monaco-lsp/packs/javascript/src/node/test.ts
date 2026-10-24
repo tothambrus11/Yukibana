@@ -469,6 +469,13 @@ function errorText(error: unknown, depth: number): string {
 			.map((l) => `    ${l.trim()}`);
 		// An assertion's message ends with a newline, which leaves the blank line Node shows before the stack.
 		text = frames.length ? `${head}\n${frames.join('\n')}` : head;
+		// util.inspect shows an error's `cause` after its stack, in braces:
+		// fast-check's "Property failed" error carries the property's own
+		// failure (the assertion that failed for the counterexample) there.
+		if ('cause' in error && error.cause !== undefined) {
+			const cause = errorText(error.cause, 0).replace(/\n/g, '\n  ');
+			text += ` {\n  [cause]: ${cause}\n}`;
+		}
 	} else if (error instanceof Timeout) {
 		// util.inspect's colour for a string.
 		text = `${GREEN}${inspect(String(error))}${DEFAULT}`;
