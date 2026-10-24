@@ -136,7 +136,9 @@ jobs:
 
       # The Haskell pack's inputs, for either of its build.sh:
       # - on GHC, it takes the "haskell-ghc-rootfs" artifact of the
-      #   haskell-ghc.yml run it pins (ROOTFS_RUN) from $HASKELL_GHC_ROOTFS;
+      #   haskell-ghc.yml run it pins (ROOTFS_RUN) from $HASKELL_GHC_ROOTFS,
+      #   and ormolu and hlint, the "haskell-ghc-tools" artifact of the
+      #   haskell-ghc-tools.yml run it pins (TOOLS_RUN), from $HASKELL_GHC_TOOLS;
       # - on MicroHs, it uses the C++ pack's Emscripten when that is there,
       #   and its own fallback fetch passes its fetch() the arguments in the
       #   C++ pack's order (url, sha256, file; its own takes url, file,
@@ -149,6 +151,7 @@ jobs:
         run: |
           run=$(sed -n 's/^ROOTFS_RUN=\([0-9][0-9]*\).*/\1/p' build.sh)
           echo "rootfs-run=$run" >> "$GITHUB_OUTPUT"
+          echo "tools-run=$(sed -n 's/^TOOLS_RUN=\([0-9][0-9]*\).*/\1/p' build.sh)" >> "$GITHUB_OUTPUT"
           [ -z "$run" ] || exit 0
           E="$PACK_CACHE/cpp/emsdk"
           eval "$(grep -E '^EMSDK_(VERSION|COMMIT|RELEASE|BINARIES_SHA256|NODE|NODE_SHA256)=' build.sh)"
@@ -173,10 +176,20 @@ jobs:
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/haskell-ghc-rootfs
 
+      # ormolu and hlint, built by haskell-ghc-tools.yml.
+      - uses: actions/download-artifact@v7
+        if: steps.haskell.outputs.tools-run
+        with:
+          name: haskell-ghc-tools
+          run-id: ${{ steps.haskell.outputs.tools-run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/haskell-ghc-tools
+
       - name: Build
         run: ./build.sh
         env:
           HASKELL_GHC_ROOTFS: ${{ steps.haskell.outputs.rootfs-run && format('{0}/haskell-ghc-rootfs', runner.temp) || '' }}
+          HASKELL_GHC_TOOLS: ${{ steps.haskell.outputs.tools-run && format('{0}/haskell-ghc-tools', runner.temp) || '' }}
 
       - name: Disk and cache usage
         if: always()

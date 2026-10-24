@@ -5,9 +5,10 @@
 // `.../runner.js` in Chromium, one JSON-RPC object per postMessage.
 //
 // The server: the sample (Main.hs uses Point, distance and norm from
-// Geometry.hs; tests/Spec.hs is hspec) has no errors; MicroHs's type errors
-// (a mismatch, a missing instance, an unknown name, a parse error, one in an
-// imported module) are reported where they are; completion of names (with
+// Geometry.hs; tests/Spec.hs is hspec) has no errors; GHC's errors (a
+// mismatch, a string for an Int, an unknown name with GHC's suggestion, a
+// parse error, one in an imported module) are reported where they are, in
+// GHC's words, with -Wall's warnings beside them; completion of names (with
 // types), after `Map.` and after `import`; hover with types and Haddock;
 // definition, references and highlights across files and of locals;
 // document symbols; rename and what it refuses; closing a file.
@@ -126,6 +127,17 @@ main = hspec $ do
 const SAMPLE = { 'Main.hs': MAIN, 'Geometry.hs': GEOMETRY, 'tests/Spec.hs': SPEC };
 const README = `# Not Haskell (at all\n`;
 const append = (text, more) => text + more;
+/** `text` with LSP TextEdits applied (non-overlapping, any order). */
+const applyEdits = (text, edits) => {
+    const starts = [0];
+    for (let i = 0; i < text.length; i++) if (text[i] === '\n') starts.push(i + 1);
+    const offset = (p) => Math.min((starts[p.line] ?? text.length) + p.character, text.length);
+    return [...edits]
+        .sort((a, b) => offset(b.range.start) - offset(a.range.start))
+        .reduce((t, e) => t.slice(0, offset(e.range.start)) + e.newText + t.slice(offset(e.range.end)), text);
+};
+/** Text without its ANSI escape sequences (GHC's and hspec's colours). */
+const plain = (text) => text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
 
 await stat(join(STATIC, 'packs/haskell/server.js')).catch(() => {
     console.error(`no ${join(STATIC, 'packs/haskell/server.js')}: run ./build.sh first`);
@@ -265,21 +277,25 @@ async function serverTests(page) {
     console.log(`      (first check of the three files: ${firstCheck} ms, including reading the packages)`);
 
     // Errors, one kind at a time.
-    const errorCase = async (what, text, ok) => {
+    // Each case has exactly one error; -Wall's warnings (here: `broken` is
+    // not exported, so it is unused) may stand beside it, as warnings.
+    const errorCase = async (what, text, ok, warnings = () => true) => {
         mark = (await lsp.log()).length;
         const t = Date.now();
         await change('Main.hs', text);
-        const d = await diagnostics('Main.hs', (x) => x.length > 0, mark);
-        check(what, d?.length === 1 && d[0].severity === 1 && ok(d[0]), `${show(d)} (${Date.now() - t} ms)`);
+        const d = await diagnostics('Main.hs', (x) => x.some((y) => y.severity === 1), mark);
+        const errors = d?.filter((x) => x.severity === 1) ?? [];
+        check(what, errors.length === 1 && ok(errors[0]) && d.every((x) => x.severity === 1 || x.severity === 2) && warnings(d.filter((x) => x.severity === 2)), `${show(d)} (${Date.now() - t} ms)`);
     };
-    await errorCase('a type mismatch is reported on its line, in GHC\'s words', append(MAIN, '\nbroken :: Int\nbroken = True\n'),
-        (d) => d.range.start.line === 13 && /Couldn't match type ‘Bool’ with ‘Int’/.test(d.message));
-    await errorCase('a string where an Int is wanted is a missing IsString instance, explained', append(MAIN, '\nbroken :: Int\nbroken = length "abc" + "no"\n'),
-        (d) => d.range.start.line === 13 && /No instance for \(IsString Int\)/.test(d.message) && /string literal/.test(d.message));
-    await errorCase('an unknown name is not in scope, underlined', append(MAIN, '\nbroken :: Int\nbroken = lenght [1, 2]\n'),
-        (d) => d.range.start.line === 13 && d.range.start.character === 9 && d.range.end.character === 15 && /Variable not in scope: lenght/.test(d.message));
-    await errorCase('a parse error says what was unexpected', append(MAIN, '\nbroken = (1 +\n'),
-        (d) => d.range.start.line >= 12 && /^Parse error: unexpected/.test(d.message));
+    await errorCase('a type mismatch is reported on its line, in GHC\'s words, and -Wall says the binding is unused', append(MAIN, '\nbroken :: Int\nbroken = True\n'),
+        (d) => d.range.start.line === 13 && d.range.start.character === 9 && /Couldn't match expected type ‘Int’ with actual type ‘Bool’/.test(d.message) && d.code === 'GHC-83865',
+        (w) => w.some((x) => x.range.start.line === 13 && /Defined but not used: ‘broken’/.test(x.message) && /-Wunused-top-binds/.test(x.message) && x.tags?.includes(1)));
+    await errorCase('a string where an Int is wanted: the literal is underlined, String is not Int', append(MAIN, '\nbroken :: Int\nbroken = length "abc" + "no"\n'),
+        (d) => d.range.start.line === 13 && d.range.start.character === 24 && d.range.end.character === 28 && /Couldn't match type ‘\[Char\]’ with ‘Int’/.test(d.message) && /Actual: String/.test(d.message));
+    await errorCase('an unknown name is not in scope, underlined, with GHC\'s suggestion', append(MAIN, '\nbroken :: Int\nbroken = lenght [1, 2]\n'),
+        (d) => d.range.start.line === 13 && d.range.start.character === 9 && d.range.end.character === 15 && /Variable not in scope: lenght/.test(d.message) && /Perhaps use ‘length’/.test(d.message));
+    await errorCase('a parse error is reported at the end of the unfinished expression', append(MAIN, '\nbroken = (1 +\n'),
+        (d) => d.range.start.line >= 12 && /parse error \(possibly incorrect indentation or mismatched brackets\)/.test(d.message));
     await errorCase('a wrong argument type in a call of a project function', MAIN.replace('print (norm b)', 'print (norm 3 b)'),
         (d) => d.range.start.line === 9);
     await change('Main.hs', MAIN);
@@ -297,6 +313,53 @@ async function serverTests(page) {
     check('and fixing it clears it', d?.length === 0, show(d));
     await checked(mark);
 
+    // Quick fixes, from GHC's hints and -Wall's warnings (as ghcide offers
+    // them) and from hlint's ideas. Each case edits Main.hs, waits for the
+    // diagnostic, asks for the actions on it and applies the one named.
+    const fix = async (what, text, which, title, ok) => {
+        mark = (await lsp.log()).length;
+        await change('Main.hs', text);
+        const all = await diagnostics('Main.hs', (x) => x.some(which), mark);
+        const target = all?.find(which);
+        const actions = target ? (await lsp.request('textDocument/codeAction', { textDocument: { uri: uri('Main.hs') }, range: target.range, context: { diagnostics: [target] } })).result ?? [] : [];
+        const action = actions.find((a) => title.test(a.title));
+        const edits = action?.edit?.changes?.[uri('Main.hs')] ?? [];
+        const fixed = edits.length ? applyEdits(text, edits) : null;
+        check(what, !!action && ok(fixed), `${JSON.stringify(actions.map((a) => a.title))} ${JSON.stringify(fixed?.split('\n').slice(10))}`);
+    };
+    await fix('“Perhaps use ‘length’” is a quick fix that replaces the name', append(MAIN, '\nbroken :: Int\nbroken = lenght [1, 2]\n'),
+        (x) => /Variable not in scope: lenght/.test(x.message), /^Replace with ‘length’$/, (t) => t?.includes('broken = length [1, 2]'));
+    await fix('a binding without a signature gets the signature GHC inferred', append(MAIN, '\nhelper x = x + 1\n'),
+        (x) => /Top-level binding with no type signature/.test(x.message), /^Add type signature: helper :: Num a => a -> a$/, (t) => t?.includes('\nhelper :: Num a => a -> a\nhelper x = x + 1\n'));
+    await fix('an unused binding can be prefixed with _', append(MAIN, '\nbroken :: Int\nbroken = 1\n'),
+        (x) => /Defined but not used: ‘broken’/.test(x.message), /^Prefix ‘broken’ with _$/, (t) => t?.includes('\nbroken :: Int\n_broken = 1\n'));
+    await fix('a redundant import can be removed', MAIN.replace('import Geometry\n', 'import Geometry\nimport Data.List (sort)\n'),
+        (x) => /The import of ‘Data\.List’ is redundant/.test(x.message), /^Remove redundant import$/, (t) => t === MAIN);
+    await fix('hlint suggests concatMap, as a warning of its own, and applying it rewrites the call', append(MAIN, '\nflat :: [[Int]] -> [Int]\nflat xs = concat (map reverse xs)\n'),
+        (x) => x.source === 'hlint' && x.code === 'Use concatMap' && x.severity === 2, /^Apply hint: Use concatMap$/, (t) => t?.includes('flat xs = concatMap reverse xs'));
+    await fix('a hint can be turned off for the module', append(MAIN, '\nflatten :: [[Int]] -> [Int]\nflatten xs = concat (map reverse xs)\n'),
+        (x) => x.source === 'hlint' && x.code === 'Use concatMap', /^Ignore hint “Use concatMap” in this module$/, (t) => t?.startsWith('{- HLINT ignore "Use concatMap" -}\n'));
+    mark = (await lsp.log()).length;
+    await change('Main.hs', MAIN);
+    d = await diagnostics('Main.hs', (x) => x.length === 0, mark);
+    check('the sample has no hints, and with its fixes undone no diagnostics', d?.length === 0, show(d));
+
+    // Formatting, with ormolu.
+    check('the server formats documents', init.result?.capabilities?.documentFormattingProvider === true);
+    const MESSY = 'module Main (main) where\nmain :: IO ()\nmain = do { print  (map (\\x -> x+1) [1,2,3]) ; return () }\n';
+    await change('Main.hs', MESSY);
+    let t = Date.now();
+    let f = await lsp.request('textDocument/formatting', { textDocument: { uri: uri('Main.hs') }, options: { tabSize: 2, insertSpaces: true } });
+    const formatted = f.result?.length ? applyEdits(MESSY, f.result) : null;
+    check('formatting lays the module out as ormolu does', /print \(map \(\\x -> x \+ 1\) \[1, 2, 3\]\)/.test(formatted ?? '') && !/  \(map/.test(formatted), `${JSON.stringify(formatted)} (${Date.now() - t} ms)`);
+    await change('Main.hs', append(MAIN, '\nbroken = (1 +\n'));
+    f = await lsp.request('textDocument/formatting', { textDocument: { uri: uri('Main.hs') }, options: { tabSize: 2, insertSpaces: true } });
+    check('a module that does not parse is not formatted, and the answer says why', !f.result && /parse error|Parse error/i.test(f.error?.message ?? ''), JSON.stringify(f));
+    mark = (await lsp.log()).length;
+    await change('Main.hs', MAIN);
+    await diagnostics('Main.hs', (x) => x.length === 0, mark);
+    await checked(mark);
+
     // Hover.
     let [l, c] = find(MAIN, 'distance');
     let h = (await lsp.request('textDocument/hover', at('Main.hs', l, c + 2))).result?.contents?.value ?? '';
@@ -306,10 +369,10 @@ async function serverTests(page) {
     check('hover on the local `a` shows its inferred type', /a :: Point/.test(h), JSON.stringify(h));
     [l, c] = find(MAIN, 'putStrLn');
     h = (await lsp.request('textDocument/hover', at('Main.hs', l, c + 1))).result?.contents?.value ?? '';
-    check('hover on `putStrLn` (base) shows its type and module', /putStrLn :: \[Char\] -> IO \(\)/.test(h) && /System\.IO/.test(h), JSON.stringify(h));
+    check('hover on `putStrLn` (base) shows its type, its Haddock and the module that defines it', /putStrLn :: String -> IO \(\)/.test(h) && /adds a newline character/.test(h) && /Defined in ‘GHC\.Internal\.System\.IO’/.test(h), JSON.stringify(h));
     [l, c] = find(MAIN, 'print', 1);
     h = (await lsp.request('textDocument/hover', at('Main.hs', l, c + 1))).result?.contents?.value ?? '';
-    check('hover on a polymorphic `print` shows its declared type and the type here', /print :: Show a => a -> IO \(\)/.test(h) && /Here: `Double -> IO \(\)`|Here/.test(h), JSON.stringify(h));
+    check('hover on a polymorphic `print` shows the type here, then its declared type', /^```haskell\nprint :: Double -> IO \(\)\n```\n\n```haskell\nprint :: Show a => a -> IO \(\)\n```/.test(h), JSON.stringify(h));
     [l, c] = find(GEOMETRY, 'norm ::');
     h = (await lsp.request('textDocument/hover', at('Geometry.hs', l + 1, 1))).result?.contents?.value ?? '';
     check('hover on a definition (`norm` where it is defined) shows its type', /norm :: Point -> Double/.test(h), JSON.stringify(h));
@@ -389,17 +452,21 @@ async function serverTests(page) {
 }
 
 async function runnerTests(page) {
-    // In the page: start a runner, answer its stdin requests from `inputs`
-    // (a string is a line, null is Ctrl-D), collect every message in order.
+    // In the page: run on the runner kept from the last run when it said it
+    // takes another (`reusable`, as the app does), or on a new one; answer
+    // its stdin requests from `inputs` (a string is a line, null is Ctrl-D),
+    // collect every message in order.
     await page.evaluate(() => {
+        window.kept = null;
         window.runProgram = (files, entry, inputs = [], type = 'run') =>
             new Promise((done) => {
                 const t0 = performance.now();
                 const sab = new SharedArrayBuffer(8 + 65536);
                 const state = new Int32Array(sab, 0, 2);
                 const data = new Uint8Array(sab, 8);
-                const out = { stdout: '', stderr: '', code: null, events: [], phases: [] };
-                const worker = new Worker('/packs/haskell/runner.js', { type: 'module' });
+                const out = { stdout: '', stderr: '', code: null, events: [], phases: [], reused: window.kept !== null };
+                const worker = window.kept ?? new Worker('/packs/haskell/runner.js', { type: 'module' });
+                window.kept = null;
                 const timer = setTimeout(() => { worker.terminate(); out.code = 'timeout'; done(out); }, 120000);
                 worker.onerror = (e) => { out.stderr += `worker error: ${e.message}`; };
                 worker.onmessage = ({ data: msg }) => {
@@ -421,8 +488,10 @@ async function runnerTests(page) {
                     } else if (msg.type === 'exit') {
                         clearTimeout(timer);
                         out.code = msg.code;
+                        out.reusable = msg.reusable === true;
                         out.ms = Math.round(performance.now() - t0);
-                        worker.terminate();
+                        if (out.reusable) window.kept = worker;
+                        else worker.terminate();
                         done(out);
                     }
                 };
@@ -433,8 +502,9 @@ async function runnerTests(page) {
 
     let r = await run(SAMPLE);
     check('Run prints the sample\'s output and exits with 0', r.code === 0 && r.stdout === '(0.0, 0.0) to (3.0, 4.0): 5.0\n5.0\n3.141592653589793\n4.0\n', `${JSON.stringify(r.stdout)} ${r.stderr} code ${r.code} (${r.ms} ms, cold)`);
+    check('the runner takes another run after its program ends (reusable)', r.reusable === true, JSON.stringify(r.reusable));
     r = await run(SAMPLE);
-    console.log(`      (a second run: ${r.ms} ms)`);
+    check('a second run, on the same runner, prints the same', r.reused && r.code === 0 && r.stdout.endsWith('4.0\n'), `${JSON.stringify(r.stdout)} ${r.stderr} (${r.ms} ms, warm)`);
 
     const ECHO = `main :: IO ()
 main = do
@@ -445,9 +515,18 @@ main = do
   print (n * 2)
 `;
     r = await run({ 'Main.hs': ECHO }, ['Ada', '21']);
-    check('a program reads two lines of stdin; its prompt shows before the read', r.code === 0 && r.stdout === 'Your name? Hello, Ada!\n42\n' && r.events[0] === 'stdout:Your name? ' && r.events[1] === 'stdin?', `${JSON.stringify(r.events)} ${r.stderr}`);
+    // The prompt may arrive in more than one piece (GHC writes an
+    // unbuffered putStr in two); all of it comes before the first read.
+    const beforeRead = r.events.slice(0, r.events.indexOf('stdin?'));
+    check('a program reads two lines of stdin; its prompt shows before the read',
+        r.code === 0 && r.stdout === 'Your name? Hello, Ada!\n42\n' && beforeRead.every((e) => e.startsWith('stdout:')) && beforeRead.map((e) => e.slice('stdout:'.length)).join('') === 'Your name? ',
+        `${JSON.stringify(r.events)} ${r.stderr}`);
     r = await run({ 'Main.hs': 'main :: IO ()\nmain = getContents >>= \\s -> print (length (lines s))\n' }, ['one', 'two', null]);
-    check('getContents reads to the end of input (Ctrl-D)', r.code === 0 && r.stdout === '2\n', `${JSON.stringify(r.stdout)} ${r.stderr}`);
+    check('getContents reads to the end of input (Ctrl-D)', r.code === 0 && r.stdout === '2\n', `${JSON.stringify(r.stdout)} ${r.stderr} code ${r.code} ${JSON.stringify(r.events)} ${JSON.stringify(r.phases)} ${r.ms}`);
+    r = await run({ 'Main.hs': ECHO }, ['Bo', '1']);
+    check('the next run on that runner reads its own input, though the last one read to the end', r.reused && r.code === 0 && r.stdout === 'Your name? Hello, Bo!\n2\n', `${JSON.stringify(r.stdout)} ${r.stderr}`);
+    r = await run({ 'Main.hs': MAIN });
+    check('a module the last run had and this project has not is not found', r.reused && r.code === 1 && /Could not find module ‘Geometry’/.test(plain(r.stderr)), `${JSON.stringify(plain(r.stderr).slice(0, 300))} code ${r.code}`);
 
     const MAP = `import qualified Data.Map.Strict as Map
 import Data.List (sortOn)
@@ -463,17 +542,20 @@ main = do
     check('Data.Map, Data.List and Data.Char work', r.code === 0 && r.stdout === '[("a",3),("b",2),("c",1)]\nDONE\n', `${JSON.stringify(r.stdout)} ${r.stderr}`);
 
     r = await run({ ...SAMPLE, 'Main.hs': MAIN.replace('print (norm b)', 'print (norm True)') });
-    check('a compile error is printed as GHC does, and the exit code is 1', r.code === 1 && /^\/workspace\/Main\.hs:10:15: error:\n    Couldn't match type ‘Bool’ with ‘Point’/.test(r.stderr) && r.stdout === '', `${JSON.stringify(r.stderr)} code ${r.code}`);
+    check('a compile error is printed as GHC does, in colour, and the exit code is 1',
+        r.code === 1 && /\x1b\[/.test(r.stderr) && /^\/workspace\/Main\.hs:10:15: error: \[GHC-83865\]\n    • Couldn't match expected type ‘Point’ with actual type ‘Bool’/.test(plain(r.stderr)) && r.stdout === '',
+        `${JSON.stringify(plain(r.stderr))} code ${r.code}`);
     r = await run({ 'Main.hs': 'main :: IO ()\nmain = do\n  putStrLn "before"\n  print (head ([] :: [Int]))\n' });
     check('an uncaught exception ends the program with its message and code 1, after the output before it', r.code === 1 && r.stdout === 'before\n' && /head/.test(r.stderr), `${JSON.stringify(r.stdout)} ${JSON.stringify(r.stderr)} code ${r.code}`);
     r = await run({ 'Main.hs': 'import System.Exit\n\nmain :: IO ()\nmain = do\n  putStrLn "bye"\n  exitWith (ExitFailure 3)\n' });
     check('exitWith (ExitFailure 3) ends with code 3 and nothing on stderr', r.code === 3 && r.stdout === 'bye\n' && r.stderr === '', `${JSON.stringify(r)}`);
 
     r = await run(SAMPLE, [], 'test');
-    check('Test runs tests/Spec.hs: hspec\'s report, coloured, "4 examples, 0 failures", code 0',
-        r.code === 0 && /4 examples, 0 failures/.test(r.stdout) && /is symmetric \[\x1b\[32m✔/.test(r.stdout), `${JSON.stringify(r.stdout.slice(-300))} ${r.stderr} (${r.ms} ms)`);
+    check('Test runs tests/Spec.hs: hspec\'s report, coloured and not redrawn as progress, "4 examples, 0 failures", code 0',
+        r.code === 0 && /4 examples, 0 failures/.test(r.stdout) && /is symmetric \[\x1b\[32m✔/.test(r.stdout) && !/\r|\x1b\[K/.test(r.stdout),
+        `${JSON.stringify(r.stdout.slice(-300))} ${r.stderr} (${r.ms} ms)`);
     r = await run({ ...SAMPLE, 'tests/Spec.hs': SPEC.replace('`shouldBe` 9', '`shouldBe` 10') }, [], 'test');
-    check('a failing example fails Test with code 1, saying what was expected', r.code === 1 && /4 examples, 1 failure/.test(r.stdout) && /expected: 10\.0[\s\S]*but got: 9\.0/.test(r.stdout), `${JSON.stringify(r.stdout.slice(-400))} ${r.stderr}`);
+    check('a failing example fails Test with code 1, saying what was expected', r.code === 1 && /4 examples, 1 failure/.test(plain(r.stdout)) && /expected: 10\.0[\s\S]*but got: 9\.0/.test(plain(r.stdout)), `${JSON.stringify(plain(r.stdout).slice(-400))} ${r.stderr}`);
     r = await run({ 'Main.hs': MAIN }, [], 'test');
     check('Test without tests says so', r.code === 1 && /No tests/.test(r.stderr), JSON.stringify(r.stderr));
 }

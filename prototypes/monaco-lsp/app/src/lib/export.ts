@@ -1074,14 +1074,46 @@ function cabalList(field: string, items: readonly string[]): string[] {
 }
 
 /**
+ * The packages a project's imports come from, as Yukibana's GHC has them
+ * (packs/haskell: the ones a project may import there), each with the lower
+ * bound a cabal build needs: `containers >=0.6` when a file imports
+ * Data.Map. base is not among them. In the order of the table.
+ */
+const HASKELL_PACKAGES: readonly (readonly [string, RegExp])[] = [
+	['containers >=0.6', /^Data\.(Map|Set|IntMap|IntSet|Sequence|Graph|Tree|Containers)\b/],
+	['mtl >=2.2', /^Control\.Monad\.(State|Reader|Writer|Except|RWS|Cont|Identity|Error\.Class|Accum|Select)\b/],
+	['transformers >=0.5', /^Control\.Monad\.Trans\b|^Data\.Functor\.(Constant|Reverse)\b|^Control\.Applicative\.(Backwards|Lift)\b/],
+	['text >=2.0', /^Data\.Text\b/],
+	['bytestring >=0.11', /^Data\.ByteString\b/],
+	['array >=0.5', /^Data\.Array\b/],
+	['deepseq >=1.4', /^Control\.DeepSeq\b/],
+	['directory >=1.3', /^System\.Directory\b/],
+	['filepath >=1.4', /^System\.(FilePath|OsPath)\b/],
+	['time >=1.9', /^Data\.Time\b/],
+	['stm >=2.5', /^Control\.(Concurrent\.STM|Monad\.STM)\b/],
+	['exceptions >=0.10', /^Control\.Monad\.Catch\b/],
+	['random >=1.2', /^System\.Random\b/],
+	['QuickCheck >=2.14', /^Test\.QuickCheck\b/],
+	['hspec >=2.10', /^Test\.Hspec\b/],
+];
+
+/** The build-depends of HASKELL_PACKAGES that some file of `files` imports a module of. */
+export function haskellDepends(files: Files): string[] {
+	const imported = Object.entries(files)
+		.filter(([p]) => p.endsWith('.hs'))
+		.flatMap(([, t]) => [...t.matchAll(/^\s*import\s+(?:safe\s+)?(?:qualified\s+)?(?:"[^"]*"\s+)?([A-Z][\w.']*)/gm)].map((m) => m[1] ?? ''));
+	return HASKELL_PACKAGES.filter(([, re]) => imported.some((m) => re.test(m))).map(([d]) => d);
+}
+
+/**
  * haskell-project.cabal for the project where it is: the program from
  * `entry` with every other module outside the test folders, and, when the
  * project has tests, a test suite from tests/Spec.hs (or test/Spec.hs, or
  * the first test file with a `main`, the runner's choice) on hspec. The
- * browser compiles with MicroHs, whose Prelude is Haskell 2010's with
- * GHC's common extensions, so GHC2021 is the language that accepts what it
- * accepted. containers is a dependency when a module imports from it, as
- * hspec is of the tests.
+ * browser checks and runs it with GHC 9.14 (-Wall, its default language
+ * GHC2021), as `cabal build` does with this file. The packages the
+ * project's imports come from are its dependencies (haskellDepends), hspec
+ * the test suite's.
  */
 export function haskellCabal(files: Files, entry: string): string {
 	const modules = haskellModules(files);
@@ -1094,7 +1126,7 @@ export function haskellCabal(files: Files, entry: string): string {
 	// which a component cannot hold beside its own Main.
 	const library = modules.filter((m) => m.name !== 'Main' && !HASKELL_TESTS.test(m.path));
 	const testOnly = tests.filter((m) => m.name !== 'Main');
-	const containers = Object.values(files).some((t) => /^\s*import\s+(qualified\s+)?Data\.(Map|Set|IntMap|IntSet|Sequence|Graph|Tree)\b/m.test(t));
+	const depends = haskellDepends(files);
 	const mainIs = (m: HaskellModule) => (m.dir === '.' ? m.path : m.path.slice(m.dir.length + 1));
 	const dirs = (ms: readonly (HaskellModule | undefined)[]) => [...new Set(ms.flatMap((m) => (m ? [m.dir] : [])))];
 	const lines = [
@@ -1106,7 +1138,7 @@ export function haskellCabal(files: Files, entry: string): string {
 		'common shared',
 		'    default-language: GHC2021',
 		'    ghc-options:      -Wall',
-		...cabalList('build-depends', ['base >=4.16 && <5', ...(containers ? ['containers >=0.6'] : [])]),
+		...cabalList('build-depends', ['base >=4.16 && <5', ...depends.filter((d) => !d.startsWith('hspec '))]),
 		'',
 		'executable haskell-project',
 		'    import:           shared',
@@ -1241,7 +1273,7 @@ function instructions(language: Language, files: Files): string[] {
 		case 'haskell': {
 			const tests = paths.some((p) => HASKELL_TESTS.test(p) && p.endsWith('.hs'));
 			return [
-				'## Build and run\n\nWith GHC 9.4 or later and cabal 3.8 or later (GHCup from haskell.org installs both):\n\n```sh\ncabal run -v0\n```\n\nThe browser compiles with MicroHs, which accepts Haskell 2010 and most of GHC\'s common extensions; GHC is stricter in places (warnings from `-Wall`, and string literals are `String` unless a module turns on `OverloadedStrings`).',
+				'## Build and run\n\nWith GHC 9.4 or later and cabal 3.8 or later (GHCup from haskell.org installs both):\n\n```sh\ncabal run -v0\n```\n\nThe browser checks and runs the project with GHC 9.14 and the flags this build uses (`GHC2021`, `-Wall`), so what it reported there is what GHC reports here.',
 				...(tests ? ['## Test\n\nThe tests use hspec, which cabal downloads the first time:\n\n```sh\ncabal test --test-show-details=direct\n```'] : []),
 				'## Editors\n\nVS Code (with the Haskell extension), Emacs, Vim and Zed run the Haskell Language Server, which reads the `.cabal` file; GHCup installs it with `ghcup install hls`.',
 			];

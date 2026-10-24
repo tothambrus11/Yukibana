@@ -543,13 +543,21 @@ export class Workspace {
 		});
 		this.client = client;
 		this.write('info', `Starting the ${language.label} language server`);
-		client.start(() => this.models.values()).catch(async (e: unknown) => {
-			if (this.client !== client) return;
-			this.write('error', `${language.label} language server: ${e instanceof Error ? e.message : String(e)}`);
-			// A worker that fails to load says nothing about why; a missing pack is the usual reason.
-			const status = await fetch(client.serverUrl, { method: 'HEAD' }).then((r) => r.status, () => 0);
-			if (status === 404) this.write('error', `The ${language.label} pack is not installed: ${client.serverUrl.pathname} was not found. Build it with packs/${packOf(language)}/build.sh.`);
-		});
+		// A runner kept warm starts once the server has: both load the same
+		// compiler, and the editor's answers come first.
+		this.runner.keepWarm(null);
+		client.start(() => this.models.values()).then(
+			() => {
+				if (this.client === client && language.warmRunner && language.runs) this.runner.keepWarm(packOf(language));
+			},
+			async (e: unknown) => {
+				if (this.client !== client) return;
+				this.write('error', `${language.label} language server: ${e instanceof Error ? e.message : String(e)}`);
+				// A worker that fails to load says nothing about why; a missing pack is the usual reason.
+				const status = await fetch(client.serverUrl, { method: 'HEAD' }).then((r) => r.status, () => 0);
+				if (status === 404) this.write('error', `The ${language.label} pack is not installed: ${client.serverUrl.pathname} was not found. Build it with packs/${packOf(language)}/build.sh.`);
+			},
+		);
 	}
 
 	private async stopClient(): Promise<void> {

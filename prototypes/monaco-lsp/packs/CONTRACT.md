@@ -95,6 +95,24 @@ server's download is never a prerequisite for running and vice versa; the
 two may of course share files (a toolchain's wasm, headers) by URL so the
 browser and service worker cache them once.
 
+For a language with `warmRunner` (`app/src/lib/languages.ts`), the app
+starts the runner before Run is pressed (once the language server is up,
+and again after each run ends), and posts the message below whenever Run
+comes, which may be minutes later. Such a runner starts its slow part (the
+Haskell runner loads GHC) as soon as it starts, and must not depend on the
+message arriving soon. Whatever it posts before the message, but for
+`loading`, the app shows when the run begins.
+
+A runner that can run again after its program ends says so with
+`reusable: true` on its `exit`, and must then accept another `run` or
+`test` message, with new files and a new stdin buffer, as if it had just
+started; a run it has not finished must not be disturbed by one that
+arrives. The app keeps such a worker as the next run's (for a language
+with `warmRunner`) instead of starting another, and terminates it on Stop
+as any other. The Haskell runner does: GHC, linked and warm, then answers
+in a fraction of a second, and Chromium compiles the wasm of only a few
+new workers in a row while the language server's GHC is alive.
+
 ## Protocol
 
 Every message is a plain object with a `type`.
@@ -149,8 +167,10 @@ Runner to app, any number of times:
 { type: 'phase', text: string }        // "Compiling", "Linking", "Running": shown in the status bar
 { type: 'stdout', text: string }       // program output, as it is produced (not buffered to the end)
 { type: 'stderr', text: string }       // program errors, and compiler diagnostics
-{ type: 'exit', code: number }         // last message; 0 = success. Compile errors exit non-zero
-                                       // after printing them to stderr.
+{ type: 'exit', code: number, reusable?: boolean }
+                                       // last message; 0 = success. Compile errors exit non-zero
+                                       // after printing them to stderr. reusable: the worker
+                                       // takes another run (see above).
 ```
 
 And, optionally (an app ignores message types it does not know, so a

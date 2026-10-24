@@ -43,6 +43,13 @@ export interface Language {
 	 */
 	mutates?: boolean;
 	/**
+	 * Whether the app keeps a runner started ahead of each Run (once the
+	 * language server is up, and again after each run): for a runner whose
+	 * own start-up is most of a run, as Haskell's (GHC loads in some 8 s,
+	 * then compiles and runs a small program in under one).
+	 */
+	warmRunner?: boolean;
+	/**
 	 * The directory under `static/packs/` whose server and runner serve this
 	 * language, when it is not `id`: TypeScript and web projects use the
 	 * JavaScript pack's.
@@ -1032,7 +1039,7 @@ class GeometryTest {
 	{
 		// Cabal's layout (the downloaded haskell-project.cabal builds it as
 		// it is): the program's modules at the root, an hspec suite in
-		// tests/Spec.hs. MicroHs compiles and type-checks it in the browser
+		// tests/Spec.hs. GHC 9.14 checks and runs it in the browser
 		// (packs/haskell/README.md).
 		id: 'haskell',
 		label: 'Haskell',
@@ -1042,6 +1049,7 @@ class GeometryTest {
 		extension: '.hs',
 		runs: true,
 		tests: true,
+		warmRunner: true,
 		sample: {
 			'Main.hs': `module Main (main) where
 

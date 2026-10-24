@@ -39,7 +39,7 @@ type FromRunner =
 	| { type: 'phase'; text: string }
 	| { type: 'stdout' | 'stderr'; text: string }
 	| { type: 'stdin'; streaming?: boolean }
-	| { type: 'exit'; code: number }
+	| { type: 'exit'; code: number; reusable?: boolean }
 	| { type: 'trace' | 'kernel'; text: string }
 	| { type: 'mark'; name: string; ms: number };
 
@@ -69,6 +69,15 @@ export class Runner {
 	chunks = $state<Chunk[]>([]);
 
 	private worker: Worker | null = null;
+	/** The pack of the worker running now (or last), for `warm`. */
+	private pack: string | null = null;
+	/** The pack whose runner is kept started ahead of the next Run (`keepWarm`), or null. */
+	private warm: string | null = null;
+	/**
+	 * A runner started ahead of a Run, waiting for its message: what it
+	 * posted meanwhile is kept, to be read when a Run takes it.
+	 */
+	private spare: { pack: string; worker: Worker; early: FromRunner[] } | null = null;
 	private stdin: SharedArrayBuffer | null = null;
 	private started = 0;
 	private nextId = 0;
@@ -119,11 +128,17 @@ export class Runner {
 		this.stdin = crossOriginIsolated ? new SharedArrayBuffer(8 + STDIN_BYTES) : null;
 		if (!this.stdin) this.append('info', 'This page is not cross-origin isolated, so programs cannot read input.\n');
 
-		const worker = new Worker(new URL(`packs/${language}/runner.js`, document.baseURI), { type: 'module' });
+		const spare = this.spare?.pack === language ? this.spare : null;
+		if (spare) this.spare = null;
+		const worker = spare?.worker ?? new Worker(new URL(`packs/${language}/runner.js`, document.baseURI), { type: 'module' });
 		this.worker = worker;
+		this.pack = language;
 		worker.onmessage = (e: MessageEvent<FromRunner>) => {
 			if (this.worker === worker) this.receive(e.data);
 		};
+		// What a spare said while it waited, but its download progress: that
+		// is over, and would show as this run's.
+		for (const m of spare?.early ?? []) if (m.type !== 'loading') this.receive(m);
 		worker.onerror = (e) => {
 			if (this.worker !== worker) return;
 			e.preventDefault();
@@ -134,6 +149,66 @@ export class Runner {
 			);
 		};
 		worker.postMessage({ type: mode, files: { ...files }, entry, stdin: this.stdin, ...(options ? { options: { ...options } } : {}) });
+	}
+
+	/**
+	 * Keeps a runner of `pack` started ahead of each Run, null none: a
+	 * runner whose own start (loading a compiler, as Haskell's GHC) is most
+	 * of a run's time then answers Run at once. The first starts now; each
+	 * Run takes it, and when that run ends its worker is kept for the next
+	 * when it says it takes another (`reusable`), or a new one starts, so
+	 * two never compete for the processor. packs/CONTRACT.md: a runner may
+	 * receive its message long after it started.
+	 */
+	keepWarm(pack: string | null): void {
+		this.warm = pack;
+		if (this.spare && this.spare.pack !== pack) {
+			this.spare.worker.terminate();
+			this.spare = null;
+		}
+		if (pack && !this.busy) this.prewarm(pack);
+	}
+
+	private prewarm(pack: string): void {
+		if (this.spare?.pack === pack) return;
+		const worker = new Worker(new URL(`packs/${pack}/runner.js`, document.baseURI), { type: 'module' });
+		const spare = { pack, worker, early: [] as FromRunner[] };
+		this.keep(spare);
+	}
+
+	/**
+	 * Lets the worker that just exited go: kept as the spare when it said it
+	 * takes another run (`reusable`) and its pack is kept warm, terminated
+	 * otherwise. A reused runner is warmer than a fresh one, so it replaces
+	 * a spare that is still starting.
+	 */
+	private release(reusable: boolean): void {
+		const worker = this.worker;
+		this.worker = null;
+		if (!worker) return;
+		const pack = this.pack;
+		if (!reusable || !pack || this.warm !== pack) {
+			worker.terminate();
+			return;
+		}
+		this.spare?.worker.terminate();
+		this.keep({ pack, worker, early: [] });
+	}
+
+	/** Makes `spare` the spare, keeping what it posts until a Run takes it. */
+	private keep(spare: { pack: string; worker: Worker; early: FromRunner[] }): void {
+		const { worker } = spare;
+		worker.onmessage = (e: MessageEvent<FromRunner>) => {
+			spare.early.push(e.data);
+		};
+		worker.onerror = (e) => {
+			// A spare that fails is dropped; the Run that would have taken it
+			// starts its own, and reports what goes wrong.
+			e.preventDefault();
+			worker.terminate();
+			if (this.spare === spare) this.spare = null;
+		};
+		this.spare = spare;
 	}
 
 	/** Stops the running program; `say` notes it in the terminal. */
@@ -225,8 +300,7 @@ export class Runner {
 				this.log?.mark(m.name, m.ms);
 				break;
 			case 'exit':
-				this.worker?.terminate();
-				this.worker = null;
+				this.release(m.reusable === true);
 				this.kernel('\n');
 				// No note of the app's own: a program's non-zero status is its
 				// own business, and a VM that failed already said where its
@@ -272,6 +346,7 @@ export class Runner {
 	private finish(code: number | null, note: string | null): void {
 		if (note) this.append('info', (this.chunks.at(-1)?.text.endsWith('\n') === false ? '\n' : '') + note + '\n');
 		this.state = { kind: 'ended', code, seconds: (performance.now() - this.started) / 1000 };
+		if (this.warm && this.warm === this.pack) this.prewarm(this.warm);
 	}
 
 	private append(kind: Chunk['kind'], text: string, style = ''): void {

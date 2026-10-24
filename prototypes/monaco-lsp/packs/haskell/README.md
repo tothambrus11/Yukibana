@@ -1,123 +1,117 @@
-# Haskell pack: MicroHs in WebAssembly
+# Haskell pack: GHC 9.14 in WebAssembly
 
-**Server and runner:** [MicroHs](https://github.com/augustss/MicroHs)
-0.16.0.0, Lennart Augustsson's Haskell compiler, built once for the browser
-with Emscripten 4.0.22 together with a small driver of ours
-(`src/hs/Yuki.hs`). The same `yuki.wasm` is both workers:
+**Server and runner:** GHC 9.14.1 itself, compiled to WebAssembly by GHC's
+own wasm backend (ghc-wasm-meta), with every boot package and the packages
+a course uses as wasm shared libraries, loaded in the browser by GHC's own
+dynamic linker (`dyld.mjs`). A small GHC API program of ours,
+`ghc/Yuki.hs` (built into `libyuki.so`), answers both workers:
 
-* `server.js` speaks LSP over `postMessage`. Each check runs MicroHs's
-  parser, renamer and **type checker** over the project's modules and
-  answers with the error, if any, and every name the checker resolved: where
-  it is used, where it is defined, and its type there. Diagnostics, hover,
-  definition, references, highlights, rename and completion come from that.
-* `runner.js` compiles the project with the same compiler and runs it in the
-  same process (MicroHs's combinator evaluator), as `mhs -r Main` does.
-  **Test** does the same with `tests/Spec.hs`, an hspec suite.
+* `server.js` speaks LSP over `postMessage`. Each check type checks the
+  project as `ghc -fno-code -Wall` does (GHC2021, deferred type errors and
+  holes, as HLS checks), and answers GHC's diagnostics as GHC's own JSON
+  (`-fdiagnostics-as-json`) and every name GHC resolved, from the modules'
+  `.hie` files (the files HLS reads). Diagnostics, hover, definition,
+  references, highlights, rename, completion, symbols and quick fixes come
+  from that. **hlint** 3.10 adds its hints, and **ormolu** 0.8.0.2 formats:
+  each is its own WASI command (`ghc/build-tools.sh`), started only when
+  wanted.
+* `runner.js` loads the project into GHC's bytecode interpreter and runs
+  `main`, as `runghc` and GHCi do. **Test** does the same with
+  `tests/Spec.hs`, an hspec suite with QuickCheck. One runner runs program
+  after program, as one GHCi session does: the second Run answers in about
+  0.1 s.
 
-Libraries: MicroHs's own `base` (the Prelude, `Data.List`, `Data.Char`,
-`Data.IORef`, `Control.Monad`, `Control.Exception`, `Text.Read`, `Data.Bits`,
-`System.IO` and the rest), **containers 0.8.1** (`Data.Map`, `Data.Set`,
-`Data.IntMap`, `Data.IntSet`; strict and lazy) and our **Test.Hspec**, all
-three precompiled into MicroHs packages at build time.
+Packages, all of them exposed to both workers as GHC's `-package` flags
+(GHC's versions; the Hackage ones built in CI):
+`base` 4.22.1, `containers` 0.8, `mtl` 2.3.1, `transformers` 0.6.3,
+`text` 2.1.4, `bytestring` 0.12.2, `array`, `deepseq`, `directory`,
+`filepath`, `time` 1.15, `stm`, `exceptions`, and from Hackage
+**QuickCheck** 2.19.0.0, **hspec** 2.11.18 and **random** 1.3.1
+(their dependencies as Hackage's index had them on 2026-10-24, `INDEX_STATE` in `ghc/build-rootfs.sh`).
 
-## Why this compiler and server
+## Why this engine
 
-What the editor needs, in order: real type-checker errors, then the type of
-what is under the cursor, definition, references, completion. Everything
-runs in the browser; a pack's download should stay in the single megabytes.
+The task was desktop parity: GHC's errors, GHC's types, a real `base` and
+the libraries courses use, QuickCheck, a GHCi-like Run, hints and a
+formatter. Options compared (measured where marked):
 
-| | Language | Download | Check / run | Licence | Maintained |
-| --- | --- | --- | --- | --- | --- |
-| **MicroHs** (chosen) | Haskell 2010 and most common GHC extensions (multi-parameter classes, functional dependencies, GADTs, type families, rank-n, deriving strategies, `\case`, records with dots...) | **1.6 MB** (176 KB of it the wasm, br) | 1 s per edit, Run 2 s | Apache-2.0 (containers: BSD-3) | yes, regular Hackage releases |
-| GHC's WebAssembly backend / ghc-in-browser | all of GHC 9.x | ~49 MB zstd root file system (GHC's libdir, `ghc` itself as wasm), prebuilt images only | GHC's speed in an interpreter: seconds per module | BSD-3 | the backend yes; running GHC itself in a browser is a demo and an unmerged MR |
-| HLS / ghcide on wasm | everything GHC has | — | — | Apache-2.0 | needs the GHC API, a process per component and a real file system: not portable to a browser today |
-| Hugs on wasm | Haskell 98 plus a few extensions | ~1 MB | fast | BSD-style | unmaintained since 2006, its libraries are 20 years old |
-| tree-sitter-haskell only | syntax | ~0.5 MB | instant | MIT | yes |
+| | What it type checks | Download (br) | Editor features | Verdict |
+| --- | --- | --- | --- | --- |
+| **GHC 9.14 wasm + GHC API (chosen)** | everything GHC does, all extensions, real `base` | **33.2 MB** once (measured) | ours on the GHC API and `.hie` files (HLS's sources of truth) | parity on diagnostics, types and libraries; 5 to 8 s cold start |
+| MicroHs 0.16 (the previous engine) | Haskell 2010 and many extensions, its own `base` | 1.6 MB | ours on a patched type checker | one error per module, its own messages and types, no QuickCheck, mtl, text or bytestring |
+| HLS / ghcide on wasm | everything | — | the real ones | needs processes, a real file system and Template Haskell; no wasm build exists or is near |
+| ghc-in-browser (GHC's browser GHCi demo) | everything | ~49 MB zstd | none: a REPL | the same wasm GHC; we use its dyld.mjs and pieces of its approach, not its image |
+| GHC's JavaScript backend | — | — | — | compiles Haskell to JS, does not run GHC in a browser |
 
-* **MicroHs** is a complete Haskell compiler written in Haskell that
-  compiles itself to a small C runtime plus a combinator program. That C
-  builds with Emscripten unchanged; nothing of GHC is needed, at build time
-  either. Its type checker is the real one that rejects ill-typed programs,
-  so the editor's errors are the ones the program has, not guesses. It is
-  small enough to start in a worker in well under a second and fast enough
-  to recheck a project on every edit.
-* **GHC in the browser** is the heavier, exact option and the **future
-  work**: once a GHC that runs as wasm (the `ghc-in-browser` work on top of
-  the wasm backend) is released as a reusable artefact, a pack could run
-  GHC's own type checker and GHCi's interpreter, with GHC's messages. Today
-  it means a 49 MB first download, minutes of setup per page on slower
-  machines, and building GHC from an unmerged branch; the editor features
-  would still have to be written against the GHC API, as HLS cannot run.
-* **HLS and ghcide** would give the best editor, but they need the GHC API
-  and spawn processes; no wasm build exists.
-* **Hugs** would be small, but it is unmaintained and stops at Haskell 98:
-  no modern `base`, no containers as people use them.
-* A **tree-sitter-only** server (the Kotlin pack's approach) would give
-  syntax errors and project-local names, and none of the types, which are
-  the point of a Haskell editor.
+* GHC's wasm backend ships GHC itself as wasm shared libraries
+  (`libHSghc.so`) since 9.10, and its `dyld.mjs` links them in a browser.
+  What was missing for an editor was a program on the GHC API and the
+  plumbing: `Yuki.hs` is that program, about 900 lines, exporting two
+  JSFFI functions (`yukiInit`, `yukiRequest`). Everything else is GHC's.
+* **HLS cannot run**, but what HLS reads can: GHC's typechecked modules,
+  its `.hie` files, its JSON diagnostics with their hints. The features
+  are written against those, the way ghcide's are, so the answers are
+  GHC's own (a hover shows the type GHC inferred at that place).
+* The cost is the download and the start: 33 MB once, cached afterwards,
+  and 5 to 8 s from worker start to GHC ready on this machine.
 
-So: MicroHs for everything, with a patch (below) that makes its type checker
-remember what it resolved. The Monaco grammar is ours
-(`app/src/lib/haskell-language.ts`), as Monaco has none for Haskell.
+## What works (parity with a desktop GHC + HLS + hlint + ormolu)
 
-## What works
+| Feature | Desktop (GHC 9.14, HLS, hlint, ormolu) | Here | Evidence (`node test.mjs`) |
+| --- | --- | --- | --- |
+| Diagnostics | GHC's, every error of every module, -Wall warnings | the same: GHC's JSON diagnostics, codes (`GHC-83865`), hints, unused tags | type mismatch, String for Int, out-of-scope with "Perhaps use", parse error, an error in an imported module reported there |
+| Hover | type at that place, declared type, Haddock, module | the same (`print :: Double -> IO ()` then `print :: Show a => a -> IO ()`, Haddock rendered as Markdown, "Defined in ‘GHC.Internal.System.IO’") | 6 hover checks |
+| Definition, references, highlights | across the project | across the project; library names have no source in the pack | 4 checks |
+| Rename | project-wide, refuses library names | the same, and refuses a name of the wrong kind | 3 checks |
+| Completion | in-scope names with types, qualified, modules after `import` | the same, from GHC's renamer (270 items in the sample, 460 modules) | 3 checks |
+| Document symbols | yes | yes | 1 check |
+| Quick fixes | HLS: suggestions, signatures, unused, imports, holes, extensions | from GHC's hints: replace a misspelt name, add the inferred signature, prefix unused with `_`, remove a redundant import, hole fits, add a LANGUAGE pragma | 4 checks |
+| hlint | hints as warnings, apply or ignore | hlint 3.10's hints (default rules) as `hlint` diagnostics; "Apply hint" and "Ignore hint in this module" | 2 checks |
+| Formatting | ormolu or fourmolu | ormolu 0.8.0.2; a module that does not parse is refused with ormolu's message | 3 checks |
+| Run | `runghc` / GHCi | GHC's bytecode interpreter: stdout unbuffered, stdin from the terminal (`getLine`, `getContents` to Ctrl-D), `exitWith`, uncaught exceptions with GHC's message and call stack, compile errors in colour, many runs in one session | 11 checks |
+| Test | `cabal test` with hspec + QuickCheck | hspec 2.11's report, coloured, QuickCheck properties | 3 checks |
+| Packages | whatever cabal installs | the list above; others are not there (no cabal in the browser) | |
 
-* **Diagnostics** from the type checker: type mismatches (shown in GHC's
-  words, "Couldn't match type ‘Bool’ with ‘Int’"), missing instances, names
-  not in scope, wrong number of arguments, parse errors and unknown
-  imports, each at its line and column. An error in an imported module
-  is reported in that module, not in every file importing it.
-* **Hover**: the type of any variable, function, constructor or operator,
-  as used at that place (`print :: Point -> IO ()` there, not
-  `Show a => a -> IO ()`), the module it comes from, and the `-- |` comment
-  above its definition. On a data type: its declaration.
-* **Go to definition** across the project's files, for values, constructors,
-  types and classes. Library names have no source in the pack.
-* **References, highlights and rename** across the project: every use the
-  checker resolved plus the signature, the equations, the export list and
-  import lists. Rename refuses a library name and a new name of the wrong
-  kind (a constructor that is not upper case, a keyword).
-* **Completion**: names in scope with their types (the project's, the
-  Prelude's and every imported module's), local binders, `Map.` after a
-  qualified import, module names after `import`, keywords.
-* **Document symbols**: data types, newtypes, synonyms, classes and the
-  top-level functions.
-* **Run**: the project from `Main.hs`, with a terminal: stdout as it is
-  written (line buffered, and flushed before the program waits for input,
-  so a prompt without a newline shows), `getLine`, `getContents` until
-  Ctrl-D, `exitWith`. Compile errors in GHC's `file:line:col: error:`
-  format; runtime errors (`head []`, `error`) as GHC prints them.
-* **Test**: `tests/Spec.hs` (or `test/Spec.hs`) with hspec's `describe`,
-  `context`, `it`, `xit`, `pending`, `shouldBe`, `shouldSatisfy`,
-  `shouldContain`, `shouldReturn`, `shouldThrow` and the rest of the
-  `should*` family, reported as hspec does, in colour: ✔ in green,
-  failures in red with the expected and actual values, then
-  `N examples, M failures`.
-* **Download** writes `haskell-project.cabal` (an executable from
-  `Main.hs`, a test suite from `tests/Spec.hs` on hspec, `GHC2021`, the
-  modules listed) and `cabal.project`, so `cabal run` and `cabal test` work
-  with GHC on the project as it is.
+Measured (Chromium, this machine, local server so download time is not
+included; a script drives both workers, as test.mjs does):
 
-Measured (Chromium, this machine, `node test.mjs`): the server is ready
-and has checked the sample 3.1 to 3.7 s after the worker starts, most of it
-loading the three packages; after that an edit is checked in about 1 s.
-Run takes 2.3 s cold and 1.7 s warm, Test about the same.
+| | cold | warm |
+| --- | --- | --- |
+| server ready (`initialize` answered: unpack 247 MB, link GHC) | 5.3 to 6.1 s | |
+| first check of the three-file sample | 1.0 to 1.8 s | |
+| edit to diagnostics (250 ms debounce included) | 1.2 s | 0.45 to 0.58 s |
+| hover, definition, references | 6 ms | 1 to 2 ms |
+| completion | 180 ms | 90 to 105 ms |
+| hlint over the project | 2.2 s | 1.2 to 1.4 s |
+| format (ormolu) | 0.5 s | 0.25 s |
+| Run, runner started at the same moment | 7.1 to 7.7 s | 0.1 s (same runner) |
+| Run, runner started ahead (the app's warm runner) | 0.25 s | 0.1 s |
+| Test (hspec, 4 examples) | 0.2 s | 0.13 s |
 
 ## What is in `app/static/packs/haskell/`
 
 | file | raw | gzip | brotli | what |
 |---|---|---|---|---|
-| `yuki.wasm` | 533 KB | 198 KB | 176 KB | MicroHs's runtime and compiler, with our driver |
-| `yuki.mjs` | 87 KB | 24 KB | 21 KB | its Emscripten loader |
-| `base.pkg` | 806 KB | | | MicroHs's `base`, precompiled (already compressed) |
-| `containers.pkg` | 385 KB | | | containers 0.8.1, precompiled |
-| `hspec.pkg` | 187 KB | | | our Test.Hspec, precompiled |
-| `server.js` | 32 KB | 10 KB | 9 KB | ours: the LSP worker |
-| `runner.js`, `project.js` | 10 KB | 4 KB | 4 KB | ours: Run/Test, and what both workers share |
+| `rootfs.tar` | 247.1 MB | 49.4 MB | 33.2 MB | GHC's libdir, the packages and libyuki.so, unpacked by each worker into memory |
+| `dyld.mjs`, `prelude.mjs`, `post-link.mjs` | 57 KB | 19 KB | 17 KB | GHC's wasm dynamic linker (patched, `scripts/patch-dyld.mjs`) |
+| `wasi.js` | 32 KB | 9 KB | 8 KB | browser_wasi_shim (the haskell-wasm fork), bundled |
+| `ghc.js`, `server.js`, `runner.js`, `tools.js` | 57 KB | 20 KB | 18 KB | ours |
+| `ormolu.wasm` | 15.9 MB | 4.7 MB | 3.3 MB | ormolu 0.8.0.2, a WASI command |
+| `hlint.wasm`, `hlint-data.json` | 16.7 MB | 5.1 MB | 3.6 MB | hlint 3.10 and its hint files |
 | `LICENSE-*.txt`, `manifest.json` | | | | licences; versions and sizes |
 
-**1.6 MB to download** for the editor; Run and Test reuse the same files
-(and the browser's cache) plus 2 KB. 2.5 MB stored.
+Downloads (brotli), by what the person does:
+
+| | |
+| --- | --- |
+| open a Haskell project (editor) | **33.2 MB** (rootfs) + 0.04 MB |
+| hints, after the first check | + 3.6 MB |
+| first Format | + 3.3 MB |
+| Run and Test | + 3 KB (`runner.js`): the runner fetches the same `rootfs.tar`, from the browser's cache or the service worker |
+
+In memory each worker holds the unpacked file system and GHC: about
+250 MB of JavaScript heap for the server (measured with
+`performance.measureUserAgentSpecificMemory`), and as much for a runner.
 
 ## Building
 
@@ -126,91 +120,66 @@ Run takes 2.3 s cold and 1.7 s warm, Test about the same.
 npm install && node test.mjs
 ```
 
-`build.sh` fetches MicroHs 0.16.0.0 and containers 0.8.1 from Hackage, each
-checked by sha256, and reuses the C++ pack's Emscripten (emsdk 4.0.22,
-installed into the shared cache if it is not there). Everything is cached
-in `~/.cache/yukibana-packs/haskell` (11 MB) with stamps, so a rebuild only
-redoes what changed. Steps:
+GHC's wasm toolchain takes some 3 GB installed, so the two heavy parts are
+built in CI and `build.sh` takes their artifacts, each pinned by its run
+and by the sha256 of its `SHA256SUMS` (which holds every file's):
 
-1. MicroHs's sources, with `patches/microhs-ide.patch` applied;
-2. a native `mhs` from MicroHs's own generated C (`cc`, no GHC);
-3. `base.pkg`, `containers.pkg` (through MicroHs's cpphs) and `hspec.pkg`
-   from `src/hslib/`, compiled by that `mhs`;
-4. `yuki.c`: MicroHs's compiler plus `src/hs/Yuki.hs`, compiled by `mhs` to
-   C (76 s: without the compile cache, which would emit the foreign export
-   twice);
-5. `emcc -O3` to `yuki.wasm` and `yuki.mjs`, with `src/yuki-io.c`.
+1. `ghc/build-rootfs.sh` (`.github/workflows/haskell-ghc.yml`): installs
+   ghc-wasm-meta at a pinned commit (FLAVOUR 9.14), builds the Hackage
+   packages with `wasm32-wasi-cabal` (at a pinned Hackage index state), builds
+   `libyuki.so` from `ghc/Yuki.hs`, strips the shared libraries, drops what
+   no program uses (Cabal, haddock, haskeline), writes `rootfs.tar` and its
+   `.br`/`.gz`, and smoke-tests check, hover and run in Node
+   (`ghc/smoke.mjs`). About 12 minutes with its cache.
+2. `ghc/build-tools.sh` (`.github/workflows/haskell-ghc-tools.yml`):
+   ormolu and hlint from their Hackage tarballs (sha256-checked), with
+   GHC 9.12's wasm toolchain, because hlint 3.10 (and its master) parses
+   with ghc-lib-parser 9.12, whose `base` stops before 9.14's; ormolu is
+   taken at its last release on the same parser so one ghc-lib-parser
+   serves both. Smoke-tested with wasmtime.
 
-About 5.5 minutes cold on 2 cores, nearly all of it steps 3 and 4.
+Download an artifact (`haskell-ghc-rootfs`, `haskell-ghc-tools`) of the
+pinned run and pass it as `HASKELL_GHC_ROOTFS=…zip` / `HASKELL_GHC_TOOLS=…zip`;
+the release workflow does that itself. Artifacts are kept 90 days, so a
+pin older than that needs the workflow run again (and the pins updated).
+`HASKELL_GHC_ROOTFS=build` builds the root file system locally with the
+toolchain installed.
 
-### The patch
+### What we patch
 
-MicroHs's type checker resolves every name and then forgets: its symbol
-tables keep only the result. `patches/microhs-ide.patch` (3 files, about
-55 added lines) adds a list to the checker's state and records, at the five places
-where a name is looked up (a variable, the head of an application, a
-pattern variable, a constructor pattern), the name as written, what it
-resolved to, the definition's location and the type it has there. Two
-details made it work:
-
-* the lookup replaces the definition's location with the use's, so the
-  record looks the name up again to keep the definition;
-* the checker resets its unification variables before each top-level
-  definition, so the record's types are substituted at each reset, not at
-  the end of the module (otherwise every type was `_a123`).
-
-`Yuki.hs` is the driver: `run`/`test` for the runner, and for the server a
-`yuki_request` export that checks files against packages loaded once and
-answers in JSON. It rewrites MicroHs's messages in GHC's words where they
-differ only in wording ("Cannot satisfy constraint: Bool ~ Int").
+* `dyld.mjs` (`scripts/patch-dyld.mjs`): imports the pack's `wasi.js` instead
+  of esm.sh; takes the runner's stdin/stdout/stderr as WASI fds; resolves
+  `..` in paths in the browser's file system (GHC loads boot libraries as
+  `lib/../lib/…`); keeps fds 0 to 2 open when a program closes them (one
+  runner runs many programs).
+* ormolu's and hlint's `.cabal` files: `-threaded` and `-with-rtsopts=-N`
+  removed (the wasm RTS is not threaded).
 
 ## Limits
 
-* **One error per module**: MicroHs stops at the first. Fixing it shows
-  the next.
-* **Messages are MicroHs's**, rewritten where that is safe. Types print as
-  MicroHs has them: `[Char]`, not `String`.
-* **String literals are overloaded** (MicroHs always has
-  `OverloadedStrings`): `n = "x"` where an `Int` is expected says "No
-  instance for (IsString Int)", with a hint that it is a string where an
-  `Int` was expected, where GHC would say it cannot match `[Char]`.
-* **Libraries**: `base` and containers without `Data.Sequence`,
-  `Data.Graph` and `Data.Tree` (they need `array`, which MicroHs's base
-  does not ship). No `text`, `bytestring`, `mtl`, `random` or QuickCheck;
-  Test.Hspec is a subset (no `property`, `before`/`after` hooks or
-  `parallel`).
-* **No QuickCheck**, though QuickCheck 2.19.0.0 itself supports MicroHs
-  (its cabal file has `impl(mhs)` options). It was tried and rejected,
-  because what it depends on does not build with MicroHs 0.16.0.0 as
-  released:
-  * random 1.3.1, which QuickCheck needs (`random >= 1.2`), imports
-    `GHC.Exts` with `MagicHash`, `UnboxedTuples` and `ByteArray#`.
-    MicroHs has no such module, so it stops at `Module not found: GHC.Exts`.
-  * splitmix 0.1.3.2, which QuickCheck needs on every compiler but Hugs,
-    seeds itself from the `time` package on any compiler but GHC
-    (`SPLITMIX_INIT_COMPAT`), and stops at `Module not found:
-    Data.Time.Clock.POSIX`. `time` 1.15 does build with MicroHs, but it
-    brings C sources and a configure-generated header. Its foreign calls
-    would also have to be compiled into `yuki.wasm`'s runtime.
-
-  Making it work would mean patching random, or rewriting it on top of
-  MicroHs's primitives, and changing the runtime for `time`. That is a fork,
-  not a library as released. transformers 0.6.3.0 does compile unchanged.
-* **Heap**: a fixed 24 million cells; a program that needs more stops with
-  "Out of memory".
-* **Runtime error locations** point into MicroHs's library sources, not the
-  project's.
-* **Every check starts from the packages**: no incremental check across
-  edits, so a project of many modules rechecks all of them on each edit
-  (the sample's three take 1 s). Reusing the previous check's modules risked
-  stale instances.
-* **stdin** needs the page to be cross-origin isolated
-  (`SharedArrayBuffer`), as every pack's runner does.
-* No formatting, signature help, code actions or semantic tokens.
+* **The download**: 33 MB the first time, then cached. MicroHs was 1.6 MB.
+* **The start**: 5 to 8 s from opening a project to the first diagnostics;
+  a Run pressed in the first seconds waits for its own GHC (the app starts
+  the runner ahead, once the server is up).
+* **Packages are fixed**: the list above. A `build-depends` on anything else
+  is not there; Download's cabal project builds it on a desktop.
+* **No Template Haskell**: `template-haskell` is not among the packages
+  (an import of `Language.Haskell.TH` says it is hidden), and splices would
+  need GHC's interpreter in the editor's session, which does not start it.
+* **hlint and ormolu parse as GHC 9.12**: syntax new in 9.14 is not
+  understood by them (GHC's own diagnostics are unaffected).
+* **Runtime errors' call stacks** point into the project's files and into
+  `ghc-internal`'s, as on a desktop.
+* **Memory**: two workers of about 250 MB each.
+* **A browser stops compiling wasm for new workers after a few in a row**
+  while the server's GHC is alive (Chromium: the fourth new runner in a row
+  stalled for tens of seconds). The runner is therefore reused across runs;
+  only Stop starts a new one.
 
 ## Licences
 
-MicroHs (Apache-2.0) and containers (BSD-3-Clause) are redistributed in
-compiled form; their licences are copied next to the pack's files.
-`src/hslib/Test/Hspec.hs` is ours, written against hspec's documented API,
-and shares no code with hspec.
+GHC and its libraries (BSD-3-Clause and others: `LICENSE-ghc-and-libraries.txt`
+collects every package's), QuickCheck, hspec and random (BSD/MIT), ormolu
+(BSD-3-Clause), hlint (BSD-3-Clause, built without its GPL `hscolour`
+option), browser_wasi_shim (MIT/Apache-2.0) are redistributed in compiled
+form with their licences next to the pack's files.
