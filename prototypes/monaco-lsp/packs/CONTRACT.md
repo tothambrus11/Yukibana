@@ -295,7 +295,8 @@ Explorer to app:
 { type: 'loading', label, loaded, total }           // a download, as for a runner
 { type: 'result', id, emit, ok: true,
   text: string,                                     // the output, filtered
-  lines: ({ file: string; line: number } | null)[], // per line of text: its source line
+  lines: ({ file: string; line: number;             // per line of text: its source line,
+            column: number } | null)[],             //   and the column there (1-based; 0: none)
   target: string,                                   // the target's id (C/C++: cpp-targets.ts)
   triple: string, flags: string[],                  // what the toolbar shows: the triple, clang's arguments
   ms: number }                                      // how long the compile took
@@ -306,8 +307,12 @@ Explorer to app:
 
 Guarantees: `lines.length` is the number of lines of `text`; a `file` is
 a project path, or the path the compiler printed for a header outside the
-project; a request that a newer one of the same `emit` replaced may get no
+project; `column` is where on the line the code's expression starts, as the
+compiler's line tables record it (C and C++: the `.loc` and `DILocation`
+column, the operator of a binary expression), or 0 when they record
+none; a request that a newer one of the same `emit` replaced may get no
 answer, and the app keeps only the answer to the newest `id` of each. The
 app maps the caret both ways with `lines` (the source line's output lines
-are highlighted, and the output line's source line), and Ctrl/Cmd+click on
-an output line opens its source line.
+are highlighted, and the output line's source line), tells the parts of a
+line apart with `column` (the language server's selection ranges at that
+column), and Ctrl/Cmd+click on an output line opens its source line.

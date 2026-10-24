@@ -14,10 +14,15 @@ const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'tests/fixtures')
 const read = (target, name) => readFileSync(join(FIXTURES, target, name), 'utf8');
 const filter = (name) => (name.endsWith('.ll') ? filterIr : filterAsm);
 const lineCount = (text) => (text === '' ? 0 : text.split('\n').length);
-const at = ({ text, lines }, pattern) => {
+const atWithColumn = ({ text, lines }, pattern) => {
     const i = text.split('\n').findIndex((l) => pattern.test(l));
     assert.ok(i >= 0, `no line matches ${pattern}`);
     return lines[i];
+};
+/** The source line (file and line, without the column) of the first output line matching `pattern`. */
+const at = (r, pattern) => {
+    const m = atWithColumn(r, pattern);
+    return m && { file: m.file, line: m.line };
 };
 const FIXTURE_NAMES = ['geometry.cpp.O0', 'geometry.cpp.O2', 'main.cpp.O2'].flatMap((b) =>
     ['view', 'plain'].flatMap((v) => ['s', 'll'].map((e) => `${b}.${v}.${e}`))).concat(['swap.cpp.O0.view.s', 'swap.cpp.O0.view.ll']);
@@ -58,6 +63,23 @@ test('the call to distance in main maps to main.cpp line 8, in the assembly and 
         // line of main that constructs the vector.
         assert.deepEqual(at(ir, /@_Znwm\(/), { file: 'main.cpp', line: 7 }, id);
         assert.deepEqual(at(ir, /^define .*@main\(/), { file: 'main.cpp', line: 6 }, id);
+    }
+});
+
+test("each instruction keeps the column of the expression it computes, so the parts of one line tell apart", () => {
+    // geometry.cpp:8 is `    return std::hypot(a.x - b.x, a.y - b.y);`:
+    // the call starts at column 12, the two subtractions' `-` are at 27 and 38.
+    for (const { id } of TARGETS) {
+        const ir = filterIr(read(id, 'geometry.cpp.O0.view.ll'));
+        assert.deepEqual(atWithColumn(ir, /= fsub double %1, %3/), { file: 'geometry.cpp', line: 8, column: 27 }, id);
+        assert.deepEqual(atWithColumn(ir, /= fsub double %5, %7/), { file: 'geometry.cpp', line: 8, column: 38 }, id);
+        const asm = filterAsm(read(id, 'geometry.cpp.O0.view.s'));
+        const columns = new Set(asm.lines.filter((m) => m?.file === 'geometry.cpp' && m.line === 8).map((m) => m.column));
+        for (const c of [12, 27, 38]) assert.ok(columns.has(c), `${id}: an instruction of geometry.cpp:8 at column ${c} (${[...columns]})`);
+        // Inlined from <vector>: the column of the project's call site, `points` in `std::vector<Point> points{...}`.
+        assert.deepEqual(atWithColumn(filterIr(read(id, 'main.cpp.O2.view.ll')), /@_Znwm\(/), { file: 'main.cpp', line: 7, column: 24 }, id);
+        // A function's own line has no column.
+        assert.equal(atWithColumn(ir, /^define .*@_Z8distanceRK5PointS1_\(/).column, 0, id);
     }
 });
 

@@ -1332,6 +1332,11 @@ filters):
   project it was inlined into (the `.loc` comment's inline chain, the IR's
   `inlinedAt`), so `std::vector`'s construction inlined into `main` maps to
   the line of `main` that constructs the vector: the line the cursor is on.
+  Each mapped line keeps the column clang recorded (the `.loc` column, the
+  `DILocation`'s, the project call site's for inlined code): the start of
+  the expression the instruction computes, or the operator of a binary one
+  (the `-` of `a.x - b.x`), which the app turns into the part of the line
+  the instruction came from.
 * **Demangling** (on by default for assembly): LLVM's own Itanium
   demangler, `llvm::itaniumDemangle` from the same 21.1.8 tarball (the code
   `llvm::demangle`, and so `llvm-cxxfilt`, runs for a `_Z` name, chosen by

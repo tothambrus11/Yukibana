@@ -14,6 +14,12 @@
 // construction inlined into main maps to main.cpp's line that constructs the
 // vector, which is the line a student's cursor is on. Line 0 (code that
 // belongs to no line) maps to null.
+//
+// A mapped line also carries the 1-based column clang recorded with it, the
+// start of the expression the instruction computes (the `<` of `i < n`, the
+// `+` of `a + b`, the first character of a call), which the views use to
+// tell the parts of one line apart; 0 when clang recorded none (a function's
+// own line, `.loc` with column 0).
 
 /**
  * The project path of a path clang printed (relative to /workspace, the
@@ -63,7 +69,7 @@ const TOKEN = /[A-Za-z_.$][\w.$]*/g;
  *   function from a header, such as a std::vector member at -O0.
  *
  * Returns `{ text, lines }`: the kept lines joined with `\n`, and for each
- * one `{ file, line }` or null (labels, directives, data, and code with no
+ * one `{ file, line, column }` or null (labels, directives, data, and code with no
  * line); `lines.length` is the number of lines in `text` (0, with `text`
  * '', when nothing is kept). Never throws.
  */
@@ -89,9 +95,9 @@ export function filterAsm(text, { directives = false, library = false } = {}) {
             files.set(file[1], file[3] !== undefined ? projectPath(file[3], file[2]) : projectPath(file[2]));
             continue;
         }
-        const dotLoc = /^\s*\.loc\s+(\d+)\s+(\d+)\s+\d+[^#/]*(?:(?:#|\/\/)\s*(.*))?$/.exec(line);
+        const dotLoc = /^\s*\.loc\s+(\d+)\s+(\d+)\s+(\d+)[^#/]*(?:(?:#|\/\/)\s*(.*))?$/.exec(line);
         if (dotLoc) {
-            loc = locationOf(files.get(dotLoc[1]), Number(dotLoc[2]), dotLoc[3] ?? '');
+            loc = locationOf(files.get(dotLoc[1]), Number(dotLoc[2]), Number(dotLoc[3]), dotLoc[4] ?? '');
             continue;
         }
         if (/-- Begin function/.test(line)) {
@@ -146,18 +152,18 @@ export function filterAsm(text, { directives = false, library = false } = {}) {
 }
 
 /**
- * The mapped location of a `.loc`: its file and line, or, for a file outside
- * the project, the innermost project location in the inlining chain the
- * `.loc`'s comment spells out (`allocate.h:43:28 @[ main.cpp:7:24 ]`).
+ * The mapped location of a `.loc`: its file, line and column, or, for a file
+ * outside the project, the innermost project location in the inlining chain
+ * the `.loc`'s comment spells out (`allocate.h:43:28 @[ main.cpp:7:24 ]`).
  */
-function locationOf(file, line, comment) {
+function locationOf(file, line, column, comment) {
     if (!file || line === 0) return null;
-    if (inProject(file)) return { file, line };
-    for (const m of comment.matchAll(/@\[\s*([^\s:]+):(\d+):\d+/g)) {
+    if (inProject(file)) return { file, line, column };
+    for (const m of comment.matchAll(/@\[\s*([^\s:]+):(\d+):(\d+)/g)) {
         const at = projectPath(m[1]);
-        if (inProject(at) && Number(m[2]) > 0) return { file: at, line: Number(m[2]) };
+        if (inProject(at) && Number(m[2]) > 0) return { file: at, line: Number(m[2]), column: Number(m[3]) };
     }
-    return { file, line };
+    return { file, line, column };
 }
 
 const METADATA = /^(!\d+) = (distinct )?!(\w*)/;
@@ -175,8 +181,8 @@ const DEBUG_FLAGS = /^!\{i32 \d+, !"(Dwarf Version|Debug Info Version)"/;
  * clang printed it, numbering included.
  *
  * Each instruction maps through its `!dbg` DILocation (and its `inlinedAt`
- * chain, as filterAsm does) to its scope's DIFile and line; a `define`
- * maps to its DISubprogram's line; an instruction printed on several lines
+ * chain, as filterAsm does) to its scope's DIFile, line and column; a
+ * `define` maps to its DISubprogram's line, with column 0; an instruction printed on several lines
  * (`invoke ... to label ...`) maps on each of them.
  *
  * - `library: false` hides each function definition (`define` to `}`) none
@@ -211,7 +217,7 @@ export function filterIr(text, { library = false } = {}) {
             const body = nodes.get(n) ?? '';
             const line = Number(field(body, 'line') ?? 0);
             const file = fileOf(field(body, 'scope'));
-            const here = file && line > 0 ? { file, line } : null;
+            const here = file && line > 0 ? { file, line, column: Number(field(body, 'column') ?? 0) } : null;
             if (first === undefined) {
                 first = here;
                 if (!here) return null;
@@ -225,7 +231,7 @@ export function filterIr(text, { library = false } = {}) {
         const body = nodes.get(id) ?? '';
         const line = Number(field(body, 'line') ?? 0);
         const file = fileOf(field(body, 'file') ?? field(body, 'scope'));
-        return file && line > 0 ? { file, line } : null;
+        return file && line > 0 ? { file, line, column: 0 } : null;
     };
 
     // Which metadata goes: DI* nodes, the two debug module flags.
