@@ -46,6 +46,7 @@ import GHC.Driver.Ppr (showSDoc)
 import GHC.Driver.Session (gopt_set)
 import GHC.Hs.Doc (WithHsDocIdentifiers (..))
 import GHC.Hs.DocString (renderHsDocString)
+import GHC.Platform.Ways (Way (WayDyn), addWay)
 import GHC.Iface.Ext.Binary (hie_file_result, readHieFile)
 import GHC.Iface.Ext.Types
 import GHC.Iface.Ext.Utils (recoverFullType, renderHieType, smallestContainingSatisfying)
@@ -112,10 +113,15 @@ yukiInit jsLibdir jsMode jsFlags = do
     initGhcMonad (Just libdir)
     df0 <- getSessionDynFlags
     logger <- getLogger
-    (df1, _, _) <- parseDynamicFlags logger df0 (map noLoc flags)
+    (df1, _, _) <- parseDynamicFlags logger df0 (map noLoc (["-fdiagnostics-as-json" | editor] ++ flags))
     let df2 =
           df1
             { ghcMode = CompManager,
+              -- The libraries' interfaces are their dynamic way's (.dyn_hi):
+              -- the root file system has no others, as GHC here is itself
+              -- dynamically linked. Without the way an editor's session
+              -- looks for Prelude.hi and finds base "missing files".
+              targetWays_ = addWay WayDyn (targetWays_ df1),
               backend = if editor then noBackend else interpreterBackend,
               ghcLink = if editor then NoLink else LinkInMemory,
               verbosity = 0
@@ -129,8 +135,9 @@ yukiInit jsLibdir jsMode jsFlags = do
                 }
             else df2
     _ <- setSessionDynFlags df3
-    -- An editor's diagnostics are GHC's JSON, collected for the answer; a
-    -- runner's are GHC's text on stderr, as ghc prints them.
+    -- An editor's diagnostics are GHC's JSON (-fdiagnostics-as-json makes
+    -- the logger call the JSON hook, not the text one), collected for the
+    -- answer; a runner's are GHC's text on stderr, as ghc prints them.
     when editor $
       modifyLogger (pushJsonLogHook (\_ -> \_ cls doc -> collect diags cls doc))
     getSessionDynFlags

@@ -44,21 +44,21 @@ wasm32-wasi-cabal update
 mkdir -p "$OUT" "$STORE"
 BIN=$(mktemp -d)
 WORK=$(mktemp -d)
-build() { # package version exe
+build() { # package version exe [cabal flags]
     log "$1 $2"
     (
         cd "$WORK"
-        # -f-gpl: hlint without hscolour (GPL), as its own release builds are.
-        wasm32-wasi-cabal --store-dir="$STORE" install "exe:$3" "$1-$2" \
+        wasm32-wasi-cabal --store-dir="$STORE" install "$1-$2" "${@:4}" \
             --installdir="$BIN" --install-method=copy --overwrite-policy=always \
-            --disable-profiling --disable-documentation --constraint='hlint -gpl' \
+            --disable-profiling --disable-documentation \
             --ghc-options='-O1'
     )
     wasm-opt --low-memory-unused --strip-dwarf --strip-debug -Oz "$BIN/$3" -o "$OUT/$3.wasm"
     ls -la "$BIN/$3" "$OUT/$3.wasm"
 }
 build ormolu "$ORMOLU" ormolu
-build hlint "$HLINT" hlint
+# -gpl: hlint without hscolour (GPL), as its own release builds are.
+build hlint "$HLINT" hlint --constraint='hlint -gpl'
 
 # hlint's data files (hlint.yaml and the hints it includes), from the
 # package's source: hlint --datadir=/hlint finds them there.
