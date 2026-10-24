@@ -56,10 +56,11 @@ jobs:
             # build.sh: clang, cmake, ninja; build-vm.sh: clang-18, lld,
             # llvm-strip, clang-tidy-18, flex, bison, bc, cpio, autoconf,
             # automake, libtool, pkg-config, jq (and libelf for the x86-64
-            # kernel's objtool, python3-venv for meson).
+            # kernel's objtool, python3-venv for meson, libltdl-dev for
+            # libffi's LT_SYS_SYMBOL_USCORE, which is in ltdl.m4).
             apt: >-
               clang clang-18 clang-tidy-18 lld llvm cmake ninja-build flex bison bc cpio
-              autoconf automake libtool pkg-config jq libelf-dev python3-venv
+              autoconf automake libtool libltdl-dev pkg-config jq libelf-dev python3-venv
           - pack: haskell
             timeout: 60
           - pack: java
