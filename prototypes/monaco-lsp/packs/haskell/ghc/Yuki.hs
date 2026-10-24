@@ -756,9 +756,10 @@ data Bound = Bound
     bType :: !String
   }
 
--- | Every value binding of the last check's modules, top-level and local
--- (a where or let function is a caller and a callee of its own, as in
--- HLS's call hierarchy); not instance methods, whose name is the class's.
+-- | Every value binding of the last check's modules: top-level ones, and
+-- local functions (a where or let function is a caller and a callee of
+-- its own); not a local that is no function (@let p = Point 3 4@), and not
+-- instance methods, whose name is the class's.
 boundValues :: DynFlags -> M.Map FilePath HieFile -> [Bound]
 boundValues df hies =
   nubOn
@@ -770,7 +771,8 @@ boundValues df hies =
         Just ni <- [M.lookup SourceInfo (getSourcedNodeInfo (sourcedNodeInfo node))],
         (Right n, d) <- M.toList (nodeIdentifiers ni),
         not (generated n),
-        ValBind RegularBind _ (Just whole) <- S.toList (identInfo d)
+        ValBind RegularBind sc (Just whole) <- S.toList (identInfo d),
+        sc == ModuleScope || maybe False (\t -> let (_, args, _) = splitHie (recoverFullType t (hie_types hf)) in not (null args)) (identType d)
     ]
 
 -- | Where a name is used (written as a value: not its binding, its type
@@ -801,6 +803,10 @@ calls st f line col = do
   df <- inGhc st getSessionDynFlags
   let bs = boundValues df hies
       named = M.fromListWith (flip (++)) [(bName b, [b]) | b <- bs]
+      -- A function's name in its own equations (@main = ...@) is recorded
+      -- as a use too: it is no call.
+      sels = S.fromList [(bFile b, bSel b) | b <- bs]
+      calledIn file hf wanted = [(n, sp) | (n, sp) <- usesIn hf wanted, not ((file, sp) `S.member` sels)]
       inFile = M.fromListWith (++) [(bFile b, [b]) | b <- bs]
       -- The innermost binding around a use.
       enclosing file sp =
@@ -827,14 +833,14 @@ calls st f line col = do
             grouped
               [ (c, sp)
                 | (file, hf) <- M.toList hies,
-                  (_, sp) <- usesIn hf (== bName b),
+                  (_, sp) <- calledIn file hf (== bName b),
                   Just c <- [enclosing file sp]
               ]
           outgoing =
             grouped
               [ (c, sp)
                 | Just hf <- [M.lookup (bFile b) hies],
-                  (n, sp) <- usesIn hf (`M.member` named),
+                  (n, sp) <- calledIn (bFile b) hf (`M.member` named),
                   bSpan b `containsSpan` sp,
                   Just c <- [M.lookup n named >>= listToMaybe]
               ]

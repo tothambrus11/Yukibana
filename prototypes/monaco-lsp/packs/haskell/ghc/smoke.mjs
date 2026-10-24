@@ -121,9 +121,9 @@ const tk = await ask(['tokens', '/tmp/workspace/Main.hs']);
 expect('tokens of Main.hs', Array.isArray(tk) && tk.length >= 5 * 10 && tk.includes('norm') && tk.includes('enumMember') && tk.includes('function'), tk);
 // Call hierarchy, explicit imports, and the modules that export a name.
 const c1 = await ask(['calls', '/tmp/workspace/Geometry.hs', '9', '1']); // norm's binding
-expect('incoming calls of norm', c1.item?.name === 'norm' && c1.incoming?.some((c) => c.from.name === 'main'), c1);
+expect('incoming calls of norm', c1.item?.name === 'norm' && c1.incoming?.length === 2 && c1.incoming.every((c) => c.from.name === 'main'), c1);
 const c2 = await ask(['calls', '/tmp/workspace/Main.hs', '13', '1']); // main's binding
-expect('outgoing calls of main', c2.item?.name === 'main' && c2.outgoing?.some((c) => c.to.name === 'norm'), c2);
+expect('outgoing calls of main', c2.item?.name === 'main' && c2.outgoing?.some((c) => c.to.name === 'norm') && !c2.incoming?.length, c2);
 const im = await ask(['imports', '/tmp/workspace/Main.hs']);
 expect('explicit imports of Main.hs', Array.isArray(im) && im.some((i) => i.module === 'Geometry' && i.items.includes('norm') && i.items.some((x) => x.startsWith('Point'))) && im.some((i) => i.module === 'Control.Monad.State' && i.items.includes('evalState')), im);
 const ex1 = await ask(['exports', 'sortBy']);
