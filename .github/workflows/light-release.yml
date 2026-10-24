@@ -217,9 +217,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # 24: setup-node's npm cache runs npm at the repository root, whose
+      # package.json (the IDE's) requires Node 24 (devEngines).
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: prototypes/monaco-lsp/app/package-lock.json
 
