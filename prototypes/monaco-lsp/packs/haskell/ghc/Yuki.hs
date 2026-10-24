@@ -34,8 +34,10 @@ import Data.List (intercalate, nub, sortOn, stripPrefix)
 import qualified Data.Map.Strict as M
 import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe)
 import qualified Data.Set as S
-import GHC.IO.Handle.FD (fdToHandle)
-import GHC.IO.Handle.Types (Handle (..))
+import GHC.IO.Encoding (getLocaleEncoding)
+import qualified GHC.IO.FD as FD
+import GHC.IO.Handle.Internals (mkHandle)
+import GHC.IO.Handle.Types (Handle (..), HandleType (ReadHandle), nativeNewlineMode)
 import System.Environment (setEnv)
 import System.Exit (ExitCode (..))
 import System.IO
@@ -558,12 +560,17 @@ run st args = do
 -- | Gives the next program the standard handles a new process would have:
 -- a session runs one program after another (the runner keeps it, as GHCi
 -- does), and the last may have read stdin to its end (getContents leaves
--- it semi-closed, unusable) or changed the buffering. stdin becomes a new
--- handle on fd 0, without what the last program left unread; stdout and
--- stderr are unbuffered again.
+-- it closed) or changed the buffering. stdin's handle gets a new state,
+-- made as base makes stdin's (fd 0, the locale's encoding, no finalizer),
+-- without what the last program left unread; stdout and stderr are
+-- unbuffered again. Not fdToHandle 0: it asks fcntl for fd 0's mode, which
+-- WASI answers as read-write, and makes a duplex handle that stdin's state
+-- cannot be taken from. The programs' stdin is this module's: the
+-- interpreter runs them in this process, against the same base.
 freshStdio :: IO ()
 freshStdio = do
-  h <- fdToHandle 0
+  enc <- getLocaleEncoding
+  h <- mkHandle FD.stdin "<stdin>" ReadHandle True (Just enc) nativeNewlineMode Nothing Nothing
   case (stdin, h) of
     (FileHandle _ old, FileHandle _ new) -> do
       fresh <- takeMVar new
