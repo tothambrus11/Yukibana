@@ -68,8 +68,11 @@ build() { # package version sha256 exe [cabal flags]
             --with-alex="$(command -v alex)" --with-happy="$(command -v happy)" \
             --ghc-options='-O1'
     )
-    wasm-opt --low-memory-unused --strip-dwarf --strip-debug -Oz "$BIN/$4" -o "$OUT/$4.wasm"
-    ls -la "$BIN/$4" "$OUT/$4.wasm"
+    # cabal names a wasm executable X.wasm.
+    local exe="$BIN/$4.wasm"
+    [[ -f "$exe" ]] || exe="$BIN/$4"
+    wasm-opt --low-memory-unused --strip-dwarf --strip-debug -Oz "$exe" -o "$OUT/$4.wasm"
+    ls -la "$exe" "$OUT/$4.wasm"
 }
 build ormolu "$ORMOLU" "$ORMOLU_SHA256" ormolu
 # -gpl: hlint without hscolour (GPL), as its own release builds are.
