@@ -9,14 +9,15 @@
 #   ghc/build-tools.sh OUT
 #
 # writes OUT/ormolu.wasm, OUT/hlint.wasm, OUT/hlint/ (hlint's data files:
-# its hints), OUT/tools.json (versions) and OUT/LICENSE-tools.txt, then runs
-# each once under wasmtime (which ghc-wasm-meta installs).
+# its hints), OUT/tools.json (versions), OUT/LICENSE-tools.txt and
+# OUT/SHA256SUMS (every file's), then runs each once under wasmtime (which
+# ghc-wasm-meta installs).
 #
 # ghc-lib-parser generates its lexer and parser when it is built, with the
 # build machine's alex and happy (the workflow installs them).
 #
 # Like build-rootfs.sh it needs GHC's wasm toolchain, so it runs in CI
-# (.github/workflows/haskell-ghc.yml), which installs it the same way.
+# (.github/workflows/haskell-ghc-tools.yml), which installs it the same way.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -28,7 +29,9 @@ STORE=/tmp/yk/tools-store
 # Pinned: the formatter's output is the project's style, and hlint's hints
 # are what the editor offers.
 ORMOLU=0.9.0.0
+ORMOLU_SHA256=212ee5ec17638f802a406122c8b839e3e6aa05d9b5886bfeb46cc90935f0bc6f
 HLINT=3.10
+HLINT_SHA256=d99672337c06b455884ac14418d562701143141d0d7e46af476817c2ae3efe37
 
 log() { printf '\n== %s\n' "$*"; }
 
@@ -50,25 +53,27 @@ WORK=$(mktemp -d)
 # Each is built from its source as a local package: their executables ask
 # for GHC's threaded RTS (-threaded), which WebAssembly has not, so the flag
 # is taken out of the .cabal file first.
-build() { # package version exe [cabal flags]
+build() { # package version sha256 exe [cabal flags]
     log "$1 $2"
     (
         cd "$WORK"
-        wasm32-wasi-cabal get "$1-$2" >/dev/null
+        curl -fsSL --retry 5 -o "$1-$2.tar.gz" "https://hackage.haskell.org/package/$1-$2/$1-$2.tar.gz"
+        echo "$3  $1-$2.tar.gz" | sha256sum -c --quiet -
+        tar xzf "$1-$2.tar.gz"
         cd "$1-$2"
         sed -i 's/-threaded//g' "$1.cabal"
-        wasm32-wasi-cabal --store-dir="$STORE" install "exe:$3" "${@:4}" \
+        wasm32-wasi-cabal --store-dir="$STORE" install "exe:$4" "${@:5}" \
             --installdir="$BIN" --install-method=copy --overwrite-policy=always \
             --disable-profiling --disable-documentation \
             --with-alex="$(command -v alex)" --with-happy="$(command -v happy)" \
             --ghc-options='-O1'
     )
-    wasm-opt --low-memory-unused --strip-dwarf --strip-debug -Oz "$BIN/$3" -o "$OUT/$3.wasm"
-    ls -la "$BIN/$3" "$OUT/$3.wasm"
+    wasm-opt --low-memory-unused --strip-dwarf --strip-debug -Oz "$BIN/$4" -o "$OUT/$4.wasm"
+    ls -la "$BIN/$4" "$OUT/$4.wasm"
 }
-build ormolu "$ORMOLU" ormolu
+build ormolu "$ORMOLU" "$ORMOLU_SHA256" ormolu
 # -gpl: hlint without hscolour (GPL), as its own release builds are.
-build hlint "$HLINT" hlint --flags=-gpl
+build hlint "$HLINT" "$HLINT_SHA256" hlint --flags=-gpl
 
 # hlint's data files (hlint.yaml and the hints it includes), from the
 # package's source: hlint --datadir=/hlint finds them there.
@@ -90,4 +95,7 @@ wasmtime run "$OUT/ormolu.wasm" --stdin-input-file A.hs < "$WORK/A.hs"
 hints=$(wasmtime run --dir "$OUT/hlint::/hlint" --dir "$WORK::/w" "$OUT/hlint.wasm" --datadir=/hlint --json /w/A.hs || true)
 echo "$hints"
 grep -q '"hint"' <<<"$hints"
+# Every file's hash, for the pack's build.sh to pin (it pins this file's).
+(cd "$OUT" && find . -type f ! -name SHA256SUMS | sort | xargs sha256sum > SHA256SUMS)
+cat "$OUT/SHA256SUMS"
 ls -la "$OUT"
