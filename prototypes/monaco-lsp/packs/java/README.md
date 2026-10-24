@@ -164,6 +164,41 @@ directly. Therefore **`@ParameterizedTest`, `@RepeatedTest`,
 The report is the console launcher's tree (`✔`, `✘`, `↷`) and summary, in
 its colours.
 
+### Property-based tests: not available
+
+No Java property-based testing library links under TeaVM without changing
+it or replacing its entry points. What was tried and why each fails:
+
+* **jqwik** (the maintained one) is a JUnit Platform test engine: it finds
+  `@Property` methods, their parameters and their `@ForAll` generators by
+  reflection and runs them through the Platform's launcher. TeaVM has no
+  reflection and this runner does not use the Platform (above).
+* **junit-quickcheck** is a JUnit 4 runner that resolves a generator for
+  each parameter type by reflection: the same two problems.
+* **QuickTheories 0.26** is a plain API (`qt().forAll(integers().all())
+  .check(i -> ...)`), with shrinking, and was tried: merged into
+  `junit.jar`, a two-property test compiles with javac and then fails to
+  link: `error: Method is not annotated with {{c0}}` (TeaVM's message for a
+  native method with no WebAssembly `@Import`). The method is
+  `java.util.ServiceLoader.load`: `qt()` builds its default strategy
+  through `Configuration.pickGuidance()`, which looks up an optional
+  coverage-guidance plugin with `ServiceLoader`, and a one-line program
+  calling `ServiceLoader.load(Runnable.class)` fails with the same error.
+  Building a `Strategy` by hand avoids that path, but then `qt()`, the
+  library's entry point, would not work, and the tests would not run
+  unchanged with Maven.
+* **vavr-test** (with vavr, about 1 MB) does not shrink: a failure
+  reports the random value it happened on, so it was not tried.
+
+### Mutation testing: not available
+
+PIT (pitest), the Java mutation tester, mutates bytecode in a JVM and runs
+each mutant's tests in child JVMs ("minions") that it drives over a
+socket, through the JUnit Platform with a coverage agent attached. None of
+those exist here: one TeaVM-compiled WebAssembly module per run, no class
+loading, no agents, no processes. Each mutant would also be a full TeaVM
+link (2 to 4 s for the sample). There is no other existing tool.
+
 ## Download (Maven)
 
 Download writes a `pom.xml` (Java 25, JUnit 5.14.4, maven-compiler-plugin

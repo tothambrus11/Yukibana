@@ -174,7 +174,10 @@ after weeks without a visit, persistent storage or not.
   Traces have no stack frames, and an array index out of bounds ends the
   run instead of being catchable. Tests are JUnit Jupiter's `@Test` with
   lifecycle methods and assertions; parameterized, repeated and dynamic
-  tests are skipped. Run takes 2 s or more (TeaVM links each time).
+  tests are skipped. Run takes 2 s or more (TeaVM links each time). No
+  property-based or mutation testing: jqwik and PIT need reflection, the
+  JUnit Platform and JVMs, and QuickTheories does not link (it calls
+  `ServiceLoader`) (packs/java/README.md).
 * **Kotlin**: syntax only. kotlinc runs only on a JVM, so there are no
   type errors, no library members in completion, no Run and no Test;
   completion, hover and definition cover the project's own declarations.
