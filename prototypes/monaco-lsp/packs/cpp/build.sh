@@ -98,6 +98,21 @@ if [ ! -x emsdk/upstream/emscripten/emcc ] || [ "$(git -C emsdk rev-parse HEAD 2
   (cd emsdk && EMSDK_KEEP_DOWNLOADS=1 ./emsdk install $EMSDK_VERSION >/dev/null && ./emsdk activate $EMSDK_VERSION >/dev/null)
   rm -rf emsdk/downloads
 fi
+# Emscripten's proxying: a synchronous proxied call is signalled before its
+# mutex is unlocked, as upstream does from 5.0.5 (the patch says why: clangd
+# trapped on "unaligned accesses" about one C++ e2e run in four). Its libc is
+# prebuilt in the emsdk's cache, so the multithreaded variants are deleted for
+# emcc to rebuild from the patched source on the next link; .proxying-patched
+# holds the patch's SHA-256, and a change to it also relinks clangd.
+proxying_sha=$(sha256sum < "$HERE/patches/emscripten-proxying-signal-before-unlock.patch" | cut -d' ' -f1)
+if [ "$(cat emsdk/.proxying-patched 2>/dev/null)" != "$proxying_sha" ]; then
+  p="$HERE/patches/emscripten-proxying-signal-before-unlock.patch"
+  patch -d emsdk/upstream/emscripten -p1 -R --dry-run --quiet < "$p" >/dev/null 2>&1 ||
+    patch -d emsdk/upstream/emscripten -p1 --quiet < "$p"
+  rm -f emsdk/upstream/emscripten/cache/sysroot/lib/wasm32-emscripten/libc-mt*.a
+  rm -f build-wasm/bin/clangd.js
+  echo "$proxying_sha" > emsdk/.proxying-patched
+fi
 
 step "native table generators"
 # The wasm build runs these on the host; it cannot run its own.

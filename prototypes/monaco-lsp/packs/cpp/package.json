@@ -10,7 +10,8 @@
         "test:targets": "node --test test-targets.mjs",
         "test:emit": "node --test test-emit.mjs",
         "test:demangle": "node test-demangle.mjs",
-        "fixtures": "node tests/fixtures/gen.mjs"
+        "fixtures": "node tests/fixtures/gen.mjs",
+        "test:proxying": "node test-proxying.mjs"
     },
     "devDependencies": {
         "esbuild": "0.25.10",

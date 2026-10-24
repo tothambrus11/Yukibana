@@ -128,6 +128,36 @@ detached fallback threads, the compile-database broadcast, a missing
 for stdin, limiting it to Chrome 137+. With threads, upstream needs only
 the three above.
 
+### Emscripten's proxying (`patches/emscripten-proxying-signal-before-unlock.patch`)
+
+clangd's threads read files and write stdout through calls proxied
+synchronously to the Worker that loaded it (`server.js`), and the call's
+context lives on the calling thread's stack. Emscripten 4.0.22's
+`emscripten_proxy_finish` set the call DONE, unlocked the context's mutex
+and only then signalled its condition variable. In between, the caller
+could take the mutex, see DONE without waiting, return and reuse its stack;
+the signal then ran on whatever was there. When that held an odd number
+where musl's condition variable keeps its waiter list, Wasm trapped on
+`server.js` with "operation does not support unaligned accesses". Nothing
+handles errors of the language server's Worker, so it was a page error: the
+C++ e2e failed its "no page errors" check about one run in four on a busy
+machine, with every other check passing. With an aligned number it could
+corrupt memory or spin on the condition's lock instead.
+
+Upstream signals before unlocking since 5.0.5 (emscripten-core/emscripten#26582,
+which QEMU's 6.0.13 build already has; see vm/README.md, item 2). `build.sh`
+applies that change to the cached emsdk, deletes the prebuilt `libc-mt*.a`
+so emcc rebuilds them from the patched source, and relinks clangd. The
+relinked `clangd.wasm` differs from the old one in exactly those two
+swapped calls (`emscripten_proxy_finish` and `cancel_ctx`).
+
+`node test-proxying.mjs` checks the emsdk's `proxying.c`: it widens the
+race with delays (the caller takes the lock 10 ms late, the finishing thread
+waits 50 ms between its two last steps and checks the context still says
+DONE) and runs `tests/proxying-race/race.c`. The emsdk's code must finish
+every call; the same code with unlock and signal in the old order must be
+caught, so the test is known to detect the bug.
+
 ## What works, what does not
 
 `node test.mjs` (headless Chromium 1194, page cross-origin isolated), on the shared 4-core build machine. Session 1 is a project of
