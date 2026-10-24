@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LANGUAGES } from '../src/lib/languages.ts';
-import { exportProject } from '../src/lib/export.ts';
+import { buildSbt, exportProject } from '../src/lib/export.ts';
 import { zip } from '../src/lib/zip.ts';
 import { chooseTestFramework } from '../src/lib/cpp-tests.ts';
 
@@ -181,19 +181,31 @@ async function python(name, files) {
 	step(`${name}: pytest run on the tests folder imports the project's modules`, py, ['-m', 'pytest', 'tests'], dir, '6 passed');
 }
 
+/** sbt run of a Scala project, its output expected to contain `expect`. */
+async function scalaRun(name, files, expect) {
+	const dir = await download(name, sample('scala'), files);
+	if (!dir) return;
+	const { sbt, flags } = sbtCommand();
+	if (!sbt) return skip(`${name}: sbt is missing`);
+	step(`${name}: sbt run prints the report`, sbt, [...flags, '--batch', 'run'], dir, expect);
+}
+
+/** sbt on the PATH, or the one the Scala pack built with, with its caches and mirror. */
+function sbtCommand() {
+	const cache = join(PACK_CACHE, 'scala');
+	if (has('sbt')) return { sbt: 'sbt', flags: [] };
+	const sbt = join(cache, 'bin', 'sbt-1.11.7', 'bin', 'sbt');
+	if (!existsSync(sbt)) return { sbt: null, flags: [] };
+	const flags = [`-Dsbt.global.base=${cache}/sbt-global`, `-Dsbt.boot.directory=${cache}/sbt-boot`, `-Dsbt.ivy.home=${cache}/ivy2`, `-Dsbt.coursier.home=${cache}/coursier`];
+	if (existsSync(join(cache, 'sbt-project', 'repositories'))) flags.push(`-Dsbt.repository.config=${cache}/sbt-project/repositories`, '-Dsbt.override.build.repos=true');
+	return { sbt, flags };
+}
+
 async function scala(name, files, expectTests) {
 	const dir = await download(name, sample('scala'), files);
 	if (!dir) return;
-	// sbt on the PATH, or the one the Scala pack built with, with its caches and mirror.
-	const cache = join(PACK_CACHE, 'scala');
-	let sbt = 'sbt';
-	let flags = [];
-	if (!has('sbt')) {
-		sbt = join(cache, 'bin', 'sbt-1.11.7', 'bin', 'sbt');
-		if (!existsSync(sbt)) return skip(`${name}: sbt is missing`);
-		flags = [`-Dsbt.global.base=${cache}/sbt-global`, `-Dsbt.boot.directory=${cache}/sbt-boot`, `-Dsbt.ivy.home=${cache}/ivy2`, `-Dsbt.coursier.home=${cache}/coursier`];
-		if (existsSync(join(cache, 'sbt-project', 'repositories'))) flags.push(`-Dsbt.repository.config=${cache}/sbt-project/repositories`, '-Dsbt.override.build.repos=true');
-	}
+	const { sbt, flags } = sbtCommand();
+	if (!sbt) return skip(`${name}: sbt is missing`);
 	step(`${name}: sbt run prints the distance`, sbt, [...flags, '--batch', 'run'], dir, 'Point(0.0,0.0) to Point(3.0,4.0): 5.0');
 	if (expectTests) step(`${name}: sbt test runs the MUnit suite in tests/`, sbt, [...flags, '--batch', 'test'], dir, `Passed: Total ${expectTests}`);
 }
@@ -290,6 +302,11 @@ const cases = {
 		await scala('scala', sample('scala').sample, 0);
 		const suite = 'class GeometrySuite extends munit.FunSuite:\n  test("norm of (3, 4) is 5") {\n    assertEquals(Point(3, 4).norm, 5.0)\n  }\n';
 		await scala('scala-tests', { ...sample('scala').sample, 'tests/GeometrySuite.scala': suite, 'util/Twice.scala': 'def twice(x: Int): Int = 2 * x\n' }, 1);
+		// Properties checked from a main, as the browser runs them: build.sbt
+		// asks sbt for ScalaCheck, and the same program prints the same report.
+		const props = 'import org.scalacheck.Prop.forAll\n\n@main def properties(): Unit =\n  forAll((a: Int, b: Int) => a + b == b + a).check()\n';
+		check(buildSbt({ 'Props.scala': props }).includes('"org.scalacheck" %% "scalacheck" % "1.18.1",'), 'scala-scalacheck: build.sbt has ScalaCheck as a dependency of the main sources');
+		await scalaRun('scala-scalacheck', { 'Props.scala': props }, '+ OK, passed 100 tests.');
 	},
 };
 // An empty folder survives the zip.

@@ -22,6 +22,12 @@
 #   classpath-sjs.bin  what -scalajs type-checks against on top of
 #                    classpath.bin: scala.scalajs.* of scalajs-library and
 #                    scala3-library_sjs1, stripped like classpath.bin
+#   scalacheck-$SCALACHECK_VERSION-classpath.bin, scalacheck-$SCALACHECK_VERSION-sjsir.bin
+#                    ScalaCheck for Scala.js (scalacheck_sjs1_3) and the
+#                    scalajs-test-interface it depends on: their TASTy and
+#                    class files stripped like classpath.bin, and their IR;
+#                    loaded only for a project that names org.scalacheck
+#   LICENSE-scalacheck.txt  ScalaCheck's licence (BSD-3-Clause)
 #   manifest.json    file names and uncompressed sizes, for progress
 #   *.gz, *.br       compressed siblings
 #
@@ -36,6 +42,9 @@ SCALA3_COMMIT=40be7608a48477951218ae3a8ac8749fe02ba988
 SCALAJS_VERSION=1.19.0          # what scala3 3.7.4 builds its Scala.js support with
 SCALA2_LIBRARY=2.13.16          # what scala3-library 3.7.4 depends on
 SBT_VERSION=1.11.7
+SCALACHECK_VERSION=1.18.1       # the newest scalacheck_sjs1_3
+# ScalaCheck's LICENSE at its release tag (the jar has none).
+SCALACHECK_LICENSE_SHA256=aac4ed1eece9c424fc97590c2199e661a747e7b851630f5141a89823fd242374
 SBT_SHA256=1232818f91c39639a93bbe1108e12d94c7044a646a7847f1a3977b9e46716cd6
 declare -A SHA256=(
     [scalajs-ir_2.13-$SCALAJS_VERSION-sources.jar]=177a2f22b74d6c758eedcee84dba3679eb510ec4fbfbb176d0783e11168d26e4
@@ -49,6 +58,10 @@ declare -A SHA256=(
     [scalajs-scalalib_2.13-$SCALA2_LIBRARY+$SCALAJS_VERSION.jar]=0d4083c16576940d52231f9659df0d723de50542b4c72144d95853b0c00d2792
     [scalajs-library_2.13-$SCALAJS_VERSION.jar]=a17c6d84dd64e9f38c0707338e21ed6e97d3a5431bb61b35ecab5ee4375c3cbd
     [scala3-library_sjs1_3-$SCALA_VERSION.jar]=6cf19666c73dac29f216b916018b0e7031134d132b7590c0a5bc6f0cfd9f80a8
+    # ScalaCheck, and the test interface its POM names (1.16.0 there; this
+    # pack's Scala.js version, as sbt's eviction would pick).
+    [scalacheck_sjs1_3-$SCALACHECK_VERSION.jar]=46631652e4ea1a09d737f86de439880f6a13847df3f41df993b6ef5a53b6901f
+    [scalajs-test-interface_2.13-$SCALAJS_VERSION.jar]=a913d2caf254bfb86be183af17749d2c817d86366f28756563a91515a5ad8506
 )
 # The JDK whose java.base API goes into classpath.bin. Pinned so the class path
 # does not depend on whichever JDK runs the build (that was the case once).
@@ -105,6 +118,13 @@ fetch "org/scala-js/scalajs-javalib/$SCALAJS_VERSION/scalajs-javalib-$SCALAJS_VE
 fetch "org/scala-js/scalajs-scalalib_2.13/$SCALA2_LIBRARY%2B$SCALAJS_VERSION/scalajs-scalalib_2.13-$SCALA2_LIBRARY%2B$SCALAJS_VERSION.jar" "scalajs-scalalib_2.13-$SCALA2_LIBRARY+$SCALAJS_VERSION.jar"
 fetch "org/scala-js/scalajs-library_2.13/$SCALAJS_VERSION/scalajs-library_2.13-$SCALAJS_VERSION.jar" "scalajs-library_2.13-$SCALAJS_VERSION.jar"
 fetch "org/scala-lang/scala3-library_sjs1_3/$SCALA_VERSION/scala3-library_sjs1_3-$SCALA_VERSION.jar" "scala3-library_sjs1_3-$SCALA_VERSION.jar"
+fetch "org/scalacheck/scalacheck_sjs1_3/$SCALACHECK_VERSION/scalacheck_sjs1_3-$SCALACHECK_VERSION.jar" "scalacheck_sjs1_3-$SCALACHECK_VERSION.jar"
+fetch "org/scala-js/scalajs-test-interface_2.13/$SCALAJS_VERSION/scalajs-test-interface_2.13-$SCALAJS_VERSION.jar" "scalajs-test-interface_2.13-$SCALAJS_VERSION.jar"
+if [ ! -f "$CACHE/LICENSE-scalacheck-$SCALACHECK_VERSION.txt" ]; then
+    curl -fsSL -o "$CACHE/LICENSE-scalacheck-$SCALACHECK_VERSION.txt.part" "https://raw.githubusercontent.com/typelevel/scalacheck/v$SCALACHECK_VERSION/LICENSE"
+    mv "$CACHE/LICENSE-scalacheck-$SCALACHECK_VERSION.txt.part" "$CACHE/LICENSE-scalacheck-$SCALACHECK_VERSION.txt"
+fi
+echo "$SCALACHECK_LICENSE_SHA256  $CACHE/LICENSE-scalacheck-$SCALACHECK_VERSION.txt" | sha256sum -c --quiet -
 
 # 4. The source tree sbt compiles: upstream + patches (cheap, always redone).
 "$HERE/scripts/prepare-upstream.sh" "$CACHE/upstream" "$SRC" "$CACHE/jars/scalajs-ir_2.13-$SCALAJS_VERSION-sources.jar" "$HERE/patches" \
@@ -160,6 +180,17 @@ node "$HERE/scripts/sjsir-bundle.mjs" "$CACHE/sjsir.bin" "$RUNTIME_CLASSES" "$CA
     "$CACHE/sjsir/scalajs-javalib-$SCALAJS_VERSION"
 rm -rf "$CACHE/sjsir"
 
+# 6c. ScalaCheck, as its own pair of bundles so that a project without it
+#     downloads nothing more: the class path one without a closure (the
+#     java.base classes it names are in classpath.bin and classpath-sjs.bin).
+(cd "$CACHE" && $NICE java -cp "$CACHE/jars/asm-9.8.jar" "$HERE/scripts/StripClasses.java" "$CACHE/scalacheck-$SCALACHECK_VERSION-classpath.bin" /dev/null \
+    "$CACHE/jars/scalacheck_sjs1_3-$SCALACHECK_VERSION.jar" "$CACHE/jars/scalajs-test-interface_2.13-$SCALAJS_VERSION.jar")
+rm -rf "$CACHE/sjsir-qc" && mkdir -p "$CACHE/sjsir-qc/a" "$CACHE/sjsir-qc/b"
+unzip -q "$CACHE/jars/scalacheck_sjs1_3-$SCALACHECK_VERSION.jar" '*.sjsir' -d "$CACHE/sjsir-qc/a"
+unzip -q "$CACHE/jars/scalajs-test-interface_2.13-$SCALAJS_VERSION.jar" '*.sjsir' -d "$CACHE/sjsir-qc/b"
+node "$HERE/scripts/sjsir-bundle.mjs" "$CACHE/scalacheck-$SCALACHECK_VERSION-sjsir.bin" "$CACHE/sjsir-qc/a" "$CACHE/sjsir-qc/b"
+rm -rf "$CACHE/sjsir-qc"
+
 # 7. Output. esbuild only removes whitespace and renames locals (no property
 #    mangling), which is all Scala.js's ES-module output leaves to do.
 #    Its only warnings are about Scala.js comparing with -0 on purpose.
@@ -170,7 +201,9 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 cp "$CACHE/classpath.bin" "$OUT/classpath.bin"
 cp "$CACHE/classpath-sjs.bin" "$OUT/classpath-sjs.bin"
 cp "$CACHE/sjsir.bin" "$OUT/sjsir.bin"
+cp "$CACHE/scalacheck-$SCALACHECK_VERSION-classpath.bin" "$CACHE/scalacheck-$SCALACHECK_VERSION-sjsir.bin" "$OUT/"
+cp "$CACHE/LICENSE-scalacheck-$SCALACHECK_VERSION.txt" "$OUT/LICENSE-scalacheck.txt"
 cp "$HERE/src/server.js" "$OUT/server.js"
 cp "$HERE/src/runner.js" "$OUT/runner.js"
-node "$HERE/scripts/finish.mjs" "$OUT" "$SCALA_VERSION" "$JDK_VERSION" "$SCALAJS_VERSION"
+node "$HERE/scripts/finish.mjs" "$OUT" "$SCALA_VERSION" "$JDK_VERSION" "$SCALAJS_VERSION" "$SCALACHECK_VERSION"
 ls -l "$OUT"

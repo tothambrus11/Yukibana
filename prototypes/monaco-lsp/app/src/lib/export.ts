@@ -580,12 +580,28 @@ const SCALA_VERSION = '3.7.4';
 const SBT_VERSION = '1.11.7';
 /** MUnit for tests in tests/, which the browser does not run yet. */
 const MUNIT_VERSION = '1.2.1';
+/** The ScalaCheck the browser's Scala pack adds for a project that names it (packs/scala/build.sh). */
+const SCALACHECK_VERSION = '1.18.1';
+
+/**
+ * Where a Scala project names ScalaCheck's package, as the browser's runner
+ * looks for it (packs/scala/src/runner.js, `usesScalaCheck`): 'main' when a
+ * source outside tests/ does (the browser runs properties from main, so the
+ * dependency is a compile one), 'test' when only tests/ do, or null.
+ */
+export function scalaCheckScope(files: Files): 'main' | 'test' | null {
+	const uses = Object.entries(files).filter(([path, text]) => path.endsWith('.scala') && /\borg\.scalacheck\b/.test(text));
+	if (uses.some(([path]) => !path.startsWith('tests/'))) return 'main';
+	return uses.length ? 'test' : null;
+}
 
 /**
  * build.sbt for the project where it is: the sources are every .scala and
  * .java file under the project folder, not src/main/scala, except tests/,
  * project/, target/ and hidden folders (.metals, .bsp, .idea), which hold
  * sbt's and the editors' own files; tests/ is the test sources, with MUnit.
+ * ScalaCheck is a dependency when the project names it (`scalaCheckScope`):
+ * of the main sources, or of the tests only.
  * `sourcesInBase` is off because the base folder is already the source
  * folder, and sbt would otherwise compile its files into the tests a second
  * time. sbt rather than scala-cli: IntelliJ imports an sbt build directly and
@@ -594,6 +610,7 @@ const MUNIT_VERSION = '1.2.1';
  */
 export function buildSbt(files: Files): string {
 	const hasTests = Object.keys(files).some((p) => p.startsWith('tests/') && /\.(scala|java)$/.test(p));
+	const scalaCheck = scalaCheckScope(files);
 	return [
 		'// Builds the project where it is, with the layout it had in Yukibana Light:',
 		`//   sbt run${hasTests ? ', sbt test' : ''}`,
@@ -620,6 +637,7 @@ export function buildSbt(files: Files): string {
 		'    Test / javaSource := baseDirectory.value / "tests",',
 		'    Test / unmanagedSources / excludeFilter := HiddenFileFilter,',
 		`    libraryDependencies += "org.scalameta" %% "munit" % ${JSON.stringify(MUNIT_VERSION)} % Test,`,
+		...(scalaCheck ? [`    libraryDependencies += "org.scalacheck" %% "scalacheck" % ${JSON.stringify(SCALACHECK_VERSION)}${scalaCheck === 'test' ? ' % Test' : ''},`] : []),
 		'  )',
 		'',
 	].join('\n');

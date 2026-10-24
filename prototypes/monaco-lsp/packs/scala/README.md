@@ -198,7 +198,8 @@ without waiting for them.
 `40be7608`); Scala.js 1.19.0 linker, `scalajs-javalib` 1.19.0,
 `scalajs-library_2.13` 1.19.0, `scalajs-scalalib_2.13` 2.13.16+1.19.0 and
 `scala3-library_sjs1_3` 3.7.4 (all from Maven Central, sha256-pinned in
-`build.sh`; the linker through sbt).
+`build.sh`; the linker through sbt); ScalaCheck `scalacheck_sjs1_3` 1.18.1
+and `scalajs-test-interface_2.13` 1.19.0 (below).
 
 **Limits**, all of them Scala.js's, not this pack's (a program that hits one
 fails at link time with Scala.js's own message on stderr, never silently):
@@ -219,7 +220,7 @@ fails at link time with Scala.js's own message on stderr, never silently):
   (use `scala.io.StdIn`). A program that compiles can therefore still fail to
   link, with a `link error: Referring to non-existent ...` on stderr.
 * **No macros** (as in the language server: they are JVM code the browser
-  cannot run), no dependencies, no `scala.concurrent.Await` (Scala.js cannot
+  cannot run), no dependencies but ScalaCheck (below), no `scala.concurrent.Await` (Scala.js cannot
   block). The run ends when `main` returns, so asynchronous work still
   pending then (a `Future` callback, a timer) is cut off.
 * **One run per worker:** each Run starts a fresh worker, so the compiler and
@@ -228,6 +229,73 @@ fails at link time with Scala.js's own message on stderr, never silently):
   (Stop), which the test checks.
 * Needs `crossOriginIsolated` only for standard input; everything else works
   without it.
+
+### Property-based tests (ScalaCheck)
+
+[ScalaCheck](https://scalacheck.org) 1.18.1 for Scala.js
+(`org.scalacheck:scalacheck_sjs1_3`, the newest) is on the class path of
+a project that names `org.scalacheck` anywhere in its sources (an import
+or a qualified name), as sbt would put it there for
+`libraryDependencies += "org.scalacheck" %%% "scalacheck" % "1.18.1"`.
+The editor then completes and hovers it and type-checks against it; Run
+compiles and links against it. Scala has no Test here yet, so properties
+run from a `main`:
+
+```scala
+import org.scalacheck.{Gen, Properties}
+import org.scalacheck.Prop.forAll
+
+object GeometrySpec extends Properties("Geometry"):
+  val point = for x <- Gen.choose(-1e9, 1e9); y <- Gen.choose(-1e9, 1e9) yield (x, y)
+  property("distance is symmetric") = forAll(point, point)((a, b) => distance(a, b) == distance(b, a))
+  property("norm stays under 100") = forAll((n: Int) => distance((n.toDouble, 0.0), (0.0, 0.0)) < 100)
+
+@main def properties(): Unit = GeometrySpec.check()
+```
+
+prints ScalaCheck's own report, the failing case shrunk (the original
+argument and a seed to replay it with `.withInitialSeed` included):
+
+```
++ Geometry.distance is symmetric: OK, passed 100 tests.
+failing seed for Geometry.norm stays under 100 is gSDBwVAWsX6I_Dqn5rHoGZex0xCdkhSW35XBQkjRoKD=
+! Geometry.norm stays under 100: Falsified after 0 passed tests.
+> ARG_0: 127
+> ARG_0_ORIGINAL: 2147483647
+```
+
+Limits: `check()` prints and returns, so a falsified property does not make
+the run exit non-zero; `Properties.main` (what sbt's runner would call)
+does not link, because it calls `System.exit`, which Scala.js does not have.
+ScalaCheck's shrinking of numbers halves them, so the shrunk value is a
+small failing one, not always the smallest (127 above, not 100). What
+`build.sh` does: the jar and the `scalajs-test-interface` it depends on
+(its POM names 1.16.0; this pack's 1.19.0, as sbt's eviction would pick)
+are stripped like `classpath.bin` into `scalacheck-1.18.1-classpath.bin`
+(137 TASTy and class files) and their IR bundled into
+`scalacheck-1.18.1-sjsir.bin` (215 files); the server creates its
+compiler again over both class paths when a document first names
+`org.scalacheck` (diagnostics wait for it), and the runner adds both. Download's `build.sbt`
+adds ScalaCheck (`%%`, the JVM build) when the project names it, and `sbt
+run` prints the same report.
+
+| file | raw | gzip | brotli |
+|---|---:|---:|---:|
+| `scalacheck-1.18.1-classpath.bin` (server and runner) | 759 KB | 330 KB | 245 KB |
+| `scalacheck-1.18.1-sjsir.bin` (runner) | 1.9 MB | 479 KB | 340 KB |
+
+ScalaCheck is BSD-3-Clause (`LICENSE-scalacheck.txt`, from its repository at
+`v1.18.1`, sha256-pinned); scalajs-test-interface is Apache-2.0, as is
+Scala.js.
+
+### Mutation testing: not available
+
+[Stryker4s](https://stryker-mutator.io/docs/stryker4s/getting-started/),
+the Scala mutation tester, is an sbt (or Maven) plugin: it rewrites the
+sources with scalameta, then has sbt compile and run the test suite for
+every mutant, on the JVM. Here there is no sbt, no JVM and no Test yet,
+and each mutant would be a compile and a link of 3 s or more. There is no
+tool that runs in this pack.
 
 **Speed** on this shared 4-core machine while another build ran (headless
 Chromium, files from localhost): a run of the sample takes 3.5-10 s depending

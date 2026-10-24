@@ -5,6 +5,11 @@
 // together, so files see each other's definitions; completion, hover,
 // definition and the rest are upstream's interactive API
 // (dotty.tools.dotc.interactive) called from ScalaService.scala.
+//
+// ScalaCheck's class path bundle (manifest.scalacheck.classpath) is loaded
+// the first time a document names `org.scalacheck`, as the runner adds it
+// then: the service is created again over the standard class path and that
+// bundle, and given the open documents.
 
 const BASE = new URL('./', import.meta.url);
 
@@ -39,9 +44,47 @@ async function fetchBytes(name, total) {
     return out;
 }
 
+/** The pack's manifest.json and the standard class path bundle, once loaded. */
+let manifest = null;
+let baseClasspath = null;
+let ScalaServiceClass = null;
+
+/**
+ * One class path bundle (classpath.bin's format: [u32 BE header length]
+ * [JSON [[path, offset, length], ...]][bytes]) holding the entries of
+ * `bundles`, the first bundle's entry winning for a path in several, as on a
+ * class path. The service takes one bundle; the runner's compiler takes a
+ * list, which this makes for it.
+ */
+function concatBundles(bundles) {
+    const seen = new Set();
+    const parts = [];
+    const header = [];
+    let offset = 0;
+    for (const bundle of bundles) {
+        const view = new DataView(bundle.buffer, bundle.byteOffset, bundle.byteLength);
+        const length = view.getUint32(0);
+        const start = 4 + length;
+        for (const [path, off, len] of JSON.parse(new TextDecoder().decode(bundle.subarray(4, start)))) {
+            if (seen.has(path)) continue;
+            seen.add(path);
+            header.push([path, offset, len]);
+            parts.push(bundle.subarray(start + off, start + off + len));
+            offset += len;
+        }
+    }
+    const headerBytes = new TextEncoder().encode(JSON.stringify(header));
+    const out = new Uint8Array(4 + headerBytes.length + offset);
+    new DataView(out.buffer).setUint32(0, headerBytes.length);
+    out.set(headerBytes, 4);
+    let at = 4 + headerBytes.length;
+    for (const p of parts) { out.set(p, at); at += p.length; }
+    return out;
+}
+
 const ready = (async () => {
     const t0 = performance.now();
-    const manifest = await (await fetch(new URL('manifest.json', BASE))).json();
+    manifest = await (await fetch(new URL('manifest.json', BASE))).json();
     const [compilerJs, classpath] = await Promise.all([
         fetchBytes(manifest.compiler.file, manifest.compiler.size),
         fetchBytes(manifest.classpath.file, manifest.classpath.size),
@@ -51,12 +94,45 @@ const ready = (async () => {
     const url = URL.createObjectURL(new Blob([compilerJs], { type: 'text/javascript' }));
     const { ScalaService } = await import(url);
     URL.revokeObjectURL(url);
+    ScalaServiceClass = ScalaService;
+    baseClasspath = classpath;
     const t1 = performance.now();
     const service = new ScalaService(new Int8Array(classpath.buffer));
     log(`Scala ${manifest.scalaVersion} compiler loaded in ${Math.round(t1 - t0)} ms, class path (${manifest.classpath.entries} files) read in ${Math.round(performance.now() - t1)} ms`);
     return service;
 })();
 ready.catch((e) => log(`failed to start: ${e?.stack ?? e}`, 1));
+
+/** The service messages go to: `ready`'s, until ScalaCheck is wanted, then
+ *  one that also reads its bundle. */
+let current = ready;
+let scalaCheckRequested = false;
+/** While ScalaCheck's bundle downloads, diagnostics wait (they would report
+ *  `org.scalacheck` as missing for a moment). */
+let loadingScalaCheck = false;
+
+/** Starts loading ScalaCheck the first time a document names its package. */
+function wantScalaCheck(text) {
+    if (scalaCheckRequested || !manifest?.scalacheck || !/\borg\.scalacheck\b/.test(text)) return;
+    scalaCheckRequested = loadingScalaCheck = true;
+    const qc = manifest.scalacheck;
+    current = current.then(async (old) => {
+        try {
+            const t0 = performance.now();
+            const bundle = await fetchBytes(qc.classpath.file, qc.classpath.size);
+            const service = new ScalaServiceClass(new Int8Array(concatBundles([baseClasspath, bundle]).buffer));
+            for (const [uri, d] of docs) service.setText(uri, d.text);
+            log(`ScalaCheck ${qc.version} added to the class path (${qc.classpath.entries} files) in ${Math.round(performance.now() - t0)} ms`);
+            return service;
+        } catch (e) {
+            log(`ScalaCheck could not be loaded: ${e?.stack ?? e}`, 1);
+            return old;
+        } finally {
+            loadingScalaCheck = false;
+        }
+    });
+    current.then((service) => schedule(service));
+}
 
 // Documents, and whether the compiler has seen their latest text.
 const docs = new Map();
@@ -67,6 +143,7 @@ function check(service) {
     clearTimeout(timer);
     timer = 0;
     if (!dirty) return;
+    if (loadingScalaCheck) return; // wantScalaCheck checks again when it is loaded
     dirty = false;
     const t0 = performance.now();
     let result;
@@ -212,13 +289,20 @@ const isScala = (uri) => /\.scala$/i.test(uri);
 const notifications = {
     initialized: () => {},
     exit: () => close(),
-    'textDocument/didOpen': (s, p) => { if (!isScala(p.textDocument.uri)) return; docs.set(p.textDocument.uri, { version: p.textDocument.version, text: p.textDocument.text }); s.setText(p.textDocument.uri, p.textDocument.text); schedule(s); },
+    'textDocument/didOpen': (s, p) => {
+        if (!isScala(p.textDocument.uri)) return;
+        docs.set(p.textDocument.uri, { version: p.textDocument.version, text: p.textDocument.text });
+        s.setText(p.textDocument.uri, p.textDocument.text);
+        schedule(s);
+        wantScalaCheck(p.textDocument.text);
+    },
     'textDocument/didChange': (s, p) => {
         const text = p.contentChanges.at(-1)?.text;
         if (text === undefined || !isScala(p.textDocument.uri)) return;
         docs.set(p.textDocument.uri, { version: p.textDocument.version, text });
         s.setText(p.textDocument.uri, text);
         schedule(s);
+        wantScalaCheck(text);
     },
     // The client closes a document when its file is deleted (CONTRACT.md).
     'textDocument/didClose': (s, p) => {
@@ -252,7 +336,7 @@ async function handle(msg) {
             if (isRequest) send({ jsonrpc: '2.0', id: msg.id, result: r });
             return;
         }
-        const service = await ready;
+        const service = await current;
         if (isRequest) {
             const fn = requests[msg.method];
             if (!fn) {

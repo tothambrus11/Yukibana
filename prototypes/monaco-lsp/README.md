@@ -69,7 +69,7 @@ no DOM and no npm packages except fast-check, for property-based tests
 | TypeScript | the JavaScript pack's server, `strict` | the same, types stripped as `node main.ts` does | (JavaScript's) | 3 KB (strip.js; TypeScript is the server's file) |
 | Web (HTML, CSS, TypeScript) | the JavaScript pack's server for TypeScript; Monaco's own HTML and CSS (SCSS, Less) services: completion, hover, validation, formatting, colours | a live-reloading Preview panel (sandboxed iframe) | (JavaScript's), plus the CSS worker 0.2 MB and, once an HTML file is open, the HTML worker 0.15 MB | as TypeScript |
 | Python | basedpyright 1.40 | Pyodide 314.0.7 (Python 3.14) | 1.1 MB | 4.5 MB |
-| Scala 3 | the Scala 3.7.4 compiler's interactive API, compiled with Scala.js | the same compiler and the Scala.js linker | 2.6 MB | 3.7 MB |
+| Scala 3 | the Scala 3.7.4 compiler's interactive API, compiled with Scala.js | the same compiler and the Scala.js linker; ScalaCheck 1.18.1 | 2.6 MB; ScalaCheck 0.25 MB when a source names it | 3.7 MB; ScalaCheck 0.34 MB more when a source names it |
 | C and C++ | clangd 21 (Emscripten, threads) | clang 21 and wasm-ld, WASI | 8.0 MB | 12.2 MB; Test 0.06 to 0.28 MB (the framework's libraries) |
 | Swift | swift-syntax-ls (ours) plus swift-frontend 6.3.3 for types and errors | the same swift-frontend and wasm-ld | 30.2 MB | 8.2 MB |
 | Rust | rust-analyzer's IDE crates (ra_ap_ide 0.0.358) with our LSP layer, std 1.98 sources | Miri 1.78 (rustc's MIR interpreter, not a compiler), quickcheck 1.0.3 | 4.2 MB; quickcheck sources 0.47 MB when Cargo.toml names it | 29.8 MB; quickcheck 1.6 MB when Cargo.toml names it |
@@ -143,7 +143,10 @@ after weeks without a visit, persistent storage or not.
   libraries are downloaded. Container indexing is checked (libc++ hardening, fast mode); other
   out-of-bounds accesses are not.
 * **Scala**: not Metals, which cannot run in a browser. The LSP layer is
-  ours; what it answers comes from the compiler.
+  ours; what it answers comes from the compiler. No libraries but
+  ScalaCheck (for a project that names `org.scalacheck`; properties run
+  from a `main` with `.check()`, as there is no Test yet). No mutation
+  testing: Stryker4s runs sbt on the JVM (packs/scala/README.md).
 * **Python**: the standard library only, plus pytest and Hypothesis
   (property-based tests, fetched only for a project that imports it); no
   other packages from PyPI. No mutation testing: mutmut and Cosmic Ray need

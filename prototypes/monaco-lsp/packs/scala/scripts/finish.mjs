@@ -1,10 +1,10 @@
 // Writes manifest.json and the .gz/.br siblings of every file in the output.
-// Usage: node finish.mjs <out dir> <scala version> <jdk version> <scala.js version>
+// Usage: node finish.mjs <out dir> <scala version> <jdk version> <scala.js version> <scalacheck version>
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { gzipSync, brotliCompressSync, constants } from 'node:zlib';
 
-const [out, scalaVersion, jdkVersion, scalajsVersion] = process.argv.slice(2);
+const [out, scalaVersion, jdkVersion, scalajsVersion, scalacheckVersion] = process.argv.slice(2);
 const size = (f) => readFileSync(join(out, f)).length;
 const count = (f) => {
     const b = readFileSync(join(out, f));
@@ -20,6 +20,13 @@ writeFileSync(join(out, 'manifest.json'), JSON.stringify({
         classpath: { file: 'classpath-sjs.bin', size: size('classpath-sjs.bin'), entries: count('classpath-sjs.bin') },
         library: { file: 'sjsir.bin', size: size('sjsir.bin'), entries: count('sjsir.bin') },
         linker: { file: 'sjslinker.js', size: size('sjslinker.js') },
+    },
+    // ScalaCheck, for a project that names org.scalacheck: its class path
+    // bundle (the server and the runner's compiler) and its IR (the linker).
+    scalacheck: {
+        version: scalacheckVersion,
+        classpath: { file: `scalacheck-${scalacheckVersion}-classpath.bin`, size: size(`scalacheck-${scalacheckVersion}-classpath.bin`), entries: count(`scalacheck-${scalacheckVersion}-classpath.bin`) },
+        library: { file: `scalacheck-${scalacheckVersion}-sjsir.bin`, size: size(`scalacheck-${scalacheckVersion}-sjsir.bin`), entries: count(`scalacheck-${scalacheckVersion}-sjsir.bin`) },
     },
 }, null, 2) + '\n');
 for (const f of readdirSync(out).sort()) {

@@ -16,6 +16,11 @@
 //      main runs.
 //
 // A program that never ends blocks this worker; the app terminates it.
+//
+// ScalaCheck, the one library besides the standard ones: a project whose
+// sources name `org.scalacheck` gets its class path bundle (TASTy, for the
+// compiler) and its IR (for the linker), from the scalacheck_sjs1_3 jar, as
+// sbt would put that jar on the class path. Downloaded only then.
 
 const BASE = new URL('./', import.meta.url);
 const post = (m) => postMessage(m);
@@ -52,6 +57,12 @@ async function fetchBytes(name, total) {
 async function importBytes(bytes) {
     const url = URL.createObjectURL(new Blob([bytes], { type: 'text/javascript' }));
     try { return await import(url); } finally { URL.revokeObjectURL(url); }
+}
+
+/** Whether the project's Scala sources name ScalaCheck's package (an import
+ *  or a qualified name), so that the runner adds it (see the header). */
+function usesScalaCheck(files) {
+    return Object.entries(files).some(([path, text]) => path.endsWith('.scala') && /\borg\.scalacheck\b/.test(text));
 }
 
 /** The entries of a bundle (classpath.bin's format): [path, Int8Array view]. */
@@ -152,17 +163,24 @@ async function run({ files, entry, stdin }) {
     // All five downloads start now; compiling waits only for its three. The
     // library IR and the linker (18 MB of the 30) arrive while it compiles,
     // and are not waited for at all when the program does not compile.
-    const linkFiles = Promise.all([fetchBytes(r.library.file, r.library.size), fetchBytes(r.linker.file, r.linker.size)]);
+    const qc = usesScalaCheck(files) ? manifest.scalacheck : null;
+    const linkFiles = Promise.all([
+        fetchBytes(r.library.file, r.library.size),
+        fetchBytes(r.linker.file, r.linker.size),
+        qc ? fetchBytes(qc.library.file, qc.library.size) : null,
+    ]);
     linkFiles.catch(() => {}); // reported when awaited, before linking
-    const [compilerJs, classpath, classpathSjs] = await Promise.all([
+    const [compilerJs, classpath, classpathSjs, classpathQc] = await Promise.all([
         fetchBytes(manifest.compiler.file, manifest.compiler.size),
         fetchBytes(manifest.classpath.file, manifest.classpath.size),
         fetchBytes(r.classpath.file, r.classpath.size),
+        qc ? fetchBytes(qc.classpath.file, qc.classpath.size) : null,
     ]);
 
     post({ type: 'phase', text: 'Compiling' });
     const { ScalaJSCompiler } = await importBytes(compilerJs);
-    const compiler = new ScalaJSCompiler([new Int8Array(classpath.buffer), new Int8Array(classpathSjs.buffer)]);
+    const bundles = [classpath, classpathSjs, ...(classpathQc ? [classpathQc] : [])];
+    const compiler = new ScalaJSCompiler(bundles.map((b) => new Int8Array(b.buffer)));
     const result = compiler.compile(files, entry);
     let errors = 0;
     let warnings = 0;
@@ -186,10 +204,10 @@ async function run({ files, entry, stdin }) {
         return;
     }
 
-    const [library, linkerJs] = await linkFiles;
+    const [library, linkerJs, libraryQc] = await linkFiles;
     post({ type: 'phase', text: 'Linking' });
     const { link } = await importBytes(linkerJs);
-    const ir = [...result.ir, ...entries(library)];
+    const ir = [...result.ir, ...entries(library), ...(libraryQc ? entries(libraryQc) : [])];
     let linked;
     try {
         linked = await link(ir, [['yukibana.runtime.Std', 'init', 'noargs'], [main, 'main', 'args']], false, (level, message) => {

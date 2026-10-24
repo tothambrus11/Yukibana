@@ -10,7 +10,9 @@
 // terminates the worker; plus output that streams while the program never
 // yields, a flood of lines coalesced into few messages, end of file on stdin
 // (Ctrl-D, and no SharedArrayBuffer at all), an uncaught exception, an
-// `object Main { def main }` entry, and a project of four files. The sample runs first in a fresh
+// `object Main { def main }` entry, a project of four files, and ScalaCheck
+// properties (one holding, one falsified and shrunk; its bundles fetched only
+// for a project that names it). The sample runs first in a fresh
 // browser (cold: every file downloaded) and again at the end (warm: HTTP
 // cache, as the service worker gives the app).
 //
@@ -149,6 +151,7 @@ try {
         `(${cold.ms} ms, ${(coldBytes / 1e6).toFixed(1)} MB fetched: ${phases(cold)}) stdout=${JSON.stringify(cold.stdout)} stderr=${JSON.stringify(cold.stderr)}`);
     check('progress was reported for every download', ['scalac.js', 'classpath.bin', 'classpath-sjs.bin', 'sjsir.bin', 'sjslinker.js'].every((f) => cold.loading[f] && cold.loading[f].loaded === cold.loading[f].total && cold.loading[f].total > 0),
         JSON.stringify(Object.fromEntries(Object.entries(cold.loading).map(([k, v]) => [k, v.loaded]))));
+    check('ScalaCheck is not downloaded for a project that does not use it', !Object.keys(cold.loading).some((f) => f.startsWith('scalacheck-')), Object.keys(cold.loading).join(', '));
 
     // (2) A prompt without a newline, two lines of stdin, their sum.
     const SUM = `import scala.io.StdIn
@@ -268,6 +271,31 @@ lazy val big: Long = (1L to 20L).product
     const exited = await runProgram({ 'Main.scala': EXIT }, 'Main.scala');
     check('sys.exit is not available (Scala.js has no System.exit): a link error, exit 1', exited.exit === 1 && /System\.exit/.test(exited.stderr),
         `stderr=${JSON.stringify(exited.stderr.split('\n').slice(0, 2).join('\n'))}`);
+
+    // ScalaCheck: a Properties object checked from main (Properties.main
+    // calls System.exit, which Scala.js does not have; check() reports).
+    const PROPS = `import org.scalacheck.{Gen, Properties}
+import org.scalacheck.Prop.forAll
+
+def distance(a: (Double, Double), b: (Double, Double)): Double = math.hypot(a._1 - b._1, a._2 - b._2)
+
+object GeometrySpec extends Properties("Geometry"):
+  val point = for x <- Gen.choose(-1e9, 1e9); y <- Gen.choose(-1e9, 1e9) yield (x, y)
+  property("distance is symmetric") = forAll(point, point)((a, b) => distance(a, b) == distance(b, a))
+  property("norm stays under 100") = forAll((n: Int) => distance((n.toDouble, 0.0), (0.0, 0.0)) < 100)
+
+@main def properties(): Unit = GeometrySpec.check()
+`;
+    const props = await runProgram({ 'Main.scala': PROPS }, 'Main.scala');
+    const arg = /^> ARG_0: (-?\d+)$/m.exec(props.stdout);
+    const original = /^> ARG_0_ORIGINAL: (-?\d+)$/m.exec(props.stdout);
+    check('ScalaCheck: a property that holds passes 100 tests, one that does not is falsified with its shrunk and original arguments',
+        props.exit === 0 && /^\+ Geometry\.distance is symmetric: OK, passed 100 tests\.$/m.test(props.stdout) &&
+            /^! Geometry\.norm stays under 100: Falsified after \d+ passed tests\.$/m.test(props.stdout) &&
+            !!arg && !!original && Math.abs(+arg[1]) >= 100 && Math.abs(+arg[1]) <= Math.abs(+original[1]),
+        `(${props.ms} ms: ${phases(props)}) stdout=${JSON.stringify(props.stdout)} stderr=${JSON.stringify(props.stderr.slice(0, 600))}`);
+    check('ScalaCheck: its class path and IR are downloaded for a project that names it',
+        ['scalacheck-1.18.1-classpath.bin', 'scalacheck-1.18.1-sjsir.bin'].every((f) => props.loading[f]?.loaded > 0), Object.keys(props.loading).join(', '));
 
     // (1 again) The sample, warm: files from the HTTP cache.
     bytesServed = 0;

@@ -9,7 +9,9 @@
 // (a class as its declaration); go to definition across files; references
 // (a case class's construction included); deleting a file makes its uses
 // unresolved; what a
-// macro does here (nothing, or an error for a transparent one); malformed
+// macro does here (nothing, or an error for a transparent one); a file that
+// imports ScalaCheck type-checks once its class path bundle is loaded, with
+// its hover, completion and type errors; malformed
 // requests and requests after shutdown are refused, not crashed on.
 //
 //   node test.mjs            (after ./build.sh; needs playwright-core)
@@ -343,6 +345,37 @@ object Mac:
     diags = await diagnostics('Macros.scala', (d) => d.length > 0, mark);
     const unsupported = diags?.find((d) => /not supported by the in-browser Scala compiler/.test(d.message));
     check('a use of a transparent inline macro reports, at its splice, that macros are not supported', unsupported?.range.start.line === 5, JSON.stringify(unsupported));
+
+    // ScalaCheck: loaded when a document names org.scalacheck.
+    const loadsBefore = (await lsp.log()).filter((m) => m.method === 'yukibana/loading' && /^scalacheck-/.test(m.params.label)).length;
+    check('ScalaCheck\'s class path is not loaded before a document names it', loadsBefore === 0);
+    const PROPS = `package props
+
+import org.scalacheck.{Gen, Prop, Properties}
+import org.scalacheck.Prop.forAll
+
+object DistanceSpec extends Properties("Distance"):
+  val small: Gen[Int] = Gen.choose(0, 1000)
+  property("non-negative") = forAll(small)(n => math.abs(n) >= 0)
+`;
+    mark = (await lsp.log()).length;
+    await lsp.notify('textDocument/didOpen', { textDocument: { uri: uri('Props.scala'), languageId: 'scala', version: 1, text: PROPS } });
+    diags = await diagnostics('Props.scala', () => true, mark, 120000);
+    const qcLoads = (await lsp.log()).filter((m) => m.method === 'yukibana/loading' && m.params.label === 'scalacheck-1.18.1-classpath.bin');
+    check('a file importing ScalaCheck loads its class path and type-checks with no diagnostics',
+        diags?.length === 0 && qcLoads.some((m) => m.params.loaded === m.params.total && m.params.total > 0),
+        `${JSON.stringify(diags?.map((d) => d.message))} ${qcLoads.length} progress messages`);
+    const forAllHover = await lsp.request('textDocument/hover', at('Props.scala', 7, 31));
+    check('hover on forAll shows ScalaCheck\'s signature', /def forAll/.test(forAllHover.result?.contents?.value ?? ''), JSON.stringify((forAllHover.result?.contents?.value ?? '').slice(0, 200)));
+    await change('Props.scala', PROPS + '  Gen.\n');
+    const genItems = await lsp.request('textDocument/completion', at('Props.scala', 8, 6));
+    const genLabels = (genItems.result?.items ?? []).map((i) => i.label);
+    check('completion after `Gen.` offers choose, oneOf and listOf', ['choose', 'oneOf', 'listOf'].every((l) => genLabels.includes(l)), JSON.stringify(genLabels.slice(0, 12)));
+    mark = (await lsp.log()).length;
+    await change('Props.scala', PROPS.replace('val small: Gen[Int] = Gen.choose(0, 1000)', 'val small: Gen[String] = Gen.choose(0, 1000)'));
+    diags = await diagnostics('Props.scala', (d) => d.length > 0, mark);
+    check('Gen.choose(0, 1000) where a Gen[String] is declared is a type error on that line (an Int is not a String)', !!diags?.some((d) => /Found: +\(0 : Int\)\nRequired: String/.test(d.message) && d.range.start.line === 6), JSON.stringify(diags?.map((d) => [d.range.start.line, d.message.slice(0, 120)])));
+    await change('Props.scala', PROPS);
 
     const readme = (await lsp.log()).filter((m) => m.method === 'textDocument/publishDiagnostics' && m.params.uri === uri('README.md'));
     check('a non-Scala project file is not compiled', readme.length === 0);
