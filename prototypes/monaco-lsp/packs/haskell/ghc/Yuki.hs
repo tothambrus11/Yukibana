@@ -57,7 +57,9 @@ import GHC.Types.Name (isInternalName, nameModule_maybe, nameOccName)
 import GHC.Types.Name.Occurrence (isDataOcc, isTcOcc, isTvOcc, occNameString)
 import GHC.Types.Name.Reader (ImpDeclSpec (..), ImportSpec (..), globalRdrEnvElts, gre_imp, gre_lcl, gre_name)
 import GHC.Types.SrcLoc (mkRealSrcLoc, mkRealSrcSpan)
-import GHC.Types.TyThing.Ppr (pprTyThingHdr)
+import GHC.Iface.Syntax (showToIface)
+import GHC.Types.Id (isDataConId_maybe)
+import GHC.Types.TyThing.Ppr (pprTyThing, pprTyThingHdr)
 import GHC.Unit.Module (ml_hie_file, ml_hs_file, moduleNameString, moduleUnit, unitString)
 import GHC.Unit.Module.ModSummary (msHsFilePath)
 import GHC.Unit.State (listVisibleModuleNames)
@@ -197,7 +199,10 @@ check st args = do
   let (flags, rest) = break (== "==") args
       groups = [words (map (\c -> if c == '\t' then ' ' else c) g) | g <- drop 1 rest, not (null g)]
   writeIORef (stDiags st) []
-  modules <- inGhc st $ do
+  -- Each group is read as soon as it is loaded: a program's Main and a test
+  -- suite's are both Main, and the next group's load writes over Main.hie
+  -- and replaces Main in GHC's module graph.
+  checked <- inGhc st $ do
     logger <- getLogger
     (df, _, _) <- parseDynamicFlags logger (stFlags st) (map noLoc flags)
     _ <- setSessionDynFlags df
@@ -206,27 +211,30 @@ check st args = do
       setTargets targets
       _ <- handleSourceError (\e -> do liftIO (printException' e); pure Failed) (load LoadAllTargets)
       graph <- getModuleGraph
-      pure [ms | ms <- mgModSummaries graph, isJust (ml_hs_file (ms_location ms))]
-  -- The .hie files of the modules that were type checked; a module that
-  -- did not parse keeps none, and the queries answer from the last one.
-  env <- inGhc st getSession
-  hies <- fmap catMaybes . forM modules $ \ms -> do
-    let src = msHsFilePath ms
-    r <- try (readHieFile (hsc_NC env) (ml_hie_file (ms_location ms)))
-    pure $ case r of
-      Right h -> Just (src, hie_file_result h)
-      Left (_ :: SomeException) -> Nothing
-  modifyIORef' (stHie st) (M.union (M.fromList hies))
-  modifyIORef' (stSummaries st) (M.union (M.fromList [(msHsFilePath ms, ms) | ms <- modules]))
+      env <- getSession
+      forM [ms | ms <- mgModSummaries graph, isJust (ml_hs_file (ms_location ms))] $ \ms -> do
+        -- A module that did not parse has no .hie file; the queries then
+        -- answer from its last one.
+        r <- liftIO (try (readHieFile (hsc_NC env) (ml_hie_file (ms_location ms))))
+        let hie = case r of
+              Right h -> Just (hie_file_result h)
+              Left (_ :: SomeException) -> Nothing
+        ds <- topDecls ms
+        pure (msHsFilePath ms, ms, hie, ds)
+  -- A module loaded by two groups (one both import) counts once, as the
+  -- first group saw it.
+  let modules = nubOn (\(f, _, _, _) -> f) checked
+  modifyIORef' (stHie st) (M.union (M.fromList [(f, h) | (f, _, Just h, _) <- modules]))
+  modifyIORef' (stSummaries st) (M.union (M.fromList [(f, ms) | (f, ms, _, _) <- modules]))
   diags <- reverse <$> readIORef (stDiags st)
-  tops <- forM (nubOn msHsFilePath modules) $ \ms -> do
-    ds <- inGhc st (topDecls ms)
-    pure $
-      obj
-        [ ("file", str (msHsFilePath ms)),
-          ("module", str (moduleNameString (ms_mod_name ms))),
-          ("hie", J.JSBool (isJust (lookup (msHsFilePath ms) hies))),
-          ("tops", J.JSArray ds)
+  let tops =
+        [ obj
+            [ ("file", str f),
+              ("module", str (moduleNameString (ms_mod_name ms))),
+              ("hie", J.JSBool (isJust hie)),
+              ("tops", J.JSArray ds)
+            ]
+          | (f, ms, hie, ds) <- modules
         ]
   pure (obj [("diagnostics", J.JSArray (map Raw diags)), ("modules", J.JSArray tops)])
   where
@@ -255,11 +263,19 @@ topDecls ms = do
             ("type", str (thingText df t)),
             ("span", spanJson s)
           ]
-        | t <- modInfoTyThings info,
+        | t <- nubOn (\t -> (getName t, thingKind t)) (modInfoTyThings info),
+          not (isConstructorId t),
           let n = getName t,
+          not (generated n),
           RealSrcSpan s _ <- [nameSrcSpan n],
           unpackFS (srcSpanFile s) == msHsFilePath ms
       ]
+  where
+    -- A data constructor is also a function (its worker and wrapper Ids):
+    -- the AConLike says it once.
+    isConstructorId = \case
+      AnId i -> isJust (isDataConId_maybe i)
+      _ -> False
 
 thingKind :: TyThing -> String
 thingKind = \case
@@ -273,10 +289,22 @@ thingKind = \case
     | otherwise -> "data"
   ACoAxiom _ -> "axiom"
 
--- | A TyThing as GHCi's :type or :info header says it: @name :: type@ for a
--- value or constructor, @data T a@ / @class C a where@ for a type.
+-- | A TyThing as GHCi's :type or :info says it: @name :: type@ for a value
+-- or constructor; for a type its whole declaration, constructors, fields
+-- and methods included, as it would be written (@data Point = Point {px ::
+-- Double, py :: Double}@).
 thingText :: DynFlags -> TyThing -> String
-thingText df t = showSDoc df (pprTyThingHdr t)
+thingText df t = case t of
+  ATyCon _ -> showSDoc df (pprTyThing showToIface t)
+  _ -> showSDoc df (pprTyThingHdr t)
+
+-- | A name GHC made up (an instance's dictionary @$fShowPoint@, a
+-- module's @$trModule@, a derived method), which no one wrote and no
+-- query should answer with.
+generated :: Name -> Bool
+generated n = case occNameString (nameOccName n) of
+  '$' : _ -> True
+  _ -> False
 
 -- * Queries on the last check
 
@@ -293,9 +321,21 @@ identAt hf line col = listToMaybe (mapMaybe inAst (M.elems (getAsts (hie_asts hf
       ni <- M.lookup SourceInfo (getSourcedNodeInfo (sourcedNodeInfo node))
       -- A name before a module (a qualified name's module) is less
       -- interesting than the name.
-      (i, d) <- listToMaybe (sortOn (either (const 1) (const (0 :: Int)) . fst) (M.toList (nodeIdentifiers ni)))
+      (i, d) <- listToMaybe (sortOn (either (const 1) (const (0 :: Int)) . fst) (written ni))
       pure (nodeSpan node, i, d, ni)
-    sourceIdents n = maybe M.empty nodeIdentifiers (M.lookup SourceInfo (getSourcedNodeInfo (sourcedNodeInfo n)))
+    sourceIdents n = maybe [] written (M.lookup SourceInfo (getSourcedNodeInfo (sourcedNodeInfo n)))
+    -- The names written at a node: not the evidence (instance
+    -- dictionaries) GHC records at the same span, nor names it made up.
+    written ni =
+      [ (i, d)
+        | (i, d) <- M.toList (nodeIdentifiers ni),
+          either (const True) (not . generated) i,
+          not (any isEvidence (S.toList (identInfo d)))
+      ]
+    isEvidence = \case
+      EvidenceVarBind {} -> True
+      EvidenceVarUse -> True
+      _ -> False
 
 lookupHie :: State -> FilePath -> IO (Maybe HieFile)
 lookupHie st f = M.lookup f <$> readIORef (stHie st)
