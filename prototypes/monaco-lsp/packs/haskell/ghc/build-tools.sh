@@ -60,7 +60,9 @@ BIN=$(mktemp -d)
 WORK=$(mktemp -d)
 # Each is built from its source as a local package: their executables ask
 # for GHC's threaded RTS (-threaded), which WebAssembly has not, so the flag
-# is taken out of the .cabal file first.
+# is taken out of the .cabal file first, and with it ormolu's
+# -with-rtsopts=-N (as many capabilities as cores), which the
+# non-threaded RTS refuses at start-up.
 build() { # package version sha256 exe [cabal flags]
     log "$1 $2"
     (
@@ -69,7 +71,7 @@ build() { # package version sha256 exe [cabal flags]
         echo "$3  $1-$2.tar.gz" | sha256sum -c --quiet -
         tar xzf "$1-$2.tar.gz"
         cd "$1-$2"
-        sed -i 's/-threaded//g' "$1.cabal"
+        sed -i -e 's/-threaded//g' -e 's/-with-rtsopts=-N\([[:space:]]\|$\)/\1/g' "$1.cabal"
         wasm32-wasi-cabal --store-dir="$STORE" install "exe:$4" "${@:5}" \
             --installdir="$BIN" --install-method=copy --overwrite-policy=always \
             --disable-profiling --disable-documentation \
