@@ -334,6 +334,8 @@ public final class LanguageService {
             a.completeMember(unit, text, before, items);
         } else if (before >= 1 && text.charAt(before) == ':' && text.charAt(before - 1) == ':') {
             a.completeMember(unit, text, before - 1, items);
+        } else if (isCaseLabel(text, before) && a.completeCaseLabel(unit, text, offset, items)) {
+            // An enum's constants, unqualified: nothing else may follow `case` there.
         } else {
             a.completeScope(unit, text, offset, items);
         }
@@ -344,6 +346,107 @@ public final class LanguageService {
         }
         json.endArray();
         return json.endObject().toString();
+    }
+
+    /**
+     * Whether the word being completed is a case label: `case` before it,
+     * maybe with labels already listed (`case RED, GR`). `before` is the
+     * last non-blank character before the word.
+     */
+    static boolean isCaseLabel(String text, int before) {
+        int at = before;
+        while (at >= 0 && text.charAt(at) == ',') {
+            at--;
+            while (at >= 0 && Character.isWhitespace(text.charAt(at))) {
+                at--;
+            }
+            while (at >= 0 && (Character.isJavaIdentifierPart(text.charAt(at)) || text.charAt(at) == '.')) {
+                at--;
+            }
+            while (at >= 0 && Character.isWhitespace(text.charAt(at))) {
+                at--;
+            }
+        }
+        int end = at + 1;
+        while (at >= 0 && Character.isJavaIdentifierPart(text.charAt(at))) {
+            at--;
+        }
+        return text.substring(at + 1, end).equals("case");
+    }
+
+    // ---- Code actions
+
+    /**
+     * The classes a simple name could be imported as, for the quick fix on
+     * `cannot find symbol`: {at, classes: [qualified name]}, where `at` is
+     * where the import goes (as Item.importText's offset). The project's
+     * classes in other packages first, then the class library's, from the
+     * packages auto-import offers.
+     */
+    @JSExport
+    public String importsFor(String path, String name) {
+        var a = analysis();
+        var unit = a.units.get(path);
+        if (unit == null) {
+            return "null";
+        }
+        var pkg = unit.packge != null ? unit.packge.fullname.toString() : "";
+        var classes = new java.util.LinkedHashSet<String>();
+        for (var u : a.units.values()) {
+            var upkg = u.packge != null ? u.packge.fullname.toString() : "";
+            // A class in the unnamed package cannot be imported at all.
+            if (upkg.isEmpty() || upkg.equals(pkg)) {
+                continue;
+            }
+            for (var def : u.defs) {
+                if (def instanceof JCClassDecl c && c.name.contentEquals(name)) {
+                    classes.add(upkg + "." + name);
+                }
+            }
+        }
+        for (var e : libraryClasses.entrySet()) {
+            if (Analysis.importable(e.getKey(), pkg) && e.getValue().contains(name)) {
+                classes.add(e.getKey() + "." + name);
+            }
+        }
+        var importAt = a.importText(unit);
+        var json = new Json().beginObject().field("at", Integer.parseInt(importAt.substring(0, importAt.length() - 1)));
+        json.key("classes").beginArray();
+        for (var c : classes) {
+            json.value(c);
+        }
+        json.endArray();
+        return json.endObject().toString();
+    }
+
+    // ---- Type definition
+
+    /**
+     * Where the type of the symbol at the position is declared: a
+     * variable's or field's type, a method's return type, a class itself;
+     * an array's element type. [{path, start, end}]; empty for a type of
+     * the class library, which has no source here.
+     */
+    @JSExport
+    public String typeDefinition(String path, int offset) {
+        var a = analysis();
+        var occ = a.occurrenceAt(path, offset);
+        var json = new Json().beginArray();
+        if (occ == null) {
+            return json.endArray().toString();
+        }
+        var sym = occ.sym;
+        Type t = sym.isConstructor() ? sym.owner.type
+                : sym instanceof MethodSymbol m ? m.getReturnType() : sym.type;
+        while (t != null && t.hasTag(TypeTag.ARRAY)) {
+            t = ((Type.ArrayType) t).elemtype;
+        }
+        if (t != null && t.tsym != null) {
+            for (var d : a.declarations(t.tsym)) {
+                d.write(json);
+            }
+        }
+        return json.endArray().toString();
     }
 
     // ---- Signature help
@@ -1309,8 +1412,7 @@ public final class LanguageService {
                 var importAt = importText(unit);
                 for (var e : libraryClasses.entrySet()) {
                     var p = e.getKey();
-                    if (p.equals("java.lang") || p.equals(pkg) || p.startsWith("org.teavm")
-                            || p.startsWith("jdk.") || p.startsWith("sun.") || p.startsWith("com.")) {
+                    if (!importable(p, pkg)) {
                         continue;
                     }
                     for (var name : e.getValue()) {
@@ -1322,6 +1424,63 @@ public final class LanguageService {
                     }
                 }
             }
+        }
+
+        /**
+         * Whether auto-import and the quick fix offer a class library package:
+         * not java.lang or the file's own (nothing to import), not TeaVM's or
+         * the JDK's internals, which the archive has but a program cannot use.
+         */
+        static boolean importable(String p, String pkg) {
+            return !(p.equals("java.lang") || p.equals(pkg) || p.startsWith("org.teavm")
+                    || p.startsWith("jdk.") || p.startsWith("sun.") || p.startsWith("com."));
+        }
+
+        /**
+         * Completion of a case label in a switch over an enum: the enum's
+         * constants, unqualified (JLS 14.11.1), in declaration order. False
+         * when the switch's selector is not an enum, so the caller completes
+         * a name as usual (a pattern's type, a constant).
+         */
+        boolean completeCaseLabel(JCCompilationUnit unit, String text, int offset, Items items) {
+            Type selector = null;
+            var finder = new SwitchFinder(unit, offset);
+            finder.scan(unit);
+            if (finder.selector != null) {
+                selector = TreeInfo.skipParens(finder.selector).type;
+            }
+            if (selector == null || selector.isErroneous()) {
+                // The switch did not parse (the label is half typed): a simple
+                // name in the last `switch (name)` before the case is looked up
+                // in scope, as completeMember does for `name.`.
+                var m = java.util.regex.Pattern.compile("\\bswitch\\s*\\(\\s*([A-Za-z_$][\\w$]*)\\s*\\)\\s*\\{")
+                        .matcher(text.substring(0, offset));
+                String name = null;
+                while (m.find()) {
+                    name = m.group(1);
+                }
+                if (name != null) {
+                    completeScope(unit, text, offset, new Items(""));
+                    var s = scopeSymbols.get(name);
+                    selector = s != null && s.kind == Kinds.Kind.VAR ? s.type : null;
+                }
+            }
+            if (selector == null || !(selector.tsym instanceof ClassSymbol c) || (c.flags() & Flags.ENUM) == 0) {
+                return false;
+            }
+            var constants = new ArrayList<Symbol>();
+            for (var s : c.members().getSymbols(com.sun.tools.javac.code.Scope.LookupKind.NON_RECURSIVE)) {
+                if (s.kind == Kinds.Kind.VAR && (s.flags() & Flags.ENUM) != 0) {
+                    constants.add(0, s);
+                }
+            }
+            for (int i = 0; i < constants.size(); i++) {
+                var s = constants.get(i);
+                if (items.wants(s.name.toString())) {
+                    addMember(s, c.type, items, "0" + (char) ('a' + i / 26) + (char) ('a' + i % 26));
+                }
+            }
+            return true;
         }
 
         /** Where an import goes: "<offset>|" before the class name, so server.js can make the edit. */
@@ -1658,6 +1817,47 @@ public final class LanguageService {
             }
             super.scan(tree);
             stack.remove(stack.size() - 1);
+        }
+    }
+
+    /**
+     * The selector of the innermost switch (statement or expression) whose
+     * body holds a position: the switch starts before it and its selector
+     * ends before it, and javac's end of the switch is after it (or unknown,
+     * where the parser recovered from the half-typed label).
+     */
+    static final class SwitchFinder extends Scanner {
+        private final JCCompilationUnit unit;
+        private final int offset;
+        JCTree selector;
+        private int start = -1;
+
+        SwitchFinder(JCCompilationUnit unit, int offset) {
+            this.unit = unit;
+            this.offset = offset;
+        }
+
+        private void consider(JCTree tree, JCTree selector) {
+            int from = TreeInfo.getStartPos(tree);
+            int end = TreeInfo.getEndPos(tree, unit.endPositions);
+            int selectorEnd = TreeInfo.getEndPos(selector, unit.endPositions);
+            if (from <= offset && from > start && selectorEnd >= 0 && selectorEnd <= offset
+                    && (end < 0 || end <= from || offset <= end)) {
+                this.selector = selector;
+                start = from;
+            }
+        }
+
+        @Override
+        public void visitSwitch(JCTree.JCSwitch tree) {
+            consider(tree, tree.selector);
+            super.visitSwitch(tree);
+        }
+
+        @Override
+        public void visitSwitchExpression(JCTree.JCSwitchExpression tree) {
+            consider(tree, tree.selector);
+            super.visitSwitchExpression(tree);
         }
     }
 

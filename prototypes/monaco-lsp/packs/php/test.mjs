@@ -4,7 +4,8 @@
 // 'module' })` in Chromium, one JSON-RPC object per postMessage. Checks
 // diagnostics (Phpactor's own, and a parse error from PHP's parser), that a
 // file added later resolves, completion at a member access, hover,
-// go-to-definition across files, references, symbols and rename.
+// go-to-definition across files, references, symbols, rename of a method
+// and of a class, signature help and keyword completion.
 //
 //   node test.mjs            (after ./build.sh; needs playwright-core)
 
@@ -287,9 +288,34 @@ try {
     const signature = await lsp.request('textDocument/signatureHelp', at('main.php', 11, 15));
     const label = signature.result?.signatures?.[0]?.label ?? JSON.stringify(signature.result ?? signature.error);
     check('signature help inside `new Point(` shows the constructor\'s parameters', /float \$x/.test(label) && /float \$y/.test(label), JSON.stringify(label));
-    // Known limit: Phpactor gives none inside the call of a namespaced function imported with `use function`.
     const fnSignature = await lsp.request('textDocument/signatureHelp', at('main.php', 13, 14));
-    console.log(`      (signature help inside \`distance(\`: ${JSON.stringify(fnSignature.result?.signatures?.[0]?.label ?? null)})`);
+    const fnLabel = fnSignature.result?.signatures?.[0]?.label ?? JSON.stringify(fnSignature.result ?? fnSignature.error);
+    check('signature help inside `distance(`, imported with `use function`, shows its parameters', /Point \$a/.test(fnLabel) && /Point \$b/.test(fnLabel), JSON.stringify(fnLabel));
+
+    const classRename = await lsp.request('textDocument/rename', { ...at('geometry.php', 7, 13), newName: 'Pt' });
+    const classChanges = classRename.result?.documentChanges ?? [];
+    const classEdits = Object.fromEntries(classChanges.filter((c) => c.textDocument).map((c) => [c.textDocument.uri.replace('file:///workspace/', ''), c.edits.map((e) => e.newText)]));
+    check(
+        'rename of the class Point edits geometry.php, main.php and the test, and moves no file',
+        ['geometry.php', 'main.php', 'tests/GeometryTest.php'].every((f) => classEdits[f]?.some((t) => /\bPt\b/.test(t))) &&
+            classEdits['main.php'].filter((t) => /\bPt\b/.test(t)).length === 3 &&
+            classChanges.every((c) => c.textDocument),
+        JSON.stringify(classRename.result ?? classRename.error).slice(0, 400),
+    );
+    // Known limit: Phpactor has no renamer for functions.
+    const fnPrepare = await lsp.request('textDocument/prepareRename', at('geometry.php', 23, 11));
+    console.log(`      (prepareRename on the function \`distance\`: ${JSON.stringify(fnPrepare.result ?? fnPrepare.error ?? null)})`);
+
+    const keywordText = MAIN + `function f(): int\n{\n    retu\n    $retu\n}\n`;
+    await change('main.php', keywordText);
+    const keywordLine = keywordText.split('\n').indexOf('    retu');
+    const keywords = await lsp.request('textDocument/completion', at('main.php', keywordLine, 8));
+    const keywordItems = (keywords.result?.items ?? keywords.result ?? []).map((i) => i.label);
+    check('completion of `retu` in a function body offers the keyword `return`', keywordItems.includes('return'), JSON.stringify(keywordItems.slice(0, 12)));
+    const variable = await lsp.request('textDocument/completion', at('main.php', keywordLine + 1, 9));
+    const variableItems = (variable.result?.items ?? variable.result ?? []).map((i) => i.label);
+    check('completion of `$retu` offers no keyword', !variableItems.includes('return'), JSON.stringify(variableItems.slice(0, 12)));
+    await change('main.php', MAIN);
 
     const unimported = MAIN.replace('use Geometry\\Shapes\\Circle;\n', '') + `echo (new Circle())->area();\n`;
     await change('main.php', unimported);

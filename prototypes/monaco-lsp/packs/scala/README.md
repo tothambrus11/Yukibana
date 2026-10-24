@@ -4,7 +4,7 @@
 upstream source ([scala/scala3](https://github.com/scala/scala3) at tag `3.7.4`,
 commit `40be7608a48477951218ae3a8ac8749fe02ba988`). It is compiled to one
 JavaScript ES module with **Scala.js 1.19.0** and runs in a module Web Worker.
-`ScalaService.scala` (about 400 lines) drives the compiler's own interactive
+`ScalaService.scala` (about 650 lines) drives the compiler's own interactive
 API (`dotty.tools.dotc.interactive`: `InteractiveCompiler`, `Completion`,
 `Interactive`, plus `util.Signatures` and `ParsedComment`), the API that
 upstream's former Dotty Language Server was built on. `src/server.js` speaks
@@ -41,11 +41,32 @@ All of this was checked by `test.mjs` in headless Chromium (output below):
   earlier build ranked by owner only, so the IDE listed `!=, ##, ->, ==, _1,
   _2, asInstanceOf, canEqual` before `norm`; `test.mjs` now checks that
   `norm` is among the first three.
+* **Completion where a name is typed** (not after a `.`) adds what the
+  compiler's interactive API does not offer, as Metals does:
+  * **keywords** (`whil` → `while`, `{ val n = 1; i` → `if`), filtered by
+    the typed prefix and ranked after every symbol;
+  * after `case` in a match, the **scrutinee's enum cases**, qualified
+    (`c match` / `case Re` → `Color.Red`; inserted as `Color.Red`, filtered
+    as `Red`), or the children of a sealed type;
+  * **project definitions from other packages** (top-level classes, traits,
+    objects, enums, defs and vals) with the import they need, as an
+    additional text edit after the last import or the package clause
+    (`Shou` → `Shouter`, `import tools.Shouter`).
 * **Hover:** the declaration (`def norm: Double`,
   `override final def map[B](f: A => B): List[B]`, `val xs: List[Int]`) and
-  Scaladoc rendered as Markdown.
+  Scaladoc rendered as Markdown. Classes, traits, objects, enums and enum
+  cases are written out by `ScalaService` (`case class Point(x: Double, y:
+  Double)`, `abstract class Base[+T](val t: T) extends Shape`, `enum Color`,
+  `case Red: Color`): the compiler's `showDcl` prints a class with its tree,
+  and hover once showed `case case class Point extends Object with Product
+  with Serializable {} at (demo : demo.type)`.
 * **Signature help**, **go to definition** (across files), **references**,
-  **document highlight**, and **document symbols** (nested).
+  **document highlight**, **rename** (across files) and **document symbols**
+  (nested). References to a class or object are the occurrences rename
+  edits: the class, its companion and a case class's synthetic
+  `apply`/`unapply`, so `Point(0, 0)` in another file is a reference to the
+  case class `Point` (the compiler's `namedTrees` skips the synthetic
+  companion and found only the declaring file's uses).
 * **Standard library:** the Scala 3 library is read from its TASTy, the Scala
   2.13.16 library from its class-file pickles. The JDK is the public API of
   `java.lang`, `java.io`, `java.math`, `java.nio`, `java.text`, `java.time`,
@@ -85,10 +106,23 @@ All of this was checked by `test.mjs` in headless Chromium (output below):
   operations, and given/implicit resolution are not macros and work.
 * **No dependencies.** The class path is the JDK subset plus the two Scala
   libraries. There is no build file, no coursier and no `//> using dep`.
-* **Not offered by the server:** rename, formatting (scalafmt is a separate
-  JVM tool), code actions, semantic tokens, inlay hints, workspace symbols.
-  The compiler has what rename and highlighting would need. They were left out
-  for time.
+* **Not offered by the server:** formatting (scalafmt is a separate
+  JVM tool), code actions, type definition, semantic tokens, inlay hints,
+  workspace symbols. They were left out for time.
+* **Completion's additions are heuristics on the text**, not the parser's:
+  * keywords are offered wherever a name is typed outside a `//` comment or
+    a one-line string, whether or not the keyword fits there (`yield`
+    outside a `for`); a keyword is never offered with nothing typed;
+  * enum cases need `case` on the same line as the cursor, in a `match`
+    whose scrutinee's type is an enum or a sealed type (a `catch` or a
+    partial function `{ case ... }` gets nothing);
+  * auto-import indexes the open project only, not the standard library or
+    the JDK (`ListBuff` still offers nothing), and a project definition in the
+    empty package cannot be imported. A symbol whose simple name the compiler
+    already offers is not offered again, even if it is another one.
+* **Hover** writes the types of values and parameters fully qualified when
+  they are not in scope (`val c: demo.Color`), as the compiler shows them;
+  only class names in a class's own declaration are shortened.
 * `.sc` scripts and worksheets, and `.java` sources in the project, are not
   compiled.
 * **Scala.js number semantics** show through in a few printed values: a
@@ -446,24 +480,39 @@ Scala.js runtime, and this pack's own files.
 
 `npm install && node test.mjs` (after `./build.sh`) serves `app/static` over
 http, starts `server.js` as a module worker in Chromium
-(`/opt/pw-browsers/chromium`), and drives it as the app's client does. Last run:
+(`/opt/pw-browsers/chromium`), and drives it as the app's client does. Last run (lines cut at 400 characters):
 
 ```text
-PASS  initialize answers after the compiler and class path download, with progress notifications  (894 ms, 25 progress messages, last {"label":"classpath.bin","loaded":5647106,"total":5647106}, server scala3-compiler-js (Scala 3.7.4 presentation front end))
-PASS  the two-file project type-checks with no diagnostics  (863 ms) []
+PASS  initialize answers after the compiler and class path download, with progress notifications  (1052 ms, 23 progress messages, last {"label":"classpath.bin","loaded":5647106,"total":5647106}, server scala3-compiler-js (Scala 3.7.4 presentation front end))
+PASS  the two-file project type-checks with no diagnostics  (1193 ms) []
 PASS  Geometry.scala has no diagnostics either  []
-PASS  assigning a String to an Int is a type error on that line  (2136 ms) "Found:    (\"five\" : String)\nRequired: Int" at {"start":{"line":6,"character":19},"end":{"line":6,"character":25}}
-PASS  completion after `p.` offers the members of Point from Geometry.scala  (220 ms, 39 items) ["ne","->","==","canEqual","!=","ensuring","ensuring","ensuring","ensuring","productIterator","y","productArity","toString","hashCode","asInstanceOf"]
-PASS  completion after `xs.` offers List methods from the standard library  (360 ms, 213 items) map: {"label":"map","detail":"[B](f: Int => B): List[B]","kind":2,"sortText":"0map"}
-PASS  hover on `norm` shows its declaration and Scaladoc  (54 ms) "```scala\ndef norm: Double\n```\n\nDistance from the origin."
+PASS  assigning a String to an Int is a type error on that line  (2694 ms) "Found:    (\"five\" : String)\nRequired: Int" at {"start":{"line":6,"character":19},"end":{"line":6,"character":25}}
+PASS  completion after `p.` offers the members of Point from Geometry.scala  (499 ms, 39 items) ["ne","->","==","canEqual","!=","ensuring","ensuring","ensuring","ensuring","productIterator","y","productArity","toString","hashCode","asInstanceOf"]
+PASS  completion after `p.` lists norm among the first three items, Point's members before Any/Product ones and symbolic ones last  ["copy","norm","x","y","canEqual","equals","hashCode","productArity","productElement","productElementName","productElementNames","productIterator"]
+PASS  completion after `xs.` offers List methods from the standard library  (589 ms, 213 items) map: {"label":"map","detail":"[B](f: Int => B): List[B]","kind":2,"sortText":"0map"}
+PASS  hover on `norm` shows its declaration and Scaladoc  (90 ms) "```scala\ndef norm: Double\n```\n\nDistance from the origin."
 PASS  hover on `map` (standard library) shows its signature  "```scala\noverride final def map[B](f: A => B): List[B]\n```"
 PASS  hover on `xs` shows the inferred type List[Int]  "```scala\nval xs: List[Int]\n```"
-PASS  go to definition of `Point` lands in Geometry.scala on its class name  (4 ms) [{"uri":"file:///workspace/Geometry.scala","range":{"start":{"line":3,"character":11},"end":{"line":3,"character":16}}}]
+PASS  go to definition of `Point` lands in Geometry.scala on its class name  (5 ms) [{"uri":"file:///workspace/Geometry.scala","range":{"start":{"line":3,"character":11},"end":{"line":3,"character":16}}}]
 PASS  go to definition of `Util.double` lands on `def double` in Geometry.scala  [{"uri":"file:///workspace/Geometry.scala","range":{"start":{"line":8,"character":6},"end":{"line":8,"character":12}}}]
 PASS  references to `norm` include its declaration and its use in Main.scala  ["Main.scala:5","Geometry.scala:5"]
+PASS  prepareRename on `norm` in Main.scala offers its name  {"jsonrpc":"2.0","id":10,"result":{"range":{"start":{"line":5,"character":12},"end":{"line":5,"character":16}},"placeholder":"norm"}}
+PASS  renaming `norm` to `length` edits its declaration and its use, and nothing else  ["Geometry.scala:5:6-10=length","Main.scala:5:12-16=length"]
+PASS  renaming Point from its construction `Point(3, 4)` renames the class too  {"changes":{"file:///workspace/Main.scala":[{"range":{"start":{"line":3,"character":10},"end":{"line":3,"character":15}},"newText":"Vec"}],"file:///workspace/Geometry.scala":[{"range":{"start":{"line":3,"character":11},"end":{"line":3,"character":16}},"newText":"Vec"}]}}
+PASS  renaming the case class Point also renames its construction in Main.scala  {"changes":{"file:///workspace/Main.scala":[{"range":{"start":{"line":3,"character":10},"end":{"line":3,"character":15}},"newText":"Vec"}],"file:///workspace/Geometry.scala":[{"range":{"start":{"line":3,"character":11},"end":{"line":3,"character":16}},"newText":"Vec"}]}}
+PASS  renaming `println` is refused: it is declared in the standard library  {"jsonrpc":"2.0","id":14,"error":{"code":-32600,"message":"This symbol is declared outside the project (in the standard library) and cannot be renamed."}}
+PASS  a reserved word is refused as a new name  {"code":-32602,"message":"\"val\" is not a Scala identifier"}
 PASS  document symbols list Point, Point.norm, Util and Util.double  ["Point","Point.x","Point.y","Point.norm","Util","Util.double"]
 PASS  signature help inside `Util.double(...)` shows its parameter  {"label":"double(v: Double): Double","documentation":"","parameters":[{"label":"v: Double"}]}
-PASS  a position past the end of a line answers for the end of that line  {"contents":{"kind":"markdown","value":"```scala\ncase case class Point extends Object with Product with Serializable {} at\n  (demo : demo.type)\n```\n\nA point in the plane."}}
+PASS  hover on `Point` shows `case class Point(x: Double, y: Double)` and its Scaladoc, not a tree dump  "```scala\ncase class Point(x: Double, y: Double)\n```\n\nA point in the plane."
+PASS  hover on `Util` shows `object Util`  "```scala\nobject Util\n```"
+PASS  references to the case class Point (asked from Geometry.scala) include `Point(3, 4)` in Main.scala  ["Geometry.scala:3:11","Main.scala:3:10"]
+PASS  references to the case class Point (asked from Main.scala) include `Point(3, 4)` in Main.scala  ["Geometry.scala:3:11","Main.scala:3:10"]
+PASS  without includeDeclaration, references to Point leave out its declaration  [{"uri":"file:///workspace/Main.scala","range":{"start":{"line":3,"character":10},"end":{"line":3,"character":15}}}]
+PASS  keyword completion: `whil` offers `while`, `{ val n = 1; i` offers `if` after the symbols, `xs.fi` offers no keyword  {"whil":["while"],"i":["io","invoke","if","implicit","import","infix"],"xs.fi":[]}
+PASS  after `case Re` in a match on a Color, `Color.Red` is offered (and not Color.Green)  [{"label":"Record","detail":"Record","kind":9,"sortText":"0Record"},{"label":"ReflectiveOperationException","detail":"ReflectiveOperationException","kind":9,"sortText":"0ReflectiveOperationException"},{"label":"Readable","detail":"Readable","kind":9,"sortText":"0Readable"},{"label":"Color.Red","filterText":"
+PASS  `Shou` offers Shouter from package tools, with `import tools.Shouter` after the package clause  {"label":"Shouter","kind":9,"labelDetails":{"description":"tools"},"detail":"import tools.Shouter","sortText":"2Shouter","additionalTextEdits":[{"range":{"start":{"line":0,"character":12},"end":{"line":0,"character":12}},"newText":"\n\nimport tools.Shouter"}]}
+PASS  a position past the end of a line answers for the end of that line  {"contents":{"kind":"markdown","value":"```scala\ncase class Point(x: Double, y: Double)\n```\n\nA point in the plane."}}
 PASS  a completion request without a document or position is refused as InvalidParams  {"code":-32602,"message":"expected textDocument.uri and a position { line, character } of non-negative integers"}
 PASS  deleting Geometry.scala makes Point and Util unresolved in Main.scala  ["Not found: Point - did you mean print?"]
 PASS  a use of an ordinary inline macro type-checks silently (it is never expanded)  []
@@ -472,28 +521,22 @@ PASS  a non-Scala project file is not compiled
 PASS  shutdown answers
 PASS  a request after shutdown is refused as InvalidRequest  {"code":-32600,"message":"textDocument/hover after shutdown"}
 PASS  the worker reported no errors  []
-  [server log] Scala 3.7.4 compiler loaded in 648 ms, class path (4149 files) read in 219 ms
-  [server log] checked 2 file(s) in 565 ms: 0 diagnostic(s)
-  [server log] checked 2 file(s) in 1799 ms: 1 diagnostic(s)
-  [server log] checked 2 file(s) in 52 ms: 1 diagnostic(s)
-  [server log] checked 2 file(s) in 55 ms: 1 diagnostic(s)
-  [server log] checked 2 file(s) in 50 ms: 0 diagnostic(s)
-  [server log] checked 1 file(s) in 357 ms: 1 diagnostic(s)
-  [server log] checked 3 file(s) in 163 ms: 1 diagnostic(s)
-  [server log] checked 3 file(s) in 87 ms: 2 diagnostic(s)
-all checks passed
-```scala\ndef norm: Double\n```\n\nDistance from the origin."
-PASS  hover on `map` (standard library) shows its signature  "```scala\noverride final def map[B](f: A => B): List[B]\n```"
-PASS  hover on `xs` shows the inferred type List[Int]  "```scala\nval xs: List[Int]\n```"
-PASS  go to definition of `Point` lands in Geometry.scala on its class name
-PASS  go to definition of `Util.double` lands on `def double` in Geometry.scala
-PASS  references to `norm` include its declaration and its use in Main.scala  ["Main.scala:5","Geometry.scala:5"]
-PASS  document symbols list Point, Point.norm, Util and Util.double
-PASS  signature help inside `Util.double(...)` shows its parameter  {"label":"double(v: Double): Double", ...}
-PASS  deleting Geometry.scala makes Point and Util unresolved in Main.scala  ["Not found: Point - did you mean print?"]
-PASS  a non-Scala project file is not compiled
-PASS  shutdown answers
-PASS  the worker reported no errors  []
+  [server log] Scala 3.7.4 compiler loaded in 673 ms, class path (4149 files) read in 336 ms
+  [server log] checked 2 file(s) in 875 ms: 0 diagnostic(s)
+  [server log] checked 2 file(s) in 2418 ms: 1 diagnostic(s)
+  [server log] checked 2 file(s) in 209 ms: 1 diagnostic(s)
+  [server log] checked 2 file(s) in 90 ms: 1 diagnostic(s)
+  [server log] checked 2 file(s) in 82 ms: 0 diagnostic(s)
+  [server log] rename norm -> length: 2 occurrence(s) in 2 file(s)
+  [server log] rename Point -> Vec: 2 occurrence(s) in 2 file(s)
+  [server log] rename Point -> Vec: 2 occurrence(s) in 2 file(s)
+  [server log] checked 2 file(s) in 2763 ms: 3 diagnostic(s)
+  [server log] checked 3 file(s) in 78 ms: 2 diagnostic(s)
+  [server log] checked 4 file(s) in 67 ms: 1 diagnostic(s)
+  [server log] checked 2 file(s) in 392 ms: 0 diagnostic(s)
+  [server log] checked 1 file(s) in 381 ms: 1 diagnostic(s)
+  [server log] checked 3 file(s) in 178 ms: 1 diagnostic(s)
+  [server log] checked 3 file(s) in 78 ms: 2 diagnostic(s)
 all checks passed
 ```
 

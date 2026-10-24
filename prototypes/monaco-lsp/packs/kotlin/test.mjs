@@ -5,7 +5,9 @@
 // README that must be ignored. The server reads syntax only (README.md):
 // checks syntax errors, completion of names and of a project class's
 // members, hover with KDoc, definition and references across files,
-// symbols, signature help, deleting a file, and malformed and late requests.
+// symbols, signature help, an enum's entries (after `Color.` and in `when`),
+// rename and what it refuses, deleting a file, and malformed and late
+// requests.
 //
 //   node test.mjs            (after ./build.sh; needs playwright-core)
 
@@ -59,6 +61,19 @@ const MAIN = `fun main() {
     val names = listOf("été", "x").map { it.uppercase() }
     println("$a to $b: \${distance(a, b)} \${names}")
     println(b.norm())
+}
+`;
+const COLOR = `/** A colour. */
+enum class Color(val hex: String) {
+    RED("#f00"), GREEN("#0f0"), BLUE("#00f");
+
+    fun dim(): Color = this
+}
+
+fun describe(c: Color): String = when (c) {
+    // RED unqualified would need an import.
+    Color.RED -> "red"
+    else -> "other"
 }
 `;
 // A new line 6, inside main.
@@ -230,6 +245,44 @@ try {
     check('signature help inside `distance(a, b)` shows its parameters, the second active', /distance\(a: Point, b: Point\): Double/.test(sig.result?.signatures?.[0]?.label ?? '') && sig.result?.activeParameter === 1, JSON.stringify(sig.result));
     const sig2 = await lsp.request('textDocument/signatureHelp', at(M, 1, 18));
     check('signature help inside `Point(...)` shows the constructor\'s parameters', /Point\(val x: Double, val y: Double\)/.test(sig2.result?.signatures?.[0]?.label ?? ''), JSON.stringify(sig2.result));
+
+    // An enum in a third file: its entries after `Color.` and in `when`, and rename.
+    const C = 'src/main/kotlin/Color.kt';
+    await lsp.notify('textDocument/didOpen', { textDocument: { uri: uri(C), languageId: 'kotlin', version: 1, text: COLOR } });
+    const cd = await diagnostics(C, () => true);
+    check('Color.kt, an enum class with entries and a when, has no syntax errors', cd?.length === 0, JSON.stringify(cd?.map((d) => d.message)));
+    await change(M, insert('    Color.'));
+    const ec = await lsp.request('textDocument/completion', at(M, 6, 10));
+    const el = (ec.result?.items ?? []).map((i) => i.label);
+    check('completion after `Color.` offers the enum\'s entries and entries/values/valueOf, not instance members', ['RED', 'GREEN', 'BLUE', 'entries', 'valueOf'].every((l) => el.includes(l)) && !el.includes('hex') && !el.includes('dim'), JSON.stringify(el));
+    await change(M, insert('    val c: Color = Color.RED\n    when (c) {\n        GR'));
+    const wc = await lsp.request('textDocument/completion', at(M, 8, 10));
+    const green = (wc.result?.items ?? []).find((i) => i.label === 'GREEN');
+    check('completion in an unfinished `when (c) {` with `c: Color` offers GREEN, inserted as Color.GREEN', green?.textEdit?.newText === 'Color.GREEN', JSON.stringify(green));
+    await change(M, insert('    val c: Color = Color.RED\n    when (c) {\n        Color.RED -> GR\n    }'));
+    const wb = await lsp.request('textDocument/completion', at(M, 8, 23));
+    check('after `->`, in a branch\'s body, the entries are not offered', !(wb.result?.items ?? []).some((i) => i.label === 'GREEN'), JSON.stringify((wb.result?.items ?? []).slice(0, 5).map((i) => i.label)));
+    const ed = await lsp.request('textDocument/definition', at(C, 9, 12));
+    const et = [ed.result].flat()[0];
+    check('go to definition of `RED` in `Color.RED` lands on the entry', et?.uri === uri(C) && et?.range.start.line === 2 && et?.range.start.character === 4, JSON.stringify(ed.result));
+
+    await change(M, MAIN);
+    const pr = await lsp.request('textDocument/prepareRename', at(M, 4, 31));
+    check('prepareRename on `distance` answers its range and name', pr.result?.placeholder === 'distance' && pr.result?.range?.start?.line === 4, JSON.stringify(pr.result ?? pr.error));
+    const rn = await lsp.request('textDocument/rename', { ...at(M, 4, 31), newName: 'dist' });
+    const rc = Object.fromEntries(Object.entries(rn.result?.changes ?? {}).map(([u, e]) => [short(u), e.map((x) => `${x.range.start.line}:${x.range.start.character}`).sort()]));
+    check('rename of `distance` edits its declaration in Geometry.kt and the call in Main.kt', JSON.stringify(rc) === JSON.stringify({ 'Geometry.kt': ['9:4'], 'Main.kt': ['4:25'] }), JSON.stringify(rn.result ?? rn.error));
+    const rr = await lsp.request('textDocument/rename', { ...at(C, 2, 5), newName: 'CRIMSON' });
+    const rrc = Object.fromEntries(Object.entries(rr.result?.changes ?? {}).map(([u, e]) => [short(u), e.map((x) => `${x.range.start.line}:${x.range.start.character}`).sort()]));
+    check('rename of the entry RED edits it and `Color.RED` in the when', JSON.stringify(rrc) === JSON.stringify({ 'Color.kt': ['2:4', '9:10'] }), JSON.stringify(rr.result ?? rr.error));
+    const rp = await lsp.request('textDocument/prepareRename', at(M, 5, 6));
+    check('rename of `println` is refused: it is the standard library\'s', /standard library/.test(rp.error?.message ?? ''), JSON.stringify(rp.result ?? rp.error));
+    const rk = await lsp.request('textDocument/prepareRename', at(M, 1, 5));
+    check('rename of the keyword `val` is refused as a keyword', /keyword/.test(rk.error?.message ?? ''), JSON.stringify(rk.result ?? rk.error));
+    const ri = await lsp.request('textDocument/prepareRename', at(M, 3, 41));
+    check('rename of the implicit `it` is refused', /implicit/.test(ri.error?.message ?? ''), JSON.stringify(ri.result ?? ri.error));
+    const rw = await lsp.request('textDocument/rename', { ...at(M, 4, 31), newName: 'when' });
+    check('a rename to a keyword is refused', /keyword/.test(rw.error?.message ?? ''), JSON.stringify(rw.result ?? rw.error));
 
     const malformed = await lsp.request('textDocument/completion', {});
     check('a completion request without a document or position is refused as InvalidParams', malformed.error?.code === -32602, JSON.stringify(malformed.error));

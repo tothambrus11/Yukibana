@@ -4,8 +4,11 @@
 // (Main.scala uses Point and Util from Geometry.scala) and a README that must
 // be ignored. Checks: a clean project has no errors; an introduced type error
 // is reported on its line; completion after `p.` (project class) and `xs.`
-// (standard library); hover with signature and Scaladoc; go to definition
-// across files; references; deleting a file makes its uses unresolved; what a
+// (standard library); keywords, enum cases after `case`, and project symbols
+// of another package with their import; hover with signature and Scaladoc
+// (a class as its declaration); go to definition across files; references
+// (a case class's construction included); deleting a file makes its uses
+// unresolved; what a
 // macro does here (nothing, or an error for a transparent one); malformed
 // requests and requests after shutdown are refused, not crashed on.
 //
@@ -243,6 +246,63 @@ try {
 
     const sig = await lsp.request('textDocument/signatureHelp', at('Main.scala', 5, 31));
     check('signature help inside `Util.double(...)` shows its parameter', /double\(v: Double\): Double/.test(sig.result?.signatures?.[0]?.label ?? ''), JSON.stringify(sig.result?.signatures?.[0]));
+
+    // Hover on a class is written as its declaration, not the compiler's
+    // tree dump (`case case class Point extends Object with Product ... at
+    // (demo : demo.type)`, which is what it once showed).
+    const classHover = await lsp.request('textDocument/hover', at('Main.scala', 3, 11));
+    const classText = classHover.result?.contents?.value ?? JSON.stringify(classHover.result);
+    check('hover on `Point` shows `case class Point(x: Double, y: Double)` and its Scaladoc, not a tree dump',
+        classText.includes('case class Point(x: Double, y: Double)\n') && /A point in the plane/.test(classText) && !/case case| at\b|extends Object/.test(classText),
+        JSON.stringify(classText));
+    const objectHover = await lsp.request('textDocument/hover', at('Main.scala', 5, 20));
+    check('hover on `Util` shows `object Util`', /```scala\nobject Util\n```/.test(objectHover.result?.contents?.value ?? ''), JSON.stringify(objectHover.result?.contents?.value));
+
+    // A case class's construction in another file goes through its
+    // companion's synthetic `apply`; references to the class once missed it.
+    for (const [from, pos] of [['Geometry.scala', at('Geometry.scala', 3, 12)], ['Main.scala', at('Main.scala', 3, 11)]]) {
+        const pointRefs = await lsp.request('textDocument/references', { ...pos, context: { includeDeclaration: true } });
+        const where = (pointRefs.result ?? []).map((r) => `${r.uri.split('/').pop()}:${r.range.start.line}:${r.range.start.character}`).sort();
+        check(`references to the case class Point (asked from ${from}) include \`Point(3, 4)\` in Main.scala`,
+            JSON.stringify(where) === JSON.stringify(['Geometry.scala:3:11', 'Main.scala:3:10']), JSON.stringify(where));
+    }
+    const noDecl = await lsp.request('textDocument/references', { ...at('Main.scala', 3, 11), context: { includeDeclaration: false } });
+    check('without includeDeclaration, references to Point leave out its declaration', (noDecl.result ?? []).length === 1 && noDecl.result[0].uri === uri('Main.scala'), JSON.stringify(noDecl.result));
+
+    // Keywords: the compiler never offers them. They are filtered by what is
+    // typed, ranked after symbols, and never offered after a `.`.
+    await change('Main.scala', MAIN + '  def probe3 = whil\n  { val n = 1; i }\n  xs.fi\n');
+    const kwWhile = (await lsp.request('textDocument/completion', at('Main.scala', 6, 19))).result?.items ?? [];
+    const kwIf = (await lsp.request('textDocument/completion', at('Main.scala', 7, 16))).result?.items ?? [];
+    const kwDot = (await lsp.request('textDocument/completion', at('Main.scala', 8, 7))).result?.items ?? [];
+    const ifItem = kwIf.find((i) => i.label === 'if');
+    check('keyword completion: `whil` offers `while`, `{ val n = 1; i` offers `if` after the symbols, `xs.fi` offers no keyword',
+        kwWhile.some((i) => i.label === 'while' && i.kind === 14) && !kwWhile.some((i) => i.label === 'match') &&
+        !!ifItem && kwIf.filter((i) => i.kind !== 14).every((i) => key(i) < key(ifItem)) &&
+        kwDot.some((i) => i.label === 'filter') && !kwDot.some((i) => i.kind === 14),
+        JSON.stringify({ whil: kwWhile.map((i) => i.label), i: kwIf.map((i) => i.label).slice(-6), 'xs.fi': kwDot.filter((i) => i.kind === 14).map((i) => i.label) }));
+
+    // After `case` in a match, the scrutinee's enum cases, qualified.
+    await lsp.notify('textDocument/didOpen', { textDocument: { uri: uri('Colors.scala'), languageId: 'scala', version: 1, text: 'package demo\n\nenum Color:\n  case Red, Green, Blue\n' } });
+    await change('Main.scala', MAIN + '  val c: Color = Color.Green\n  c match\n    case Re\n');
+    const cases = (await lsp.request('textDocument/completion', at('Main.scala', 8, 11))).result?.items ?? [];
+    const red = cases.find((i) => i.label === 'Color.Red');
+    check('after `case Re` in a match on a Color, `Color.Red` is offered (and not Color.Green)',
+        red?.insertText === 'Color.Red' && red?.filterText === 'Red' && !cases.some((i) => i.label === 'Color.Green'),
+        JSON.stringify(cases.slice(0, 4)));
+
+    // Auto-import: a project definition in another package, with its import.
+    await lsp.notify('textDocument/didOpen', { textDocument: { uri: uri('tools/Strings.scala'), languageId: 'scala', version: 1, text: 'package tools\n\nobject Shouter:\n  def shout(s: String): String = s.toUpperCase\n' } });
+    await change('Main.scala', MAIN + '  val s = Shou\n');
+    const imports = (await lsp.request('textDocument/completion', at('Main.scala', 6, 14))).result?.items ?? [];
+    const shouter = imports.find((i) => i.label === 'Shouter');
+    const importEdit = shouter?.additionalTextEdits?.[0];
+    check('`Shou` offers Shouter from package tools, with `import tools.Shouter` after the package clause',
+        importEdit?.newText === '\n\nimport tools.Shouter' && importEdit.range.start.line === 0 && importEdit.range.start.character === 'package demo'.length,
+        JSON.stringify(shouter));
+    await lsp.notify('textDocument/didClose', { textDocument: { uri: uri('Colors.scala') } });
+    await lsp.notify('textDocument/didClose', { textDocument: { uri: uri('tools/Strings.scala') } });
+    await change('Main.scala', MAIN);
 
     // Line 3 is `  val p = Point(3, 4)`. A character far past its end is the
     // end of that line (LSP), not a token on a later line.

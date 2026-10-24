@@ -196,20 +196,148 @@ final class ScalaService(bundle: Int8Array) {
   private def allTrees: List[SourceTree] = trees.values.flatten.toList
 
   /** Completion items at a position: label, detail (the member's type) and an
-   *  LSP CompletionItemKind. */
+   *  LSP CompletionItemKind. What the compiler offers comes first; then, where
+   *  a name is being typed (not after a `.`), the compiler's interactive API
+   *  has nothing, and this adds it the way Metals does:
+   *   - after `case` in a match, the cases of the scrutinee's enum or sealed
+   *     type (`Color.Red`, which the compiler offers only after `Color.`);
+   *   - project definitions from other packages, with the import they need
+   *     (an additional text edit);
+   *   - keywords (`while`, `if`, `match`), which the compiler never offers,
+   *     ranked after every symbol. */
   @JSExport def completion(uri: String, line: Int, character: Int): js.Array[js.Object] = {
     val out = js.Array[js.Object]()
     for (pos <- position(uri, line, character)) {
       given Context = unitCtx(uri)
       val (_, items) = Completion.completions(pos)
+      val labels = mutable.Set.empty[String]
       items.foreach { c =>
+        labels += c.label
         // sortText orders; label and filterText (= label) are left as the
         // compiler gives them, so typing still filters on the real name.
         out.push(js.Dynamic.literal(label = c.label, detail = c.description, kind = kindOf(c.symbols),
           sortText = rank(c.label, c.symbols).toString + c.label))
       }
+      val text = pos.source.content()
+      val point = pos.span.point
+      var start = point
+      while (start > 0 && (Character.isUnicodeIdentifierPart(text(start - 1)) || text(start - 1) == '$')) start -= 1
+      val prefix = new String(text, start, point - start)
+      var lineStart = start
+      while (lineStart > 0 && text(lineStart - 1) != '\n') lineStart -= 1
+      val before = new String(text, lineStart, start - lineStart)
+      // In a comment or a string (on this line: good enough for typing) a
+      // name is not code, and after a `.` only members make sense.
+      val code = !(start > 0 && text(start - 1) == '.') && !before.contains("//") && before.count(_ == '"') % 2 == 0
+      if (code) {
+        if (CaseHead.matches(before)) enumCases(uri, point, prefix, labels).foreach(out.push(_))
+        if (prefix.nonEmpty && Character.isLetter(prefix.charAt(0))) autoImports(uri, prefix, labels).foreach(out.push(_))
+        if (prefix.nonEmpty)
+          for (k <- Keywords if k.startsWith(prefix) && k != prefix && !labels(k))
+            out.push(js.Dynamic.literal(label = k, kind = 14, sortText = "3" + k))
+      }
     }
     out
+  }
+
+  /** Scala 3's reserved words and the soft keywords that start a definition
+   *  or a clause. Offered after the symbols (rank 3): the compiler's own
+   *  completion never offers them, so `whil` once completed to nothing. */
+  private val Keywords = List("abstract", "case", "catch", "class", "def", "do", "else", "enum", "export", "extends",
+    "false", "final", "finally", "for", "given", "if", "implicit", "import", "lazy", "match", "new", "null", "object",
+    "override", "package", "private", "protected", "return", "sealed", "super", "then", "this", "throw", "trait",
+    "true", "try", "type", "val", "var", "while", "with", "yield",
+    "derives", "end", "extension", "infix", "inline", "opaque", "open", "transparent", "using")
+
+  /** The text before the name being typed in a pattern's head: `  case `. */
+  private val CaseHead = """(.*[\s{;(])?case\s+""".r
+
+  /** After `case` in `x match`, the cases of x's enum or sealed type whose
+   *  name starts with what is typed: an enum's cases qualified by their enum
+   *  (`Color.Red`, filtered and replaced as `Red` is typed), other children
+   *  by their name. The compiler offers `Color.Red` only after `Color.`, so
+   *  `case Re` once offered `Record` and `ReflectiveOperationException`. */
+  private def enumCases(uri: String, point: Int, prefix: String, labels: mutable.Set[String])(using Context): List[js.Object] = {
+    var found: Option[tpd.Match] = None
+    for (unit <- units.get(uri)) new tpd.TreeTraverser {
+      def traverse(tree: tpd.Tree)(using Context): Unit = tree match {
+        // The innermost match whose cases (after its selector) hold the point.
+        case m: tpd.Match if m.span.exists && m.span.contains(Span(point)) && m.selector.span.exists && m.selector.span.end <= point =>
+          found = Some(m); traverseChildren(tree)
+        case _ => traverseChildren(tree)
+      }
+    }.traverse(unit.tpdTree)
+    found.toList.flatMap { m =>
+      val cls = m.selector.tpe.widen.dealias.typeSymbol
+      if (!cls.isClass || !cls.isOneOf(Flags.Enum | Flags.Sealed)) Nil
+      else {
+        val companion = cls.companionModule
+        cls.children.flatMap { child =>
+          val name = (if (child.is(Flags.ModuleClass)) child.name.stripModuleClassSuffix else child.name).show
+          val label = if (companion.exists && child.owner == companion.moduleClass) companion.name.show + "." + name else name
+          if (!name.toLowerCase.startsWith(prefix.toLowerCase) || labels(label)) None
+          else {
+            labels += label
+            Some(js.Dynamic.literal(label = label, filterText = name, insertText = label,
+              kind = if (child.is(Flags.Enum)) 20 else kindOf(List(child)), detail = signature(child), sortText = "0 " + name))
+          }
+        }
+      }
+    }
+  }
+
+  /** Project definitions in another package than this file's, offered with
+   *  the import that brings them in scope: top-level classes, traits,
+   *  objects and enums, and top-level defs and vals. Only what starts with
+   *  the typed prefix and is not in scope already (the compiler offered it).
+   *  The standard library is not indexed: `ListBuff` still finds nothing. */
+  private def autoImports(uri: String, prefix: String, labels: mutable.Set[String])(using Context): List[js.Object] = {
+    def pkgOf(t: tpd.Tree): Symbol = t match {
+      case tpd.PackageDef(pid, stats) => stats.collectFirst { case p: tpd.PackageDef => pkgOf(p) }.getOrElse(pid.symbol)
+      case _ => NoSymbol
+    }
+    val here = units.get(uri).map(u => pkgOf(u.tpdTree)).getOrElse(NoSymbol)
+    val lower = prefix.toLowerCase
+    val seen = mutable.Set.empty[String]
+    val edit = importEdit(uri)
+    allTrees.flatMap { st =>
+      val sym = st.tree.symbol
+      val pkg = sym.owner
+      if (!sym.exists || !pkg.is(Flags.Package) || pkg == here || pkg.isEmptyPackage || pkg.isRoot) Nil
+      else {
+        val defs =
+          if (sym.isPackageObject)
+            sym.info.decls.toList.filter(d => d.isTerm && !d.isOneOf(Flags.Synthetic | Flags.Private | Flags.Protected) && !d.isConstructor)
+          else if (sym.isOneOf(Flags.Synthetic | Flags.Private)) Nil
+          else List(sym)
+        defs.flatMap { d =>
+          val name = (if (d.is(Flags.ModuleClass)) d.name.stripModuleClassSuffix else d.name).show
+          val full = pkg.fullName.show + "." + name
+          if (!name.toLowerCase.startsWith(lower) || labels(name) || !seen.add(full)) None
+          else Some(js.Dynamic.literal(label = name, kind = kindOf(List(d)),
+            labelDetails = js.Dynamic.literal(description = pkg.fullName.show), detail = "import " + full,
+            sortText = "2" + name, additionalTextEdits = js.Array(edit("import " + full))))
+        }
+      }
+    }
+  }
+
+  /** Where an import goes in a document, as a function of the import's text
+   *  to an LSP TextEdit: after the last top-level import, else after the
+   *  package clause(s) with a blank line, else at the top. */
+  private def importEdit(uri: String): String => js.Object = {
+    val lines = texts.getOrElse(uri, "").split("\n", -1)
+    val lastImport = lines.lastIndexWhere(_.startsWith("import "))
+    val lastPackage = lines.indexWhere(l => !l.startsWith("package ") && l.trim.nonEmpty && !l.trim.startsWith("//")) match {
+      case -1 => lines.lastIndexWhere(_.startsWith("package "))
+      case firstCode => lines.lastIndexWhere(_.startsWith("package "), firstCode)
+    }
+    if (lastImport >= 0) (imp: String) => js.Dynamic.literal(range = range(lastImport + 1, 0, lastImport + 1, 0), newText = imp + "\n")
+    else if (lastPackage >= 0) {
+      val end = lines(lastPackage).stripSuffix("\r").length
+      (imp: String) => js.Dynamic.literal(range = range(lastPackage, end, lastPackage, end), newText = "\n\n" + imp)
+    }
+    else (imp: String) => js.Dynamic.literal(range = range(0, 0, 0, 0), newText = imp + "\n\n")
   }
 
   /** Where a completion sorts, the way Metals ranks members:
@@ -269,12 +397,84 @@ final class ScalaService(bundle: Int8Array) {
       if (tp.isError || tpw == NoType) None
       else {
         val sym = Interactive.enclosingSourceSymbols(path, pos).headOption.getOrElse(NoSymbol)
-        val shown = if (sym.exists) sym.showDcl else tpw.show
+        val shown = if (sym.exists) signature(sym) else tpw.show
         val doc = if (sym.exists) ParsedComment.docOf(sym).map(_.renderAsMarkdown) else None
         val value = "```scala\n" + shown + "\n```" + doc.fold("")("\n\n" + _)
         Some(js.Dynamic.literal(contents = js.Dynamic.literal(kind = "markdown", value = value)))
       }
     }.orNull
+  }
+
+  /** A declaration as it is written in the source, for hover and details.
+   *  `showDcl` prints a class or object as the compiler sees it, its tree
+   *  included: hovering `Point` once showed `case case class Point extends
+   *  Object with Product with Serializable {} at (demo : demo.type)`. So
+   *  classes, traits, objects, enums and enum cases are written here:
+   *  `case class Point(x: Double, y: Double)`, `enum Color`, `case Red:
+   *  Color`, `abstract class Base[+T](val t: T) extends Shape`. Methods and
+   *  values are `showDcl`'s (`def norm: Double`), which is right for them. */
+  private def signature(sym0: Symbol)(using Context): String = {
+    // A case class's companion is synthetic: what it stands for is the class.
+    val sym =
+      if (sym0.is(Flags.Module) && sym0.is(Flags.Synthetic) && sym0.companionClass.exists) sym0.companionClass
+      else if (sym0.is(Flags.ModuleClass)) sym0.sourceModule
+      else sym0
+    val trivial = Set("java.lang.Object", "scala.Any", "scala.AnyRef", "scala.Matchable", "scala.Product",
+      "scala.Serializable", "java.io.Serializable", "scala.reflect.Enum", "scala.Equals")
+    // A class's own name, not its full one: `Shape`, not `demo.Shape`.
+    def short(tp: Type): String = tp match {
+      case AppliedType(tycon, args) if tycon.typeSymbol.isClass => tycon.typeSymbol.name.show + args.map(_.show).mkString("[", ", ", "]")
+      case _ if tp.typeSymbol.isClass => tp.typeSymbol.name.show
+      case _ => tp.show
+    }
+    def parents(cls: Symbol): String = {
+      val ps = cls.info match {
+        case ci: ClassInfo => ci.declaredParents.filter { p =>
+          val ps = p.typeSymbol
+          !trivial(ps.fullName.show) && !(cls.isAllOf(Flags.EnumCase) && cls.owner.linkedClass == ps)
+        }
+        case _ => Nil
+      }
+      if (ps.isEmpty) "" else ps.map(short).mkString(" extends ", " with ", "")
+    }
+    if (sym.isTerm && sym.isAllOf(Flags.EnumValue)) "case " + sym.name.show + ": " + short(sym.info.widen)
+    else if (sym.is(Flags.Module)) "object " + sym.name.show + parents(sym.moduleClass)
+    else if (sym.isClass) {
+      val cls = sym.asClass
+      val isCase = cls.is(Flags.Case)
+      val mods =
+        if (cls.is(Flags.Enum)) if (isCase) "case " else "enum "
+        else
+          (if (cls.is(Flags.Sealed)) "sealed " else "") +
+          (if (cls.is(Flags.Abstract) && !cls.is(Flags.Trait)) "abstract " else "") +
+          (if (cls.is(Flags.Final)) "final " else "") + (if (cls.is(Flags.Open)) "open " else "") +
+          (if (isCase) "case " else "") + (if (cls.is(Flags.Trait)) "trait " else "class ")
+      val tparams = cls.typeParams.map { tp =>
+        val variance = if (tp.is(Flags.Covariant)) "+" else if (tp.is(Flags.Contravariant)) "-" else ""
+        val bounds = tp.info match {
+          case TypeBounds(lo, hi) =>
+            (if (lo.isExactlyNothing) "" else " >: " + lo.show) + (if (hi.isExactlyAny) "" else " <: " + hi.show)
+          case _ => ""
+        }
+        variance + tp.name.show + bounds
+      }
+      val ctor = cls.primaryConstructor
+      val vparamss = if (ctor.exists) ctor.paramSymss.filterNot(_.headOption.exists(_.isType)) else Nil
+      val params =
+        if (vparamss.forall(_.isEmpty) && !isCase) ""
+        else vparamss.map { ps =>
+          val clause = if (ps.exists(_.is(Flags.Given))) "using " else if (ps.exists(_.is(Flags.Implicit))) "implicit " else ""
+          ps.map { p =>
+            val field = cls.info.decl(p.name).symbol
+            val keyword =
+              if (isCase || !field.exists || !field.is(Flags.ParamAccessor) || field.isOneOf(Flags.Private | Flags.Local)) ""
+              else if (field.is(Flags.Mutable)) "var " else "val "
+            keyword + p.name.show + ": " + p.info.show
+          }.mkString("(" + clause, ", ", ")")
+        }.mkString
+      mods + cls.name.show + (if (tparams.isEmpty) "" else tparams.mkString("[", ", ", "]")) + params + parents(cls)
+    }
+    else sym.showDcl
   }
 
   private def locations(uri: String, line: Int, character: Int, include: Include.Set): js.Array[js.Object] = {
@@ -293,51 +493,66 @@ final class ScalaService(bundle: Int8Array) {
     out
   }
 
+  /** The symbols a name at a position stands for, with what the source
+   *  writes under the same name: a class, its companion object and a case
+   *  class's synthetic `apply`/`unapply` are one name, so `Point(3, 4)` (the
+   *  companion's `apply`) is a use of `Point`. Empty when there is no symbol. */
+  private def nameGroup(uri: String, pos: SourcePosition)(using Context): List[Symbol] = {
+    val path = Interactive.pathTo(trees.getOrElse(uri, Nil), pos)
+    val found = Interactive.enclosingSourceSymbols(path, pos).filter(_.exists)
+    def owners(sym: Symbol): List[Symbol] =
+      if (sym.is(Flags.Synthetic) && (sym.name.toString == "apply" || sym.name.toString == "unapply") && sym.owner.is(Flags.ModuleClass))
+        List(sym.owner)
+      else List(sym)
+    found.flatMap(owners).flatMap { sym =>
+      if (sym.isClass || sym.is(Flags.Module))
+        List(sym, sym.companionClass, sym.companionModule, sym.moduleClass, sym.sourceModule, sym.linkedClass)
+      else List(sym)
+    }.filter(_.exists).distinct
+  }
+
+  /** Every place the project's trees name one of `wanted`, as LSP locations,
+   *  and whether one of them is a declaration. Declarations are left out
+   *  unless `declarations`. Not Interactive.namedTrees: it skips trees whose
+   *  symbol is synthetic, and a case class's companion is, so `Point(3, 4)`
+   *  (an Ident of the synthetic module val) was neither renamed nor found by
+   *  references from another file. */
+  private def occurrences(wanted: Set[Symbol], declarations: Boolean)(using Context): (Boolean, js.Array[js.Object]) = {
+    val out = js.Array[js.Object]()
+    val seen = mutable.Set.empty[(String, Int, Int)]
+    var declared = false
+    for (st <- allTrees) new tpd.TreeTraverser {
+      def traverse(tree: tpd.Tree)(using Context): Unit = {
+        tree match {
+          case t: tpd.NameTree if wanted.contains(t.symbol) && t.span.exists && !t.span.isSynthetic =>
+            val np = SourceTree(t, st.source).namePos
+            val isDecl = t.isInstanceOf[tpd.MemberDef]
+            if (np.exists && !np.span.isZeroExtent) {
+              if (isDecl) declared = true
+              if (declarations || !isDecl)
+                for (u <- uriOfSource(np.source) if seen.add((u, np.start, np.end)))
+                  out.push(js.Dynamic.literal(uri = u, range = rangeOf(np)))
+            }
+          case _ =>
+        }
+        traverseChildren(tree)
+      }
+    }.traverse(st.tree)
+    (declared, out)
+  }
+
   /** What renaming the symbol at a position touches, for the server's
    *  rename: `{ declared, locations }`, or null when there is no symbol.
    *  `declared` is whether the project declares it (a library symbol must
    *  not be renamed). A class, its companion object and a case class's
-   *  synthetic `apply` are one name in the source, so they rename together:
-   *  `Point(3, 4)` refers to the companion's `apply`, not to the class. */
+   *  synthetic `apply` are one name in the source, so they rename together. */
   @JSExport def renameTarget(uri: String, line: Int, character: Int): js.Object | Null = {
     position(uri, line, character).flatMap { pos =>
       given Context = unitCtx(uri)
-      val path = Interactive.pathTo(trees.getOrElse(uri, Nil), pos)
-      val found = Interactive.enclosingSourceSymbols(path, pos).filter(_.exists)
-      if (found.isEmpty) None
+      val syms = nameGroup(uri, pos)
+      if (syms.isEmpty) None
       else {
-        def owners(sym: Symbol): List[Symbol] =
-          if (sym.is(Flags.Synthetic) && (sym.name.toString == "apply" || sym.name.toString == "unapply") && sym.owner.is(Flags.ModuleClass))
-            List(sym.owner)
-          else List(sym)
-        val roots = found.flatMap(owners)
-        val syms = roots.flatMap { sym =>
-          if (sym.isClass || sym.is(Flags.Module))
-            List(sym, sym.companionClass, sym.companionModule, sym.moduleClass, sym.sourceModule, sym.linkedClass)
-          else List(sym)
-        }.filter(_.exists).distinct
-        // Not Interactive.namedTrees: it skips trees whose symbol is synthetic,
-        // and a companion object is, so `Point(3, 4)` (an Ident of the
-        // synthetic module val) would keep its old name.
-        val wanted = syms.toSet
-        val out = js.Array[js.Object]()
-        val seen = mutable.Set.empty[(String, Int, Int)]
-        var declared = false
-        for (st <- allTrees) new tpd.TreeTraverser {
-          def traverse(tree: tpd.Tree)(using Context): Unit = {
-            tree match {
-              case t: tpd.NameTree if wanted.contains(t.symbol) && t.span.exists && !t.span.isSynthetic =>
-                val np = SourceTree(t, st.source).namePos
-                if (np.exists && !np.span.isZeroExtent) {
-                  if (t.isInstanceOf[tpd.MemberDef]) declared = true
-                  for (u <- uriOfSource(np.source) if seen.add((u, np.start, np.end)))
-                    out.push(js.Dynamic.literal(uri = u, range = rangeOf(np)))
-                }
-              case _ =>
-            }
-            traverseChildren(tree)
-          }
-        }.traverse(st.tree)
+        val (declared, out) = occurrences(syms.toSet, declarations = true)
         Some(js.Dynamic.literal(declared = declared, locations = out))
       }
     }.orNull
@@ -346,14 +561,25 @@ final class ScalaService(bundle: Int8Array) {
   @JSExport def definition(uri: String, line: Int, character: Int): js.Array[js.Object] =
     locations(uri, line, character, Include.definitions | Include.linkedClass)
 
-  @JSExport def references(uri: String, line: Int, character: Int, includeDeclaration: Boolean): js.Array[js.Object] =
-    // Include.local: without it namedTrees does not look inside method bodies.
-    locations(uri, line, character,
-      if (includeDeclaration) Include.references | Include.definitions | Include.local else Include.references | Include.local)
+  /** References, from the compiler's namedTrees; for a class or object, the
+   *  same occurrences rename edits, so that a case class's construction in
+   *  another file (`Point(0, 0)`, through the companion's synthetic `apply`)
+   *  is a reference to it. namedTrees found only Geometry.scala's own uses. */
+  @JSExport def references(uri: String, line: Int, character: Int, includeDeclaration: Boolean): js.Array[js.Object] = {
+    val classLike = position(uri, line, character).map { pos =>
+      given Context = unitCtx(uri)
+      val syms = nameGroup(uri, pos)
+      if (syms.exists(s => s.isClass || s.is(Flags.Module))) Some(occurrences(syms.toSet, includeDeclaration)._2) else None
+    }
+    classLike.flatten.getOrElse(
+      // Include.local: without it namedTrees does not look inside method bodies.
+      locations(uri, line, character,
+        if (includeDeclaration) Include.references | Include.definitions | Include.local else Include.references | Include.local))
+  }
 
   @JSExport def highlight(uri: String, line: Int, character: Int): js.Array[js.Object] = {
     val out = js.Array[js.Object]()
-    locations(uri, line, character, Include.references | Include.definitions | Include.local).foreach { l =>
+    references(uri, line, character, includeDeclaration = true).foreach { l =>
       if (l.asInstanceOf[js.Dynamic].uri.asInstanceOf[String] == uri)
         out.push(js.Dynamic.literal(range = l.asInstanceOf[js.Dynamic].range, kind = 1))
     }

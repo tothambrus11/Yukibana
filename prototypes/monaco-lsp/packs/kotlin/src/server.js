@@ -7,8 +7,9 @@
 // name resolution done on the trees: what is declared where, which
 // declarations a scope sees, and the type a variable was declared with or
 // constructed as. That is enough for syntax errors, symbols, definition,
-// references, hover with KDoc, signature help and completion of names and
-// of the members of the project's own classes. It is not type checking: a
+// references, rename, hover with KDoc, signature help and completion of
+// names, of the members of the project's own classes and of their enum
+// entries (`Color.`, and in `when (color) {`). It is not type checking: a
 // type error, an unresolved name or a wrong argument is not reported, and
 // the members of a library type (String, List) are not known.
 
@@ -373,11 +374,82 @@ function resolveName(doc, name, offset, receiverEnd) {
     if (receiverEnd != null) {
         const cls = classOfReceiver(doc, receiverEnd);
         if (cls) return membersOf(cls).find((m) => m.name === name) ?? null;
+        const type = typeNamedAt(doc, receiverEnd);
+        if (type) return staticMembersOf(type).find((m) => m.name === name) ?? null;
         // A receiver of a type the syntax does not say: a member of any project class with that name, if just one.
         const candidates = allDecls().filter((d) => d.container && d.name === name);
         return candidates.length === 1 ? candidates[0] : null;
     }
-    return visibleAt(doc, offset).find((d) => d.name === name) ?? null;
+    return visibleAt(doc, offset).find((d) => d.name === name) ?? whenSubjectEnum(doc, offset)?.members.find((m) => m.kind === 'enumMember' && m.name === name) ?? null;
+}
+
+const TYPE_KINDS = ['class', 'interface', 'enum'];
+
+/**
+ * The project class a receiver ending at `end` names, when the receiver is
+ * the class's name itself (`Color` in `Color.RED`, `Outer.Inner`), not a
+ * value: what follows its dot are the class's static members. An object is
+ * a value, and classOfReceiver answers for it.
+ */
+function typeNamedAt(doc, end) {
+    const before = doc.text.slice(0, end).replace(/\s+$/, '');
+    const m = /([A-Za-z_]\w*)$/.exec(before);
+    if (!m) return null;
+    const start = before.length - m[1].length;
+    if (before.slice(0, start).trimEnd().endsWith('.')) {
+        const outer = typeNamedAt(doc, receiverStart(before, start));
+        return (outer && staticMembersOf(outer).find((x) => TYPE_KINDS.includes(x.kind) && x.name === m[1])) ?? null;
+    }
+    // A local or parameter named like the class shadows it.
+    const d = visibleAt(doc, start).find((x) => x.name === m[1]) ?? projectClass(m[1]);
+    return d && TYPE_KINDS.includes(d.kind) ? d : null;
+}
+
+/** What a class's name gives access to: its enum entries, its companion object's members, its nested classes and objects. */
+function staticMembersOf(cls) {
+    const out = [];
+    for (const m of cls.members) {
+        if (m.kind === 'enumMember' || m.kind === 'object' || TYPE_KINDS.includes(m.kind)) out.push(m);
+        if (m.node.type === 'companion_object') out.push(...m.members);
+    }
+    return out;
+}
+
+/**
+ * The project enum whose entries can be written at `offset`: in a branch
+ * condition of `when (subject) {`, the enum the subject's declared or
+ * constructed type is. A scan of the text back to the `when`'s brace, so it
+ * works while the `when` is unfinished (which the tree does not show): a
+ * condition is what the line has before any `->`.
+ */
+function whenSubjectEnum(doc, offset) {
+    const text = doc.text;
+    let depth = 0;
+    let sameLine = true;
+    for (let i = offset - 1; i >= 0 && offset - i < 4000; i--) {
+        const c = text[i];
+        if (c === ')' || c === ']' || c === '}') depth++;
+        else if (c === '(' || c === '[') {
+            if (depth === 0) return null;
+            depth--;
+        } else if (c === '{') {
+            if (depth > 0) {
+                depth--;
+                continue;
+            }
+            const from = Math.max(0, i - 300);
+            const head = /\bwhen\s*\(\s*(?:va[lr]\s+[A-Za-z_]\w*\s*(?::[^=()]*)?=\s*)?((?:[A-Za-z_]\w*\s*\.\s*)*)([A-Za-z_]\w*)\s*\)\s*$/d.exec(text.slice(from, i));
+            if (!head) return null;
+            const at = from + head.indices[2][0];
+            const d = resolveName(doc, head[2], at, head[1] ? receiverStart(text, at) : null);
+            const cls = classOfDecl(d);
+            return cls?.kind === 'enum' ? cls : null;
+        } else if (depth === 0 && sameLine) {
+            if (c === '\n' || c === ';') sameLine = false;
+            else if (c === '>' && text[i - 1] === '-') return null;
+        }
+    }
+    return null;
 }
 
 /** The identifier at an offset, and what it refers to. */
@@ -469,6 +541,7 @@ const capabilities = {
     referencesProvider: true,
     documentHighlightProvider: true,
     documentSymbolProvider: true,
+    renameProvider: { prepareProvider: true },
 };
 
 class RequestError extends Error {
@@ -495,6 +568,10 @@ const KEYWORDS = ('abstract annotation as break by catch class companion const c
 const STDLIB_FUNCTIONS = 'println print readln readLine readlnOrNull listOf mutableListOf arrayListOf emptyList mapOf mutableMapOf hashMapOf emptyMap setOf mutableSetOf emptySet arrayOf intArrayOf doubleArrayOf sequenceOf maxOf minOf require requireNotNull check error repeat lazy buildString buildList run let apply also with takeIf TODO'.split(' ');
 const STDLIB_TYPES = 'Any Unit Nothing Int Long Short Byte Double Float Boolean Char String List MutableList Map MutableMap Set MutableSet Array IntArray Pair Triple Sequence Comparable Iterable Collection Exception IllegalArgumentException IllegalStateException'.split(' ');
 const ANY_MEMBERS = [['toString', 'fun toString(): String'], ['equals', 'fun equals(other: Any?): Boolean'], ['hashCode', 'fun hashCode(): Int']];
+/** What every enum class has besides its entries, for `Color.`. */
+const ENUM_MEMBERS = (name) => [[10, 'entries', `val entries: EnumEntries<${name}>`], [2, 'values', `fun values(): Array<${name}>`], [2, 'valueOf', `fun valueOf(value: String): ${name}`]];
+/** Kotlin's hard keywords, which cannot name anything (unless in backticks). */
+const HARD_KEYWORDS = new Set('as break class continue do else false for fun if in interface is null object package return super this throw true try typealias typeof val var when while'.split(' '));
 
 const COMPLETION_KIND = { class: 7, interface: 8, enum: 13, object: 9, fun: 3, method: 2, property: 10, field: 5, variable: 6, enumMember: 20, alias: 7 };
 const item = (d, sort) => ({ label: d.name, kind: COMPLETION_KIND[d.kind] ?? 6, detail: d.implicit ? 'it (implicit lambda parameter)' : signatureOf(d.node, d.doc), sortText: `${sort}${d.name}` });
@@ -563,6 +640,12 @@ const requests = {
         if (dot) {
             const receiverEnd = before.slice(0, wordStart).replace(/\s*\.\s*$/, '').length;
             const cls = classOfReceiver(doc, receiverEnd);
+            const type = !cls && typeNamedAt(doc, receiverEnd);
+            if (type) {
+                const statics = staticMembersOf(type).map((m) => item(m, 0));
+                const extra = type.kind === 'enum' ? ENUM_MEMBERS(type.name).map(([kind, label, detail]) => ({ label, kind, detail, sortText: `1${label}` })) : [];
+                return { isIncomplete: false, items: [...statics, ...extra].map(withRange) };
+            }
             // A receiver whose class the syntax does not say: nothing, so
             // that the editor falls back to the words of the document.
             if (!cls) return { isIncomplete: false, items: [] };
@@ -575,10 +658,19 @@ const requests = {
         const visible = visibleAt(doc, offset).filter((d) => d.nameNode || d.implicit);
         const items = visible.map((d) => item(d, d.scope ? 0 : d.container ? 1 : 2));
         const names = new Set(items.map((i) => i.label));
+        // In a branch of `when (color) {`: the enum's entries, qualified
+        // unless they are visible as they are (inside the enum, or imported).
+        const subject = whenSubjectEnum(doc, wordStart);
+        const entries = (subject?.members ?? []).filter((m) => m.kind === 'enumMember' && !names.has(m.name)).map((m) => ({
+            ...item(m, 0),
+            detail: `${subject.name}.${m.name}`,
+            filterText: m.name,
+            textEdit: { range, newText: visible.includes(m) ? m.name : `${subject.name}.${m.name}` },
+        }));
         for (const k of KEYWORDS) if (!names.has(k)) items.push({ label: k, kind: 14, sortText: `5${k}` });
         for (const f of STDLIB_FUNCTIONS) if (!names.has(f)) items.push({ label: f, kind: 3, detail: 'Kotlin standard library', sortText: `3${f}` });
         for (const t of STDLIB_TYPES) if (!names.has(t)) items.push({ label: t, kind: 7, detail: 'Kotlin standard library', sortText: `4${t}` });
-        return { isIncomplete: false, items: items.map(withRange) };
+        return { isIncomplete: false, items: [...entries, ...items.map(withRange)] };
     },
     'completionItem/resolve': (p) => p,
     'textDocument/hover': (p) => {
@@ -632,6 +724,26 @@ const requests = {
         if (!s?.decl || s.decl.implicit) return [];
         return referencesTo(s.decl).filter((r) => r.doc === here.doc).map((r) => ({ range: rangeOf(r.doc, r.node.startIndex, r.node.endIndex), kind: r.decl ? 3 : 2 }));
     },
+    'textDocument/prepareRename': (p) => {
+        const here = at(p);
+        if (!here) return null;
+        const s = renameTarget(here.doc, here.offset);
+        return { range: rangeOf(here.doc, s.node.startIndex, s.node.endIndex), placeholder: s.node.text };
+    },
+    'textDocument/rename': (p) => {
+        const here = at(p);
+        if (!here) return null;
+        const newName = typeof p.newName === 'string' ? p.newName.trim() : '';
+        if (!/^(?:[A-Za-z_][A-Za-z0-9_]*|`[^`\r\n]+`)$/.test(newName) || HARD_KEYWORDS.has(newName)) {
+            throw new RequestError(InvalidParams, `${JSON.stringify(newName)} is not a Kotlin name${HARD_KEYWORDS.has(newName) ? ' (it is a keyword; write it in backticks)' : ''}`);
+        }
+        const s = renameTarget(here.doc, here.offset);
+        const changes = {};
+        for (const r of referencesTo(s.decl)) {
+            (changes[r.doc.uri] ??= []).push({ range: rangeOf(r.doc, r.node.startIndex, r.node.endIndex), newText: newName });
+        }
+        return { changes };
+    },
     'textDocument/documentSymbol': (p) => {
         const uri = p?.textDocument?.uri;
         if (typeof uri !== 'string') throw new RequestError(InvalidParams, 'expected textDocument.uri');
@@ -639,6 +751,26 @@ const requests = {
         return doc ? documentSymbols(doc) : [];
     },
 };
+
+/**
+ * What a rename at `offset` renames: an identifier that refers to a
+ * declaration of the project. Anything else is refused with the reason, which
+ * the editor shows: a keyword, a name of the standard library or of another
+ * library (which this server only knows by name), `it`.
+ */
+function renameTarget(doc, offset) {
+    const s = symbolAt(doc, offset);
+    if (!s) {
+        const word = (/[A-Za-z_]\w*$/.exec(doc.text.slice(0, offset))?.[0] ?? '') + (/^\w*/.exec(doc.text.slice(offset))?.[0] ?? '');
+        throw new RequestError(InvalidParams, KEYWORDS.includes(word) || HARD_KEYWORDS.has(word) ? `\`${word}\` is a keyword` : 'Nothing to rename here: put the cursor on a name');
+    }
+    if (s.decl?.implicit) throw new RequestError(InvalidParams, '`it` is the implicit parameter of the lambda; name it (`{ x -> … }`) to rename it');
+    if (!s.decl?.nameNode) {
+        const library = STDLIB_FUNCTIONS.includes(s.node.text) || STDLIB_TYPES.includes(s.node.text);
+        throw new RequestError(InvalidParams, `\`${s.node.text}\` is ${library ? 'from the Kotlin standard library' : 'not declared in this project (a library\'s, or one this server cannot resolve)'}, so it cannot be renamed`);
+    }
+    return s;
+}
 
 // Only Kotlin sources are parsed; the client opens every project file.
 const notifications = {

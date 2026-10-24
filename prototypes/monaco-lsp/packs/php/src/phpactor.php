@@ -2,8 +2,10 @@
 
 // Starts Phpactor in php-wasm, the way upstream's bin/phpactor starts it,
 // minus what the browser cannot do. Upstream's files are not modified: this
-// file is run instead of bin/phpactor, and replaces one upstream class
-// (lint.php) before the autoloader can load it.
+// file is run instead of bin/phpactor, and replaces three upstream classes
+// before the autoloader can load them (lint.php, rename.php, and
+// WorseSignatureHelper.php, which build.sh writes from upstream's with one
+// method changed by scripts/patch-signature-helper.php).
 //
 //   php /opt/yukibana/phpactor.php language-server   (server.js)
 //   php /opt/yukibana/phpactor.php index:build       (build.sh, ahead of time)
@@ -16,6 +18,10 @@
 //   turned off (CONFIG).
 // * There are no processes, so the linter that runs `php -l` is replaced by
 //   one that asks this PHP's own parser (lint.php).
+// * A class rename needs a file for the new name, which upstream finds only
+//   with Composer's autoloader (rename.php); signature help looks functions
+//   up by the name as written, missing `use function` imports
+//   (WorseSignatureHelper.php).
 // * Configuration on top of Phpactor's defaults (CONFIG, below), given to
 //   every command as --config-extra, so the index build.sh makes ahead of
 //   time is the index the language server would make.
@@ -61,6 +67,8 @@ $_SERVER['argv'][] = '--config-extra=' . json_encode(CONFIG);
 $root = '/opt/phpactor';
 require_once $root . '/vendor/autoload.php';
 require_once __DIR__ . '/lint.php';
+require_once __DIR__ . '/rename.php';
+require_once __DIR__ . '/WorseSignatureHelper.php';
 
 $application = new Phpactor\Application($root . '/vendor', $root . '/bin/phpactor');
 $output = new Symfony\Component\Console\Output\ConsoleOutput();

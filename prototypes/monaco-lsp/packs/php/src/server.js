@@ -80,7 +80,7 @@ function stdout(chunk) {
             continue;
         }
         published(msg);
-        post(msg);
+        post(amend(msg));
     }
 }
 
@@ -108,18 +108,24 @@ function pathOf(uri) {
     return `${ROOT}/${decodeURIComponent(uri.slice(ROOT_URI.length))}`;
 }
 
+/** The text of each document, by URI, for the completion added below. */
+const texts = new Map();
+
 function mirror(php, msg) {
     const p = msg.params;
     if (msg.method === 'textDocument/didOpen') {
         const path = pathOf(p.textDocument.uri);
+        texts.set(p.textDocument.uri, p.textDocument.text);
         if (path) writeFile(php, path, p.textDocument.text);
     } else if (msg.method === 'textDocument/didChange') {
         const path = pathOf(p.textDocument.uri);
         const last = p.contentChanges.at(-1);
+        if (last && !('range' in last)) texts.set(p.textDocument.uri, last.text);
         if (path && last && !('range' in last)) writeFile(php, path, last.text);
     } else if (msg.method === 'workspace/didChangeWatchedFiles') {
         for (const change of p.changes) {
             const path = pathOf(change.uri);
+            if (change.type === 3) texts.delete(change.uri);
             if (path && change.type === 3) {
                 try {
                     php.FS.unlink(path);
@@ -182,6 +188,7 @@ function forward(msg) {
         unchecked.clear();
         clearTimeout(quiet);
     }
+    if (msg.id !== undefined && AMENDED.has(msg.method)) asked.set(msg.id, msg);
     send(msg);
 }
 
@@ -191,6 +198,138 @@ function published(msg) {
         unchecked.delete(msg.params.uri);
         busy();
     }
+}
+
+// ---- what this layer adds to Phpactor's answers
+//
+// * Keywords. Phpactor completes only declaration keywords (`class`,
+//   `function`...) at the start of a statement and visibility in a class
+//   body; `whil` and `retu` in a function body offered nothing. The
+//   statement and expression keywords are added here, where PHP code (not
+//   HTML, a string or a comment) is typed outside a class body, and not after
+//   `->`, `::`, `$` or `\`.
+// * Class rename without moving the file. Phpactor's class rename ends with
+//   a RenameFile operation (to where PSR-4 would put the class), which the
+//   editor cannot apply, and which would move a file that holds other
+//   declarations too (geometry.php). It is dropped: the class is renamed in
+//   every file, and its file keeps its name (rename.php says the rest).
+
+/** The client's requests whose answers are amended, by id. */
+const asked = new Map();
+const AMENDED = new Set(['textDocument/completion', 'textDocument/rename']);
+
+function amend(msg) {
+    const request = msg.id !== undefined && !msg.method ? asked.get(msg.id) : undefined;
+    if (!request) return msg;
+    asked.delete(msg.id);
+    if (msg.error || !msg.result) return msg;
+    if (request.method === 'textDocument/completion') return { ...msg, result: withKeywords(msg.result, request.params) };
+    const changes = msg.result.documentChanges;
+    if (request.method === 'textDocument/rename' && changes?.some((c) => c.kind === 'rename')) {
+        for (const c of changes) if (c.kind === 'rename') log(3, `class rename: ${c.oldUri} keeps its file name (Phpactor would move it to ${c.newUri})`);
+        return { ...msg, result: { ...msg.result, documentChanges: changes.filter((c) => c.kind !== 'rename') } };
+    }
+    return msg;
+}
+
+/** Statement and expression keywords; at the top level, declarations too. */
+const KEYWORDS = `if else elseif while do for foreach as switch case default break continue return try catch finally
+throw echo print yield global static unset isset empty list include include_once require require_once goto match fn
+function new clone instanceof and or xor true false null self parent array callable iterable exit die`.split(/\s+/);
+const TOP_LEVEL = 'namespace use const class interface trait enum abstract final readonly declare'.split(' ');
+
+function withKeywords(result, { textDocument, position }) {
+    const text = texts.get(textDocument.uri);
+    if (text === undefined) return result;
+    const lines = text.split('\n');
+    let offset = position.character;
+    for (let i = 0; i < position.line && i < lines.length; i++) offset += lines[i].length + 1;
+    const word = /[A-Za-z_][A-Za-z0-9_]*$/.exec(text.slice(0, offset))?.[0] ?? '';
+    if (!word) return result;
+    const context = codeContext(text, offset - word.length);
+    if (!context || context.inClass || /^(->|::|\$|\\|function|const|class|interface|trait|enum|new|namespace|use|extends|implements)$/i.test(context.previous)) {
+        return result;
+    }
+    const items = Array.isArray(result) ? result : (result.items ?? []);
+    const have = new Set(items.map((i) => i.label.trim().toLowerCase()));
+    const lower = word.toLowerCase();
+    const added = [...KEYWORDS, ...(context.depth === 0 ? TOP_LEVEL : [])]
+        .filter((k) => k.startsWith(lower) && !have.has(k))
+        .map((k) => ({ label: k, kind: 14, insertText: k }));
+    if (!added.length) return result;
+    return Array.isArray(result) ? [...result, ...added] : { ...result, items: [...items, ...added] };
+}
+
+/**
+ * Where `end` is in a PHP file, by a scan of the text before it: null inside
+ * HTML, a string, a heredoc or a comment; otherwise whether the innermost
+ * brace is a class body, how many braces are open, and the token before.
+ * A scan, not a parser: enough to keep keywords out of where they cannot go.
+ */
+function codeContext(text, end) {
+    const braces = [];
+    let i = text.indexOf('<?');
+    let previous = '';
+    let classNext = false;
+    if (i < 0 || i >= end) return null;
+    i = text.startsWith('<?php', i) ? i + 5 : i + 2;
+    while (i < end) {
+        const c = text[i];
+        const two = text.slice(i, i + 2);
+        if (two === '?>') {
+            i = text.indexOf('<?', i + 2);
+            if (i < 0 || i >= end) return null;
+            i = text.startsWith('<?php', i) ? i + 5 : i + 2;
+        } else if (two === '//' || (c === '#' && text[i + 1] !== '[')) {
+            const eol = text.indexOf('\n', i);
+            if (eol < 0 || eol >= end) return null;
+            i = eol + 1;
+        } else if (two === '/*') {
+            const close = text.indexOf('*/', i + 2);
+            if (close < 0 || close + 2 > end) return null;
+            i = close + 2;
+        } else if (c === "'" || c === '"' || c === '`') {
+            let j = i + 1;
+            while (j < end && text[j] !== c) j += text[j] === '\\' ? 2 : 1;
+            if (j >= end) return null;
+            i = j + 1;
+            previous = 'string';
+        } else if (text.startsWith('<<<', i)) {
+            const label = /^<<<[ \t]*(["']?)([A-Za-z_][A-Za-z0-9_]*)\1/.exec(text.slice(i, i + 200));
+            if (!label) {
+                i += 3;
+                continue;
+            }
+            const close = new RegExp(`\\n[ \\t]*${label[2]}(?![A-Za-z0-9_])`, 'g');
+            close.lastIndex = i;
+            const found = close.exec(text);
+            if (!found || found.index + found[0].length > end) return null;
+            i = found.index + found[0].length;
+            previous = 'string';
+        } else if (/[A-Za-z_\x80-￿]/.test(c)) {
+            const name = /^[A-Za-z0-9_\x80-￿]+/.exec(text.slice(i, i + 256))[0];
+            if (/^(class|interface|trait|enum)$/i.test(name) && previous !== '::' && previous !== '->') classNext = true;
+            previous = name;
+            i += name.length;
+        } else if (c === '{') {
+            braces.push(classNext ? 'class' : 'block');
+            classNext = false;
+            previous = c;
+            i++;
+        } else if (c === '}') {
+            braces.pop();
+            previous = c;
+            i++;
+        } else if (/\s/.test(c)) {
+            i++;
+        } else {
+            const token = text.startsWith('?->', i) ? '?->' : two === '->' || two === '::' ? two : c;
+            previous = token === '?->' ? '->' : token;
+            if (c === ';') classNext = false;
+            i += token.length;
+        }
+    }
+    return { inClass: braces.at(-1) === 'class', depth: braces.length, previous };
 }
 
 // ---- start

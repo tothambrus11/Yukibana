@@ -81,7 +81,9 @@ done
 php -d phar.readonly=1 -r '(new Phar($argv[1]))->extractTo($argv[2], null, true);' "$CACHE/dl/phpunit-$PHPUNIT_VERSION.phar" "$TREE/phpunit-all"
 mv "$TREE/phpunit-all/phpunit/Framework" "$TREE/phpunit/Framework"
 rm -rf "$TREE/phpunit-all"
-cp "$HERE/src/phpactor.php" "$HERE/src/lint.php" "$TREE/yukibana/"
+cp "$HERE/src/phpactor.php" "$HERE/src/lint.php" "$HERE/src/rename.php" "$TREE/yukibana/"
+php "$HERE/scripts/patch-signature-helper.php" \
+    "$TREE/phpactor/lib/Completion/Bridge/TolerantParser/WorseReflection/WorseSignatureHelper.php" "$TREE/yukibana/WorseSignatureHelper.php"
 "${TAR[@]}" -cf "$TREE.tar" -C "$TREE" phpactor phpunit yukibana
 node "$HERE/scripts/build-index.mjs" "$OUT" "$TREE.tar" "$TREE/cache"
 "${TAR[@]}" -cf "$OUT/phpactor.tar" -C "$TREE" cache phpactor phpunit yukibana

@@ -5,9 +5,10 @@ jdk25u `6c48f4ed707b`), compiled to **WebAssembly GC** by **TeaVM 0.16.0**
 with [teavm-javac](https://github.com/konsoletyper/teavm-javac) (TeaVM's
 author's project, at `208d4c97a602`, 2026-10-05), in one module Web Worker.
 javac parses, attributes and flow-analyses every `.java` file of the project
-together; `LanguageService.java` (ours, in `compiler/`) answers completion,
-hover, definition, references, highlights, symbols, rename and signature
-help from javac's attributed trees, and `server.js` speaks LSP around it.
+together; `LanguageService.java` (ours, in `compiler/`) answers completion
+(enum constants after `case` included), hover, definition, type
+definition, references, highlights, symbols, rename, signature help and
+the import quick fix from javac's attributed trees, and `server.js` speaks LSP around it.
 Diagnostics are javac's own, with types by their simple names as `javac`
 prints them on the command line.
 
@@ -194,9 +195,13 @@ input` is the way to pipe.
 * Cloning a primitive array (`int[].clone()`) in a program that uses the
   array type nowhere else traps in TeaVM 0.16.0.
 * Tests: as listed under Tests.
-* No formatting, no code actions or quick fixes, no semantic tokens (the
-  grammar is Monaco's), no Javadoc of the class library (it has none), no
-  libraries beyond JUnit.
+* No formatting, no semantic tokens (the grammar is Monaco's), no Javadoc
+  of the class library (it has none), no libraries beyond JUnit.
+* The only quick fix is the import for `cannot find symbol` on a class
+  (from the class library, or the project's other packages). Case labels
+  complete an enum's constants, but constants already used in other labels
+  are offered too. Type definition finds only the project's classes: the
+  class library has no sources here.
 * Run takes 2 s or more however small the program: TeaVM links the whole
   reachable class library each time.
 
@@ -219,7 +224,7 @@ inputs:
 ```sh
 ./build.sh            # into ../../app/static/packs/java/
 npm ci                # playwright-core, for the tests
-node test.mjs         # the language server: 27 checks
+node test.mjs         # the language server: 37 checks
 node test-run.mjs     # Run and Test: 26 checks
 ```
 

@@ -6,9 +6,10 @@ WebAssembly** (WordPress Playground's
 [`@php-wasm/web-8-4`](https://www.npmjs.com/package/@php-wasm/web-8-4)
 3.1.60, the Asyncify build) in one module Web Worker. Phpactor is a PHP
 program that speaks LSP over stdio; `server.js` feeds its stdin from
-`postMessage` and parses its stdout back into messages. No line of
-Phpactor is changed: one class is replaced and two functions are defined
-around it (below).
+`postMessage` and parses its stdout back into messages. No file of
+Phpactor is changed: three of its classes are replaced (one of them by a
+copy of upstream's with one method changed) and two functions are defined
+around them, and `server.js` adds keywords to its completions (below).
 
 **Runner:** the same `php.wasm` running its own CLI SAPI, `php main.php`,
 in a second worker; **Test** runs **PHPUnit 12.5.40** from its own phar over
@@ -51,8 +52,8 @@ hash, so a rebuild takes 1 to 2 minutes).
 | `php.wasm` | 19.95 MB | 7.73 MB | 5.55 MB | PHP 8.4.25 (Playground's Asyncify build), shared by both workers |
 | `php.mjs` | 271 KB | 61 KB | 51 KB | its Emscripten loader, unchanged |
 | `php.js` | 7 KB | 3 KB | 2 KB | ours: start PHP, run the CLI, unpack a tar |
-| `server.js` | 9 KB | 3 KB | 3 KB | ours: the LSP worker |
-| `phpactor.tar` | 26.0 MB | 2.81 MB | 1.93 MB | Phpactor, trimmed stubs, PHPUnit's `Framework/` source, the prebuilt index, our two PHP files |
+| `server.js` | 15 KB | 6 KB | 5 KB | ours: the LSP worker |
+| `phpactor.tar` | 26.0 MB | 2.81 MB | 1.93 MB | Phpactor, trimmed stubs, PHPUnit's `Framework/` source, the prebuilt index, our PHP files |
 | `runner.js` | 6 KB | 2 KB | 2 KB | ours: the Run/Test worker |
 | `phpunit.phar` | 6.36 MB | 864 KB | 632 KB | PHPUnit 12.5.40, fetched only by Test |
 | `autoload.php` | 3 KB | 1 KB | 1 KB | ours: Test's class-map autoloader |
@@ -120,6 +121,30 @@ is end of file.
   also reports and this does not: errors PHP finds only while compiling
   (`Cannot redeclare`, `Cannot use [] for reading`, `break` outside a
   loop); they appear when the program runs.
+* **`src/rename.php` replaces Phpactor's `ClassToFileNameToUriConverter`**,
+  which names the file a renamed class will live in. Upstream finds it only
+  through Composer's autoloader (or a file already named after the class),
+  so every class rename failed with "There are no file path candidates".
+  The replacement falls back to where PSR-4 would put the class, and
+  `server.js` drops the file move Phpactor then adds to the edit (the
+  editor cannot move files in a rename, and `geometry.php` holds more than
+  `Point`): the class is renamed in every file and its file keeps its name.
+  A Composer map was the other way, and the worse one: the same map decides
+  which class a file should declare, so every file not laid out as PSR-4
+  would get "Class name should probably be …" (rename.php has the details).
+* **Signature help for `use function` imports.** Phpactor's
+  `WorseSignatureHelper` looks a called function up by the name as written
+  (`distance`, not `Geometry\distance`). `build.sh` writes a copy with that
+  one method changed to resolve the name as PHP does
+  (`scripts/patch-signature-helper.php`, which fails the build if
+  upstream's method has changed), and `phpactor.php` loads it in place of
+  upstream's.
+* **Keywords.** Phpactor completes `class`, `function`… at the start of a
+  statement and visibility in a class body, but not `while`, `return`,
+  `foreach`, `match`… `server.js` adds those to its completion answers where
+  PHP code is typed outside a class body (not in HTML, a string or a
+  comment, and not after `->`, `::`, `$` or `\`), by a scan of the text,
+  once a letter is typed.
 * **Every file is checked when the project opens.** Phpactor's diagnostics
   engine keeps one waiting document, and each new one replaces it, so of
   the app's initial `didOpen` of every file only the last would be checked.
@@ -135,8 +160,11 @@ diagnostics (an unknown class, an unknown method, a parse error, and none
 for the sample and its PHPUnit test), a class that resolves once its file is
 added, completion of members and of PHP functions, hover (project doc
 comments, and PHP's own documentation from phpstorm-stubs), definition
-across files, references across files, document symbols, rename across
-files, signature help, a quick fix (import a class), shutdown. Phpactor
+across files, references across files, document symbols, rename of a
+method and of a class across files (no file moved), signature help in a
+constructor call and in a call of a `use function` import, keyword
+completion (`retu` → `return`, and none after `$`), a quick fix (import a
+class), shutdown. Phpactor
 also offers document highlight, workspace symbols, type definition,
 implementation, selection ranges and its refactorings (extract method,
 generate accessors...); the app uses what it supports.
@@ -159,10 +187,12 @@ loop. Test: PHPUnit over `tests/` with colours, a failing assertion (exit
   function names, missing methods and properties, undefined variables,
   unused imports, deprecated usages, missing return types and docblock
   tags. Wrong argument types or counts are not among them.
-* **Signature help is missing inside calls of namespaced functions
-  imported with `use function`** (`distance(` in the sample); it works for
-  methods, constructors and global functions. Phpactor's limitation, as on a
-  desktop.
+* **Functions cannot be renamed**: Phpactor has renamers for variables,
+  members and classes, and none for functions or constants, whatever the
+  configuration (prepareRename answers null, which the editor shows as
+  "This element cannot be renamed").
+* **A renamed class keeps its file name** (above): `Point.php` declaring
+  `Pt` works, but is no longer PSR-4; rename the file in the explorer.
 * **Compile-time errors** are not reported as you type (see `lint.php`).
 * **PHP's extensions are Playground's**: no readline (`readline()` is
   undefined; read input with `fgets(STDIN)`), no intl (Playground loads it

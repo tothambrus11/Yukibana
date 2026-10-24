@@ -2,9 +2,9 @@
 // WebAssembly GC with TeaVM by teavm-javac, behind a small LSP server in a
 // module Web Worker. One JSON-RPC message per postMessage, as CONTRACT.md
 // says. javac parses, attributes and flow-analyses every open .java file
-// together; completion, hover, definition, references, symbols and
-// signature help are read from its attributed trees by LanguageService.java
-// (see ../README.md). Positions cross to Java as UTF-16 offsets (javac's),
+// together; completion, hover, definition, type definition, references,
+// symbols, signature help and import quick fixes are read from its
+// attributed trees by LanguageService.java (see ../README.md). Positions cross to Java as UTF-16 offsets (javac's),
 // and are turned into lines and characters here.
 
 import { load } from './teavm-runtime.js';
@@ -177,10 +177,12 @@ const capabilities = {
     hoverProvider: true,
     signatureHelpProvider: { triggerCharacters: ['(', ','] },
     definitionProvider: true,
+    typeDefinitionProvider: true,
     referencesProvider: true,
     documentHighlightProvider: true,
     documentSymbolProvider: true,
     renameProvider: { prepareProvider: true },
+    codeActionProvider: { codeActionKinds: ['quickfix'] },
 };
 
 /** A request the client got wrong: answered with this code, not logged as a server failure. */
@@ -236,6 +238,23 @@ function renameTarget(s, p) {
     return { name: refs.name, here: current.loc, locations: locations.map(({ loc }) => loc) };
 }
 
+/** The edit that imports a class, at LanguageService's import offset: after the last import or the package line, or first in the file. */
+function importEdit(doc, offset, name) {
+    const pos = positionOf(doc, offset);
+    return { range: { start: pos, end: pos }, newText: offset === 0 ? `import ${name};\n\n` : `\nimport ${name};` };
+}
+
+/**
+ * The simple class name a `cannot find symbol` diagnostic is about: javac's
+ * `symbol: class ArrayList` (a type) or `symbol: variable Collections` (the
+ * qualifier of a static call), capitalised, since a lower-case name is a
+ * missing variable no import can supply.
+ */
+function missingClass(d) {
+    if (d?.source !== 'javac' || typeof d.message !== 'string' || !d.message.startsWith('cannot find symbol')) return null;
+    return /\bsymbol:\s+(?:class|variable) ([A-Z][\w$]*)$/m.exec(d.message)?.[1] ?? null;
+}
+
 const SYMBOL_KINDS = new Set([5, 6, 8, 9, 10, 11, 14, 22, 23]);
 function documentSymbols(doc, list) {
     return list.map((s) => ({
@@ -269,8 +288,7 @@ const requests = {
                     const bar = i.importText.indexOf('|');
                     const offset = Number(i.importText.slice(0, bar));
                     const name = i.importText.slice(bar + 1);
-                    const pos = positionOf(here.doc, offset);
-                    item.additionalTextEdits = [{ range: { start: pos, end: pos }, newText: offset === 0 ? `import ${name};\n\n` : `\nimport ${name};` }];
+                    item.additionalTextEdits = [importEdit(here.doc, offset, name)];
                     item.labelDetails = { description: name.slice(0, name.lastIndexOf('.')) };
                 }
                 return item;
@@ -303,6 +321,39 @@ const requests = {
         const here = at(p);
         if (!here) return null;
         return JSON.parse(s.definition(here.path, here.offset)).map(locationOf).filter(Boolean);
+    },
+    'textDocument/typeDefinition': (s, p) => {
+        const here = at(p);
+        if (!here) return null;
+        return JSON.parse(s.typeDefinition(here.path, here.offset)).map(locationOf).filter(Boolean);
+    },
+    // Quick fixes: an import for each class a `cannot find symbol` could
+    // mean, the project's first; preferred when there is only one.
+    'textDocument/codeAction': (s, p) => {
+        const uri = textDocument(p);
+        const doc = docs.get(uri);
+        const diagnostics = p?.context?.diagnostics;
+        if (!doc || !Array.isArray(diagnostics)) return [];
+        const byName = new Map();
+        for (const d of diagnostics) {
+            const name = missingClass(d);
+            if (name) (byName.get(name) ?? byName.set(name, []).get(name)).push(d);
+        }
+        const actions = [];
+        for (const [name, ds] of byName) {
+            const found = JSON.parse(s.importsFor(pathOf(uri), name));
+            if (!found) continue;
+            for (const qualified of found.classes) {
+                actions.push({
+                    title: `Import '${qualified}'`,
+                    kind: 'quickfix',
+                    diagnostics: ds,
+                    isPreferred: found.classes.length === 1,
+                    edit: { changes: { [uri]: [importEdit(doc, found.at, qualified)] } },
+                });
+            }
+        }
+        return actions;
     },
     'textDocument/references': (s, p) => {
         const here = at(p);
