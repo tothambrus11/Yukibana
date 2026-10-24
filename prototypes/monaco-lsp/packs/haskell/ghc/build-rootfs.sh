@@ -29,9 +29,11 @@ PREFIX=${GHC_WASM_PREFIX:-$HOME/.ghc-wasm}
 # browser_wasi_shim root file system and Node's real one agree on.
 ROOT=/tmp/yk-root
 STORE=/tmp/yk/store
-# Packages from Hackage beyond GHC's boot packages, pinned. Their
-# dependencies are pinned by the freeze file next to this script.
-PACKAGES=(QuickCheck hspec random)
+# Packages from Hackage beyond GHC's boot packages, pinned; their
+# dependencies are what Hackage's index offered at INDEX_STATE, so the
+# same plan is chosen on every build.
+PACKAGES=(QuickCheck-2.19.0.0 hspec-2.11.18 random-1.3.1)
+INDEX_STATE=2026-10-24T00:00:00Z
 
 log() { printf '\n== %s\n' "$*"; }
 
@@ -56,9 +58,8 @@ export WASM_SO_OPT="--debuginfo --low-memory-unused --strip-dwarf -Oz"
 
 log "packages: ${PACKAGES[*]}"
 mkdir -p "$STORE"
-wasm32-wasi-cabal update
+wasm32-wasi-cabal update "hackage.haskell.org,$INDEX_STATE"
 PKGDIR=$(mktemp -d)
-cp "$HERE/cabal.project.freeze" "$PKGDIR/" 2>/dev/null || true
 (
     cd "$PKGDIR"
     wasm32-wasi-cabal --store-dir="$STORE" install --lib --package-env="$PKGDIR/env" \

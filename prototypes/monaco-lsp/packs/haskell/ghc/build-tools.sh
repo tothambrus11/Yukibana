@@ -40,6 +40,8 @@ ORMOLU=0.8.0.2
 ORMOLU_SHA256=4d89f82ee87c3e4b4cafa490a1a8260ed3f5af1a81a48a43ddfd6fe435a902ba
 HLINT=3.10
 HLINT_SHA256=d99672337c06b455884ac14418d562701143141d0d7e46af476817c2ae3efe37
+# Their dependencies: what Hackage's index offered then.
+INDEX_STATE=2026-10-24T00:00:00Z
 
 log() { printf '\n== %s\n' "$*"; }
 
@@ -54,7 +56,7 @@ fi
 source "$PREFIX/env"
 log "GHC $(wasm32-wasi-ghc --numeric-version)"
 
-wasm32-wasi-cabal update
+wasm32-wasi-cabal update "hackage.haskell.org,$INDEX_STATE"
 mkdir -p "$OUT" "$STORE"
 BIN=$(mktemp -d)
 WORK=$(mktemp -d)
