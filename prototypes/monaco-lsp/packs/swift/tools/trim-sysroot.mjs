@@ -15,9 +15,12 @@
 //     the core sysroot has no Foundation.swiftmodule, so nothing can use them;
 //     clang still found and parsed their module maps on every compile.
 //   * libc++ headers (1,772 files), libxml2, swift-testing, cmake/pkgconfig,
-//     the embedded-Swift modules, Cxx/Distributed/Observation/_Differentiation
-//     modules (C++ interop is off in this compiler; Observation needs macros,
-//     which cannot run; the other two are rarely used).
+//     the embedded-Swift modules, Cxx/Distributed/_Differentiation modules
+//     (C++ interop is off for user code; the other two are rarely used).
+//     swift-testing goes because its library needs Foundation (README,
+//     "Macros"). Observation stays: its @Observable is one of the macros the
+//     compiler expands (SwiftMacroPlugins.wasm), and its module and archive
+//     are 0.2 MB.
 //   * clang's target-specific intrinsic headers (x86, ARM, PowerPC, Hexagon,
 //     RISC-V, CUDA, OpenCL...): their modules `require` another target, so
 //     clang never reads them for wasm32.
@@ -34,10 +37,10 @@ import { join, relative } from 'node:path';
 const [input, output, extraDir, extraPrefix] = process.argv.slice(2);
 
 const KEEP_MODULES = ['Swift', 'SwiftOnoneSupport', '_Concurrency', '_StringProcessing', '_RegexParser',
-    'WASILibc', '_Builtin_float', 'Synchronization', 'RegexBuilder', '_Volatile'];
+    'WASILibc', '_Builtin_float', 'Synchronization', 'RegexBuilder', '_Volatile', 'Observation'];
 const KEEP_ARCHIVES = ['swiftCore', 'swiftSwiftOnoneSupport', 'swift_Concurrency', 'swift_StringProcessing',
     'swift_RegexParser', 'swiftWASILibc', 'swift_Builtin_float', 'swiftSynchronization', 'swiftRegexBuilder',
-    'swift_Volatile'].map((n) => `lib${n}.a`);
+    'swift_Volatile', 'swiftObservation'].map((n) => `lib${n}.a`);
 const KEEP_LIBC = ['crt1-command.o', 'libc.a', 'libc.imports', 'libdl.a', 'libm.a', 'libc++.a', 'libc++abi.a',
     'libwasi-emulated-mman.a', 'libwasi-emulated-signal.a', 'libwasi-emulated-process-clocks.a',
     'libwasi-emulated-getpid.a', 'libsetjmp.a'];

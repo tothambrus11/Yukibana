@@ -18,8 +18,11 @@
 // /workspace, where sourcekitd reads the ones it is not handed.
 
 import { Lite, isFatal } from './lite.js';
-import { FRONTEND_WASM, loadSysroot, loadTool, loadXCTest, mkdirp, remove, sourceKitArgs, writeFile } from './toolchain.js';
-import { importsXCTest, isOwnModuleImportWarning } from './xctest.js';
+import {
+    FRONTEND_WASM, loadMacroPlugins, loadSwiftTesting, loadSysroot, loadTool, loadXCTest, mkdirp, remove, sourceKitArgs,
+    usesMacroPlugins, writeFile,
+} from './toolchain.js';
+import { importsTesting, importsXCTest, isOwnModuleImportWarning } from './xctest.js';
 
 const NAME = 'sourcekit-lsp-lite (sourcekitd 6.3.3) + swift-syntax formatting';
 const VERSION = 'sourcekitd and swift-frontend 6.3.3 from swift-toolchain-wasm (swift-frontend-lsp.wasm); formatting and semantic tokens from swift-syntax 604.0.0';
@@ -228,7 +231,6 @@ function applyChanges(text, changes) {
  */
 let lite = null;
 let fs = null;
-let xctest = null;
 let liteQueue = Promise.resolve();
 const liteReady = { promise: null };
 
@@ -313,17 +315,39 @@ function forward(msg) {
 
 /**
  * A message from sourcekit-lsp-lite, for the client. Diagnostics lose the
- * warning that projectModuleName causes on purpose (xctest.js).
+ * warning that projectModuleName causes on purpose (xctest.js), and keep
+ * related information inside a macro expansion (see inExpansion) at the
+ * diagnostic's own place.
  */
 function receive(out) {
     if (out.method === 'textDocument/publishDiagnostics') {
-        const { diagnostics } = out.params;
-        send({ ...out, params: { ...out.params, diagnostics: diagnostics.filter((d) => !isOwnModuleImportWarning(d.message)) } });
+        const { uri, diagnostics } = out.params;
+        const shown = diagnostics.filter((d) => !isOwnModuleImportWarning(d.message)).map((d) => inExpansion(uri, d));
+        send({ ...out, params: { ...out.params, diagnostics: shown } });
     } else if (out.id === 'yk-init') {
         // the answer to our own initialize
     } else {
         send(out);
     }
+}
+
+/**
+ * sourcekitd reports a diagnostic about macro-generated code at the macro's
+ * use, where the editor can show it, but a note it relates may point into
+ * the expansion itself: a buffer named like
+ * `@__swiftmacro_4main5ClashC1x18ObservationTrackedfMp_.swift`, which
+ * SourceKit-LSP shows as a document of its own and this editor cannot open.
+ * Such a note is kept, at the diagnostic's own range, saying where it is.
+ */
+function inExpansion(uri, diagnostic) {
+    if (!diagnostic.relatedInformation?.some((r) => !r.location.uri.startsWith(WORKSPACE))) return diagnostic;
+    return {
+        ...diagnostic,
+        relatedInformation: diagnostic.relatedInformation.map((r) => (r.location.uri.startsWith(WORKSPACE) ? r : {
+            location: { uri, range: diagnostic.range },
+            message: `${r.message} (in a macro expansion)`,
+        })),
+    };
 }
 
 /**
@@ -406,14 +430,23 @@ function open(uri, text, version) {
     return { doc, wasIn, isIn: !excluded.has(uri) };
 }
 
-/** The XCTest module, added to sourcekitd's sysroot before the first file that imports it reaches it. */
-async function ensureXCTest(text) {
-    if (!importsXCTest(text)) return;
-    xctest ??= loadXCTest(fs, (label, loaded, total) => notify('yukibana/loading', { label, loaded, total })).catch((e) => {
-        xctest = null;
+/**
+ * The optional downloads, added to sourcekitd's file system before the
+ * first file that needs one reaches it: XCTest and swift-testing for a file
+ * that imports them, the macro plugins for one that can use their macros.
+ * A failed download is tried again for the next such file.
+ */
+const extras = [
+    { needed: importsXCTest, load: loadXCTest, loading: null },
+    { needed: importsTesting, load: loadSwiftTesting, loading: null },
+    { needed: usesMacroPlugins, load: loadMacroPlugins, loading: null },
+];
+async function ensureExtras(text) {
+    const onLoading = (label, loaded, total) => notify('yukibana/loading', { label, loaded, total });
+    await Promise.all(extras.filter((x) => x.needed(text)).map((x) => (x.loading ??= x.load(fs, onLoading).catch((e) => {
+        x.loading = null;
         throw e;
-    });
-    await xctest;
+    }))));
 }
 
 // ---------------------------------------------------------------- LSP
@@ -509,7 +542,7 @@ const handlers = {
  */
 function toSourceKit(method, params, text) {
     enqueue(async () => {
-        if (text !== null) await ensureXCTest(text);
+        if (text !== null) await ensureExtras(text);
         const uri = params.textDocument.uri;
         if (text !== null && excluded.has(uri)) return;
         mirror(uri, text);

@@ -28,10 +28,11 @@
 // out of the executable.
 
 import {
-    Fd, FRONTEND_WASM, LINKER_WASM, autolinkEntries, compileArgs, linkArgs, loadSysroot, loadXCTest,
-    loadTool, mkdirp, readFile, remove, runFrontend, runWasi, textSink, wasiDefs, writeFile, writeProject,
+    Fd, FRONTEND_WASM, LINKER_WASM, autolinkEntries, compileArgs, linkArgs, linkLibraries, loadMacroPlugins, loadSwiftTesting,
+    loadSysroot, loadTool, loadXCTest, mkdirp, readFile, remove, runFrontend, runWasi, textSink, usesMacroPlugins, wasiDefs,
+    writeFile, writeProject,
 } from './toolchain.js';
-import { dropOwnModuleImportWarnings, importsXCTest, isTestFile, planTestRun, projectModuleName } from './xctest.js';
+import { dropOwnModuleImportWarnings, importsTesting, importsXCTest, isTestFile, planTestRun, projectModuleName } from './xctest.js';
 
 const post = (msg) => self.postMessage(msg);
 const phase = (text) => post({ type: 'phase', text });
@@ -96,11 +97,16 @@ async function run({ files, entry, stdin }, testing) {
     // test run, the plan of src/xctest.js. Module name: see projectModuleName.
     const swift = Object.entries(files).filter(([p]) => p.endsWith('.swift'));
     const plan = testing ? planTestRun(files) : null;
-    // (An entry that imports XCTest itself, a hand-written test main, keeps them.)
-    const keepTests = testing || importsXCTest(files[entry] ?? '');
+    // (An entry that imports XCTest or Testing itself, a hand-written test main, keeps them.)
+    const keepTests = testing || importsXCTest(files[entry] ?? '') || importsTesting(files[entry] ?? '');
     const compiled = testing ? plan.sources : swift.filter(([p, text]) => keepTests || !isTestFile(p, text)).map(([p]) => p);
     const moduleName = testing ? plan.moduleName : projectModuleName(Object.fromEntries(swift.filter(([p]) => compiled.includes(p))));
-    const needsXCTest = testing || swift.some(([p, text]) => compiled.includes(p) && importsXCTest(text));
+    // The texts compiled, with a generated test main, decide the optional
+    // downloads: XCTest, swift-testing, and the macro plugins.
+    const texts = [...swift.filter(([p]) => compiled.includes(p)).map(([, text]) => text), plan?.main ?? ''];
+    const needsXCTest = texts.some(importsXCTest);
+    const needsTesting = texts.some(importsTesting);
+    const needsPlugins = texts.some(usesMacroPlugins);
 
     phase('Loading the Swift compiler');
     // All downloads at once; the linker compiles while the frontend runs.
@@ -108,7 +114,14 @@ async function run({ files, entry, stdin }, testing) {
     linkerPromise.catch(() => {});
     const [frontend, root] = await Promise.all([
         loadTool(FRONTEND_WASM, onLoading),
-        loadSysroot(onLoading).then(async (root) => (needsXCTest && (await loadXCTest(root, onLoading)), root)),
+        loadSysroot(onLoading).then(async (root) => {
+            await Promise.all([
+                needsXCTest && loadXCTest(root, onLoading),
+                needsTesting && loadSwiftTesting(root, onLoading),
+                needsPlugins && loadMacroPlugins(root, onLoading),
+            ]);
+            return root;
+        }),
     ]);
 
     writeProject(root, WORK, files, entry);
@@ -118,7 +131,9 @@ async function run({ files, entry, stdin }, testing) {
     if (plan?.main) {
         writeFile(root, TEST_MAIN, plan.main);
         sources.push(TEST_MAIN);
-        if (plan.classes.length === 0) post({ type: 'stderr', text: 'note: no XCTestCase subclass with test methods was found\n' });
+        if (plan.classes.length === 0 && !plan.swiftTesting) {
+            post({ type: 'stderr', text: 'note: no XCTestCase subclass with test methods, and no file importing Testing, was found\n' });
+        }
     }
     if (sources.length === 0) {
         post({ type: 'stderr', text: 'error: the project has no .swift files\n' });
@@ -142,7 +157,7 @@ async function run({ files, entry, stdin }, testing) {
     const object = readFile(root, '/build/main.o');
     const linker = await linkerPromise;
     code = await runWasi(linker, {
-        args: [...linkArgs(['/build/main.o'], '/build/main.wasm', 1 << 20, autolinkEntries(object)),
+        args: [...linkArgs(['/build/main.o'], '/build/main.wasm', 1 << 20, linkLibraries(root, autolinkEntries(object))),
             // So the runner can flush the program's stdout before it waits for input.
             '--export-if-defined=fflush'],
         root, stdout: errors, stderr: errors,
@@ -168,20 +183,29 @@ async function run({ files, entry, stdin }, testing) {
     // frontend was given; a test run shows it relative, as diagnostics are.
     // (XCTest flushes every line, so a path is never split across writes.)
     const out = textSink((text) => post({ type: 'stdout', text: testing ? relative(text) : text }));
-    const err = textSink((text) => post({ type: 'stderr', text }));
-    try {
-        return await runWasi(program, {
-            args: ['main'], env: [], root,
-            stdin: new Stdin(stdin, flush), stdout: out, stderr: err,
-            onInstance: (instance) => (exports = instance.exports),
-        });
-    } catch (e) {
-        flush();
-        // A Swift runtime error (fatalError, a failed `!`, an overflow) has
-        // already printed its message; the trap itself is `unreachable`.
-        post({ type: 'stderr', text: `\nProgram crashed: ${e instanceof WebAssembly.RuntimeError ? e.message : e}\n` });
-        return 134;
+    // swift-testing reports on stderr, with paths as #fileID gives them
+    // (module/file), so a test run's stderr is made relative too.
+    const err = textSink((text) => post({ type: 'stderr', text: testing ? relative(text) : text }));
+    const input = new Stdin(stdin, flush);
+    // A test run runs the program once per testing library (planTestRun),
+    // as `swift test` does; it fails if any of them fails.
+    let status = 0;
+    for (const args of testing ? plan.runs : [['main']]) {
+        try {
+            code = await runWasi(program, {
+                args, env: [], root, stdin: input, stdout: out, stderr: err,
+                onInstance: (instance) => (exports = instance.exports),
+            });
+        } catch (e) {
+            flush();
+            // A Swift runtime error (fatalError, a failed `!`, an overflow) has
+            // already printed its message; the trap itself is `unreachable`.
+            post({ type: 'stderr', text: `\nProgram crashed: ${e instanceof WebAssembly.RuntimeError ? e.message : e}\n` });
+            code = 134;
+        }
+        if (status === 0) status = code;
     }
+    return status;
 }
 
 self.onmessage = ({ data }) => {

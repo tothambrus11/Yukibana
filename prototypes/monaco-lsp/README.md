@@ -47,7 +47,7 @@ terminal that can read input. Test (Ctrl+Shift+Enter) runs the project's
 tests in `tests/` (`Tests/` for Swift): pytest (with Hypothesis for
 property-based tests), `node:test` (with fast-check), Rust's `#[test]`
 (with quickcheck), GoogleTest,
-doctest or Catch2 (chosen next to Test), XCTest, or JUnit Jupiter (Java, in
+doctest or Catch2 (chosen next to Test), XCTest and swift-testing, or JUnit Jupiter (Java, in
 `src/test/java/`); Scala has no Test yet, and Kotlin neither Run nor Test.
 Mutate, for JavaScript and TypeScript, is mutation testing with StrykerJS
 (its instrumenter and reporter, each test file run once per mutant in a
@@ -90,7 +90,7 @@ no DOM and no npm packages except fast-check, for property-based tests
 | Python | basedpyright 1.40 | Pyodide 314.0.7 (Python 3.14) | 1.1 MB | 4.5 MB |
 | Scala 3 | the Scala 3.7.4 compiler's interactive API, compiled with Scala.js | the same compiler and the Scala.js linker; ScalaCheck 1.18.1 | 2.6 MB; ScalaCheck 0.25 MB when a source names it | 3.7 MB; ScalaCheck 0.34 MB more when a source names it |
 | C and C++ | clangd 21 (Emscripten, threads) | clang 21 and wasm-ld, WASI; for a Linux target clang 21 and ld.lld, then Linux 6.12 under QEMU-Wasm (or QEMU's user mode) | 8.0 MB; a Linux target's headers 0.01 MB | 12.2 MB; Test 0.06 to 0.28 MB (the framework's libraries); a Linux target 18.8 to 19.1 MB to compile, plus 2.6 to 2.9 MB for the VM (0.5 to 0.7 MB in user mode) |
-| Swift | sourcekitd 6.3.3 through sourcekit-lsp-lite, in one module with the compiler; swift-syntax for formatting | that module's swift-frontend, and wasm-ld | 31.2 MB | 8.2 MB |
+| Swift | sourcekitd 6.3.3 through sourcekit-lsp-lite, in one module with the compiler (with macros); swift-syntax for formatting | that module's swift-frontend, and wasm-ld; XCTest (ours) and swift-testing | 34.6 MB; the macro plugins 2.2 MB when a file can use a macro, swift-testing 3.3 MB when one imports Testing | 8.2 MB; the same two when used |
 | Rust | rust-analyzer's IDE crates (ra_ap_ide 0.0.358) with our LSP layer, std 1.98 sources | Miri 1.78 (rustc's MIR interpreter, not a compiler), quickcheck 1.0.3 | 4.2 MB; quickcheck sources 0.47 MB when Cargo.toml names it | 29.8 MB; quickcheck 1.6 MB when Cargo.toml names it |
 | PHP | Phpactor 2026.10.07 on PHP 8.4 (php-wasm) | PHP 8.4.25's CLI (php-wasm), PHPUnit 12.5, Eris 1.3 | 7.6 MB | 2 KB (the same php.wasm); Test 0.6 MB, Eris 45 KB when used |
 | Java | javac (OpenJDK 25u) compiled to WebAssembly GC by TeaVM 0.16.0 (teavm-javac), with our language service on its trees | the same javac, then TeaVM linking the program to WebAssembly GC in the browser; JUnit Jupiter 5.14 | 2.0 MB | 2.3 MB (TeaVM's class library) |
@@ -166,7 +166,7 @@ serves from, and asks the browser for persistent storage first.
 | --- | --- | --- |
 | The app (precached) | 1.2 MB | 4.9 MB |
 | The app's lazy files | 0.5 MB | 2.8 MB |
-| Every pack (Python 5.9, JavaScript 1.6, C++ 48.5, Swift 39.5, Scala 6.0, Rust 32.5, PHP 7.9, Java 4.4, Kotlin 0.3) | 146 MB | 670 MB |
+| Every pack (Python 5.9, JavaScript 1.6, C++ 48.5, Swift 48.5, Scala 6.0, Rust 32.5, PHP 7.9, Java 4.4, Kotlin 0.3) | 155 MB | 726 MB |
 
 A new build installs in the background and the top bar offers "New
 version: reload"; until then the tab keeps the build it runs. Its app cache
@@ -186,9 +186,13 @@ after weeks without a visit, persistent storage or not.
   (including the mandatory SIL passes: missing return, use before
   initialisation) with fix-its as quick fixes, completion, hover,
   definition, references, rename (base names only), signature help, inlay
-  hints. Formatting is swift-syntax's BasicFormat. No macros, so no
-  swift-testing: tests use our XCTest, a checked subset of
-  swift-corelibs-xctest. Foundation is not in the sysroot.
+  hints. Formatting is swift-syntax's BasicFormat. Macros expand in the
+  editor and in Run and Test, through the plugins swift-toolchain-wasm
+  builds for WASI: Observation's (`@Observable`), swift-testing's (`@Test`,
+  `#expect`) and an example `#stringify`; a project cannot define a macro
+  plugin of its own. Tests use our XCTest, a checked subset of
+  swift-corelibs-xctest, and swift-testing, which runs. Foundation is not
+  in the sysroot.
 * **C++**: on WebAssembly, no threads and a fixed stack. Exceptions work
   (WebAssembly exception handling, so a browser from 2025: Chrome 137,
   Firefox 131, Safari 18.4). Tests in `tests/` are GoogleTest (without gMock or death

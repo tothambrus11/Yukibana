@@ -109,6 +109,68 @@ print("end of input after \\(lines) lines")
 const TYPE_ERROR = { 'main.swift': 'let x: Int = "no"\nprint(x)\n' };
 const TRAP = { 'main.swift': 'let empty: [Int] = []\nprint("before")\nprint(empty[1])\n' };
 const FOREVER = { 'main.swift': 'print("looping")\nvar i = 0\nwhile true { i &+= 1 }\n' };
+const MACROS = {
+    'main.swift': `import Observation
+
+let (value, source) = #stringify(2 + 3)
+print("stringify: \\(value) from \\(source)")
+let counter = Counter()
+withObservationTracking {
+    _ = counter.count
+} onChange: {
+    print("observed: count is changing")
+}
+counter.count += 1
+print("count: \\(counter.count)")
+`,
+    'Counter.swift': `import Observation
+
+@freestanding(expression)
+macro stringify<T>(_ value: T) -> (T, String) =
+    #externalMacro(module: "StringifyMacros", type: "StringifyMacro")
+
+@Observable
+final class Counter {
+    var count = 0
+}
+`,
+};
+const MACRO_ERROR = {
+    'main.swift': `@freestanding(expression)
+macro diagnose(_ message: String) = #externalMacro(module: "StringifyMacros", type: "DiagnoseMacro")
+import Observation
+
+#diagnose("reported by the plugin")
+
+@Observable
+struct NotAClass {
+    var x = 0
+}
+`,
+};
+const SWIFT_TESTING = {
+    'main.swift': 'let counter = Counter()\nprint("counter at \\(counter.count)")\n',
+    'Counter.swift': 'struct Counter {\n    var count = 0\n    mutating func increment() { count += 1 }\n}\n',
+    'Tests/CounterTests.swift': `import Testing
+@testable import App
+
+@Test func norm() {
+    #expect(Counter().count == 0)
+}
+
+@Test("counts up") func countsUp() {
+    var counter = Counter()
+    counter.increment()
+    #expect(counter.count == 1)
+}
+
+@Test func wrong() {
+    var counter = Counter()
+    counter.increment()
+    #expect(counter.count == 2)
+}
+`,
+};
 
 const browser = await chromium.launch({ executablePath: CHROMIUM });
 let failed = 0;
@@ -435,6 +497,41 @@ final class ListedTests: XCTestCase {
     check('XCTest: a type error in a test is reported like any other, and nothing runs',
         brokenTest.code !== 0 && /^Tests\/BrokenTests\.swift:3:\d+: error: /m.test(brokenTest.stderr) && brokenTest.stdout === '',
         `code=${brokenTest.code}\n${brokenTest.stderr.split('\n')[0]}`);
+
+    // 7. Macros, expanded by SwiftMacroPlugins.wasm, which only projects that
+    //    use one download.
+    bytesSent = 0;
+    const macros = await run(MACROS);
+    check('macros: #stringify and @Observable expand, link (with Observation) and run',
+        macros.code === 0 && macros.stdout === 'stringify: 5 from 2 + 3\nobserved: count is changing\ncount: 1\n' && macros.stderr === '' &&
+            macros.loading['SwiftMacroPlugins.wasm']?.[0] > 0 && !('swift-testing.tar' in macros.loading),
+        `code=${macros.code} in ${macros.ms} ms, ${(bytesSent / 1e6).toFixed(1)} MB transferred; ${timeline(macros)}\n${macros.stdout}${macros.stderr}`);
+    check('macros: a project without macros does not download the plugins', !('SwiftMacroPlugins.wasm' in cold.loading), Object.keys(cold.loading).join(', '));
+    const diagnosed = await run(MACRO_ERROR);
+    check("macros: an error a macro's plugin reports is a compiler error at the macro's use, and nothing runs",
+        diagnosed.code !== 0 && /^main\.swift:5:1: error: reported by the plugin \(from macro 'diagnose'\)$/m.test(diagnosed.stderr) &&
+            /^main\.swift:7:1: error: '@Observable' cannot be applied to struct type 'NotAClass' \(from macro 'Observable'\)$/m.test(diagnosed.stderr) && diagnosed.stdout === '',
+        `code=${diagnosed.code}\n${diagnosed.stderr.split('\n').filter((l) => / error: /.test(l)).join('\n')}`);
+
+    // 8. swift-testing: `@Test` functions in files that import Testing run on
+    //    Test, after XCTest's tests, as `swift test` runs them.
+    const swiftTesting = await run(SWIFT_TESTING, { type: 'test' });
+    const report = swiftTesting.stdout + swiftTesting.stderr;
+    check('swift-testing: @Test and #expect run on Test; a failing expectation is reported with its values and the run fails',
+        swiftTesting.code === 1 && /Test norm\(\) passed/.test(report) && /Test "counts up" passed/.test(report) &&
+            /Test wrong\(\) recorded an issue at CounterTests\.swift:\d+:\d+: Expectation failed: \(counter\.count → 1\) == 2/.test(report) &&
+            /Test run with 3 tests in 0 suites failed .* with 1 issue/.test(report) && 'swift-testing.tar' in swiftTesting.loading,
+        `code=${swiftTesting.code} in ${swiftTesting.ms} ms; ${timeline(swiftTesting)}\n${report.split('\n').filter((l) => /Test |error/.test(l)).map((l) => `      ${l}`).join('\n')}`);
+    const both = await run({ ...SWIFT_TESTING, 'Tests/ListedTests.swift': LISTED }, { type: 'test' });
+    const bothReport = both.stdout + both.stderr;
+    check('swift-testing and XCTest in one project: XCTest runs first, then swift-testing, and the run fails if either does',
+        both.code === 1 && bothReport.indexOf("Test Case 'ListedTests.testListed' passed") >= 0 &&
+            bothReport.indexOf("Test Case 'ListedTests.testListed' passed") < bothReport.indexOf('Test run with 3 tests'),
+        `code=${both.code}\n${bothReport.split('\n').filter((l) => /Executed|Test run with/.test(l)).map((l) => `      ${l}`).join('\n')}`);
+    const runOfTested = await run(SWIFT_TESTING);
+    check("swift-testing: 'run' leaves the test files out, as SwiftPM leaves out the test target",
+        runOfTested.code === 0 && runOfTested.stdout === 'counter at 0\n' && !('swift-testing.tar' in runOfTested.loading),
+        `code=${runOfTested.code} ${JSON.stringify(runOfTested.stdout)}\n${runOfTested.stderr}`);
 } finally {
     await browser.close();
     server.close();

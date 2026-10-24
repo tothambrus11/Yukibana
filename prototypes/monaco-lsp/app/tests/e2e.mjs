@@ -196,6 +196,7 @@ async function run(language, c) {
 	if (language === 'python') await peek(page, check);
 	if (language === 'cpp') await cppBridge(page, check, lspLog);
 	if (language === 'typescript') await renameFromUse(page, check);
+	if (language === 'swift' && existsSync(join(build, 'packs', 'swift', 'runner.js'))) await swiftMacros(page, check, requests);
 	if (language === 'cpp' && existsSync(join(build, 'packs', 'cpp', 'runner.js'))) await testFrameworks(page, check);
 	if (language === 'cpp') {
 		if (existsSync(join(build, 'packs', 'cpp', 'cc-cross.wasm')) && existsSync(join(build, 'packs', 'cpp', 'vm.js'))) await cppTargets(page, check, requests);
@@ -204,6 +205,57 @@ async function run(language, c) {
 
 	check(errors.length === 0, `no page errors${errors.length ? ': ' + errors.join('; ') : ''}`);
 	await page.close();
+}
+
+/**
+ * Swift macros (packs/swift/README.md "Macros"): main.swift rewritten to use
+ * `@Observable` and a `#stringify` it declares is clean, and Run prints what
+ * they expand to; the sample's tests rewritten for swift-testing (`@Test`,
+ * `#expect`) pass on Test. The macro plugins and swift-testing are fetched
+ * then, and not before.
+ */
+async function swiftMacros(page, check, requests) {
+	const fetched = (name) => requests.some((u) => u.endsWith(`/packs/swift/${name}`));
+	check(!fetched('SwiftMacroPlugins.wasm') && !fetched('swift-testing.tar'), 'the sample, which uses no macro, fetched neither the macro plugins nor swift-testing');
+	await setText(page, 'main.swift', `import Observation
+
+@freestanding(expression)
+macro stringify<T>(_ value: T) -> (T, String) = #externalMacro(module: "StringifyMacros", type: "StringifyMacro")
+
+@Observable
+final class Counter {
+    var count = 0
+}
+
+let counter = Counter()
+withObservationTracking { _ = counter.count } onChange: { print("observed a change") }
+counter.count += 1
+let (value, source) = #stringify(counter.count * 2)
+print("\\(source) = \\(value)")
+`);
+	const errorCount = page.locator('footer .counts span[title=Errors]');
+	await page.waitForTimeout(3000);
+	const clean = await errorCount.filter({ hasText: /^0$/ }).waitFor({ timeout: 60_000 }).then(() => true, () => false);
+	check(clean && fetched('SwiftMacroPlugins.wasm'), `a main.swift using @Observable and #stringify has no errors (${(await errorCount.textContent())?.trim()}), the plugins fetched for it`);
+	await page.locator('header button.run').click();
+	let r = await ended(page, 240_000);
+	check(r.done && /code 0/.test(r.status) && r.shown.includes('observed a change') && r.shown.includes('counter.count * 2 = 2'), `Run expands the macros: ${r.status}: ${JSON.stringify(r.shown.slice(-120))}`);
+	await setText(page, 'Tests/GeometryTests.swift', `import Testing
+@testable import App
+
+@Test func norm() {
+    #expect(Point(x: 3, y: 4).norm() == 5)
+}
+
+@Test("distance is symmetric") func symmetric() {
+    let a = Point(x: 1, y: 2), b = Point(x: -3, y: 5)
+    #expect(distance(a, b) == distance(b, a))
+}
+`);
+	await page.locator('header button', { hasText: /^Test$/ }).click();
+	r = await ended(page, 240_000);
+	check(r.done && /code 0/.test(r.status) && /Test run with 2 tests in 0 suites passed/.test(r.shown) && fetched('swift-testing.tar'),
+		`Test runs swift-testing's @Test functions: ${r.status}: ${JSON.stringify(r.shown.slice(-200))}`);
 }
 
 /**

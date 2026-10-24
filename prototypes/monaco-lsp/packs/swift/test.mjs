@@ -83,6 +83,55 @@ let far = origin.moved(by: 2, 1)
 let c = Circle(centre: far, radius: 2)
 print(far.norm(), c.area())
 `;
+const MACROS = `import Observation
+
+@Observable
+final class Counter {
+    var count = 0
+}
+
+@freestanding(expression)
+macro stringify<T>(_ value: T) -> (T, String) =
+    #externalMacro(module: "StringifyMacros", type: "StringifyMacro")
+
+func describe() -> String {
+    let counter = Counter()
+    counter.count += 1
+    let (value, source) = #stringify(counter.count + 1)
+    return "\\(value) \\(source)"
+}
+`;
+const MACRO_ERRORS = `import Observation
+
+@freestanding(expression)
+macro diagnose(_ message: String) = #externalMacro(module: "StringifyMacros", type: "DiagnoseMacro")
+
+func f() {
+    #diagnose("reported by the plugin")
+}
+
+@Observable
+struct NotAClass {
+    var x = 0
+}
+
+@Observable
+final class Clash {
+    var x = 0
+    var _x = 1
+}
+`;
+const SWIFT_TESTING = `import Testing
+@testable import Shapes
+
+@Test func norm() {
+    #expect(Point(x: 3, y: 4).norm() == 5)
+}
+
+@Test("a type error") func wrong() {
+    #expect(1 == "one")
+}
+`;
 const BROKEN = MAIN.replace('c.area())', 'c.area()');
 const COMPLETE = MAIN + 'c.centre.\n';
 
@@ -276,6 +325,61 @@ try {
         `${show(xctDiags)} after ${Date.now() - t} ms, ${(await lsp.log()).filter((m) => m.method === 'yukibana/loading' && m.params.label === 'swift-xctest.tar').length} swift-xctest.tar progress notifications`);
     lsp.notify('textDocument/didClose', { textDocument: { uri: uri('Tests/ShapesTests.swift') } });
     lsp.notify('textDocument/didClose', { textDocument: { uri: uri('Typed.swift') } });
+
+    // Macros: sourcekitd expands them with SwiftMacroPlugins.wasm, fetched
+    // when the first file that can use one arrives. The file is clean, and
+    // hover and completion work on and around the macros' uses.
+    since = (await lsp.log()).length;
+    t = Date.now();
+    lsp.notify('textDocument/didOpen', { textDocument: { uri: uri('Macros.swift'), languageId: 'swift', version: 1, text: MACROS } });
+    const macroDiags = await diagnostics('Macros.swift', () => true, since, 120000);
+    const pluginLoads = (await lsp.log()).filter((m) => m.method === 'yukibana/loading' && m.params.label === 'SwiftMacroPlugins.wasm');
+    check('#stringify and @Observable type-check with no diagnostics (the plugins are fetched for them)',
+        macroDiags?.length === 0 && pluginLoads.some((m) => m.params.loaded === m.params.total && m.params.total > 0),
+        `${show(macroDiags)} after ${Date.now() - t} ms, ${pluginLoads.length} SwiftMacroPlugins.wasm progress notifications`);
+    const preloads = (await lsp.log()).slice(0, since).filter((m) => m.method === 'yukibana/loading' && m.params.label === 'SwiftMacroPlugins.wasm');
+    check('the plugins are not fetched for a project without macros', preloads.length === 0, `${preloads.length} notifications before`);
+    let hovered = JSON.stringify((await lsp.request('textDocument/hover', { textDocument: { uri: uri('Macros.swift') }, position: position(MACROS, 'counter.count +', 9) })).result?.contents ?? '');
+    check('hover on a property of an @Observable class', /var count: Int/.test(hovered), hovered.slice(0, 160));
+    hovered = JSON.stringify((await lsp.request('textDocument/hover', { textDocument: { uri: uri('Macros.swift') }, position: position(MACROS, '@Observable', 2) })).result?.contents ?? '');
+    check('hover on @Observable shows the macro and its documentation', /macro Observable\(\)/.test(hovered) && /Observable protocol/.test(hovered), hovered.slice(0, 160));
+    hovered = JSON.stringify((await lsp.request('textDocument/hover', { textDocument: { uri: uri('Macros.swift') }, position: position(MACROS, '#stringify(counter', 3) })).result?.contents ?? '');
+    check('hover on #stringify shows the macro', /macro stringify<T>\(_ value: T\) -> \(T, String\)/.test(hovered), hovered.slice(0, 160));
+    const MACROS_COMPLETE = MACROS.replace('#stringify(counter.count + 1)', '#stringify(counter.)');
+    lsp.notify('textDocument/didChange', { textDocument: { uri: uri('Macros.swift'), version: 2 }, contentChanges: [{ text: MACROS_COMPLETE }] });
+    const inMacro = ((await lsp.request('textDocument/completion', {
+        textDocument: { uri: uri('Macros.swift') }, position: position(MACROS_COMPLETE, 'counter.)', 8), context: { triggerKind: 2, triggerCharacter: '.' },
+    })).result?.items ?? []).map(nameOf);
+    check("completion inside a macro's argument lists the @Observable class's members, the generated ones too",
+        inMacro.includes('count') && inMacro.includes('access'), JSON.stringify(inMacro));
+
+    // A macro's own diagnostics (an error a plugin reports) and errors in the
+    // code a macro generated are reported at the macro's use.
+    since = (await lsp.log()).length;
+    lsp.notify('textDocument/didChange', { textDocument: { uri: uri('Macros.swift'), version: 3 }, contentChanges: [{ text: MACRO_ERRORS }] });
+    const pluginDiags = await diagnostics('Macros.swift', (d) => errors(d).length >= 3, since, 60000, 3);
+    const onLine = (needle) => errors(pluginDiags).find((d) => d.range.start.line === position(MACRO_ERRORS, needle).line);
+    check('an error reported by a macro plugin is a diagnostic at the macro\'s use',
+        /'@Observable' cannot be applied to struct type 'NotAClass'/.test(onLine('@Observable\nstruct')?.message ?? '') &&
+            /reported by the plugin/.test(onLine('#diagnose(')?.message ?? ''), show(pluginDiags));
+    const clash = onLine('var _x');
+    check('an error against code a macro generated is reported in the file, its note in the expansion kept at the error',
+        /invalid redeclaration of '_x'/.test(clash?.message ?? '') && clash.relatedInformation?.[0]?.location.uri === uri('Macros.swift') &&
+            /previously declared here \(in a macro expansion\)/.test(clash.relatedInformation[0].message),
+        JSON.stringify(clash?.relatedInformation));
+
+    // swift-testing: `import Testing` finds the module (swift-testing.tar),
+    // and @Test and #expect type-check through their macros.
+    since = (await lsp.log()).length;
+    t = Date.now();
+    lsp.notify('textDocument/didOpen', { textDocument: { uri: uri('Tests/PointTests.swift'), languageId: 'swift', version: 1, text: SWIFT_TESTING } });
+    const testingDiags = await diagnostics('Tests/PointTests.swift', (d) => errors(d).length > 0, since, 120000);
+    check('a swift-testing file: Testing is found, @Test and #expect expand, the type error in it is reported',
+        testingDiags?.length === 1 && testingDiags[0].range.start.line === position(SWIFT_TESTING, '"one"').line &&
+            (await lsp.log()).some((m) => m.method === 'yukibana/loading' && m.params.label === 'swift-testing.tar'),
+        `${show(testingDiags)} after ${Date.now() - t} ms`);
+    lsp.notify('textDocument/didClose', { textDocument: { uri: uri('Tests/PointTests.swift') } });
+    lsp.notify('textDocument/didClose', { textDocument: { uri: uri('Macros.swift') } });
 
     since = (await lsp.log()).length;
     lsp.notify('textDocument/didChange', { textDocument: { uri: uri('main.swift'), version: 2 }, contentChanges: [{ text: BROKEN }] });

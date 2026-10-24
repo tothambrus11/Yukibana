@@ -21,6 +21,7 @@
 // in by esbuild.
 
 import { ConsoleStdout, Directory, Fd, File, OpenFile, PreopenDirectory, WASI, WASIProcExit, wasi as wasiDefs } from '@bjorn3/browser_wasi_shim';
+import { SwiftPluginHost } from './vendor/swift-plugin-host.mjs';
 
 export { ConsoleStdout, Directory, Fd, File, OpenFile, PreopenDirectory, WASI, WASIProcExit, wasiDefs };
 
@@ -49,8 +50,91 @@ export function commonFrontendArgs(moduleName = 'main') {
         // Clang builds the SwiftShims module implicitly and caches it here; the
         // cache lives as long as the worker, so only the first compile pays.
         '-module-cache-path', MODULE_CACHE,
+        ...macroPluginArgs(),
         '-module-name', moduleName,
     ];
+}
+
+// ---------------------------------------------------------------- macros
+
+/**
+ * The macro plugins, one WASI module from swift-toolchain-wasm (its Stage
+ * 37): the example `StringifyMacros`, Observation's `ObservationMacros` and
+ * swift-testing's `TestingMacros`, sharing one copy of swift-syntax. Every
+ * compile and sourcekitd are told (macroPluginArgs) that they are an
+ * in-process plugin library at MACRO_PLUGIN_PATH; the file is there only
+ * when loadMacroPlugins() has put it there, for code that uses one of their
+ * macros (usesMacroPlugins). Without it a macro use is a diagnostic, "could
+ * not be found ...; No such file or directory", like a missing plugin on a
+ * native host.
+ */
+export const MACRO_PLUGINS_WASM = 'SwiftMacroPlugins.wasm';
+export const MACRO_PLUGIN_PATH = `${SYSROOT}/plugins/${MACRO_PLUGINS_WASM}`;
+export const MACRO_MODULES = ['StringifyMacros', 'ObservationMacros', 'TestingMacros'];
+
+/** `-load-resolved-plugin <library>#<no executable>#<modules>`: the plugins above, in-process. */
+export function macroPluginArgs() {
+    return ['-load-resolved-plugin', `${MACRO_PLUGIN_PATH}##${MACRO_MODULES.join(',')}`];
+}
+
+/**
+ * Whether Swift source can expand a macro the plugins provide: only through
+ * `import Observation`, `import Testing` (also `@testable`, `@_exported` or
+ * `import struct Testing.Test`), or a macro the project declares itself with
+ * `#externalMacro(module: "<one of MACRO_MODULES>", ...)`. Projects that do
+ * none of these never download the plugins. A false positive (the words in
+ * a comment) costs a download, nothing else.
+ */
+export function usesMacroPlugins(text) {
+    return /\bimport\s+(?:(?:typealias|struct|class|enum|protocol|let|var|func|actor)\s+)?(?:Observation|Testing)\b/.test(text) ||
+        new RegExp(`#externalMacro\\s*\\(\\s*module\\s*:\\s*"(?:${MACRO_MODULES.join('|')})"`).test(text);
+}
+
+/**
+ * Compiled plugin modules by the bytes they were compiled from (a file's
+ * data in a sysroot), so that every compile and every sourcekitd instance
+ * of a worker shares one.
+ */
+const compiledPlugins = new WeakMap();
+
+/**
+ * The embedder side of the compiler's `swift_plugin_host` imports
+ * (swift-toolchain-wasm's swift-plugin-host.mjs, vendored in src/vendor/ and
+ * checked against the release by build.sh). Every instance of
+ * swift-frontend-lsp.wasm needs one: the module imports
+ * `swift_plugin_host.handle_message` and `take_response` whether or not
+ * the code uses a macro. Pass `host.imports` next to the WASI imports and
+ * `host.attach(memory)` once instantiated.
+ *
+ * A plugin is the wasm module at the path the compiler names, in `root`,
+ * as in swift-toolchain-wasm's run-frontend.mjs. The compiler asks for it
+ * synchronously, from inside a compile; a worker may compile a module
+ * synchronously, and loadMacroPlugins() compiles it ahead anyway, so this
+ * normally finds it done. `onStderr(text)` receives what a plugin prints.
+ */
+export function pluginHost(root, onStderr = () => {}) {
+    return new SwiftPluginHost({
+        loadPlugin(libraryPath) {
+            const bytes = readFile(root, libraryPath);
+            if (!bytes) throw new Error('no such file');
+            let module = compiledPlugins.get(bytes);
+            if (!module) compiledPlugins.set(bytes, (module = new WebAssembly.Module(bytes)));
+            return module;
+        },
+        onStderr: (name, text) => onStderr(`[${name}] ${text}`),
+    });
+}
+
+/**
+ * Fetches SwiftMacroPlugins.wasm into `root` at MACRO_PLUGIN_PATH, compiled
+ * for pluginHost(). About 2.2 MB brotli (13 MB decoded), for projects that
+ * use a macro.
+ */
+export async function loadMacroPlugins(root, onLoading) {
+    const response = await fetchArtifact(MACRO_PLUGINS_WASM, onLoading);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    compiledPlugins.set(bytes, await WebAssembly.compile(bytes));
+    writeFile(root, MACRO_PLUGIN_PATH, bytes).readonly = true;
 }
 
 /**
@@ -66,6 +150,7 @@ export function sourceKitArgs() {
         '-sdk', WASI_SYSROOT,
         '-resource-dir', RESOURCES,
         '-module-cache-path', MODULE_CACHE,
+        ...macroPluginArgs(),
     ];
 }
 
@@ -84,8 +169,8 @@ export function compileArgs(sources, output, moduleName = 'main') {
  * The libraries every program links, in link order: yukibana-swift's
  * pipeline.ts STDLIB_LIBRARIES, its stand-in for swift-autolink-extract.
  * Libraries a program's own imports need (Synchronization, RegexBuilder,
- * WASILibc, ...) are added from the objects' autolink entries, see
- * autolinkEntries().
+ * WASILibc, Observation, Testing, ...) are added from the objects' autolink
+ * entries and theirs, see linkLibraries().
  */
 const STDLIB_LIBRARIES = [
     '-lswiftSwiftOnoneSupport', '-lswiftCore', '-lswift_Concurrency', '-lswift_StringProcessing',
@@ -149,6 +234,48 @@ export function autolinkEntries(object) {
             }
         }
         p = end;
+    }
+    return out;
+}
+
+/** autolinkEntries() of every wasm object in an `ar` archive, in member order, each flag once. */
+export function archiveAutolinkEntries(archive) {
+    const out = [];
+    const magic = '!<arch>\n';
+    if (!archive || new TextDecoder().decode(archive.subarray(0, 8)) !== magic) return out;
+    for (let p = 8; p + 60 <= archive.length;) {
+        const size = parseInt(new TextDecoder().decode(archive.subarray(p + 48, p + 58)).trim(), 10);
+        const data = archive.subarray(p + 60, p + 60 + size);
+        for (const flag of autolinkEntries(data)) if (!out.includes(flag)) out.push(flag);
+        p += 60 + size + (size & 1);
+    }
+    return out;
+}
+
+/**
+ * The libraries to link for objects whose autolink entries are `flags`: those
+ * flags and, transitively, the autolink entries of the archives they name,
+ * as swiftc's driver gathers them natively (swift-toolchain-wasm's Stage 57
+ * does the same with swift-autolink-extract). Only libraries this sysroot
+ * has are kept. That matters for swift-testing: libTesting.a autolinks
+ * Foundation, FoundationInternationalization, CoreFoundation and ICU, for
+ * its Foundation overlay, but none of their symbols is reached without
+ * `import Foundation`, which the sysroot does not offer; it links and runs
+ * against FoundationEssentials alone. A library that is really needed and
+ * missing still fails the link, with the symbols it would have provided.
+ */
+export function linkLibraries(root, flags) {
+    const has = (flag) => [`${RESOURCES}/wasi`, `${WASI_SYSROOT}/lib/wasm32-wasip1`]
+        .map((dir) => readFile(root, `${dir}/lib${flag.slice(2)}.a`)).find(Boolean);
+    const out = [];
+    const queue = [...flags];
+    while (queue.length) {
+        const flag = queue.shift();
+        if (out.includes(flag)) continue;
+        const archive = has(flag);
+        if (!archive) continue;
+        out.push(flag);
+        queue.push(...archiveAutolinkEntries(archive));
     }
     return out;
 }
@@ -240,6 +367,27 @@ export function untar(root, archive, prefix) {
     return files;
 }
 
+/**
+ * The file system's root as a WASI preopen, for every tool.
+ * browser_wasi_shim 0.4.2 answers `path_readlink` with ENOTSUP, and
+ * realpath() passes that on as a failure: the compiler resolves a macro
+ * plugin's path with it, and reported every macro as "could not be found
+ * ...; Not supported". There are no symbolic links here, so readlink
+ * answers as POSIX does for anything else: EINVAL for a path that exists,
+ * the lookup's error otherwise.
+ */
+class RootDirectory extends PreopenDirectory {
+    path_readlink(path) {
+        const { ret } = this.path_filestat_get(0, path);
+        return { ret: ret === wasiDefs.ERRNO_SUCCESS ? wasiDefs.ERRNO_INVAL : ret, data: null };
+    }
+}
+
+/** `root` mounted at `/`, as every tool here sees it. */
+export function preopenRoot(root) {
+    return new RootDirectory('/', root.contents);
+}
+
 // ---------------------------------------------------------------- running
 
 /**
@@ -274,7 +422,7 @@ export async function runWasi(module, { args, root, stdout, stderr, stdin, env =
         stdin ?? new OpenFile(new File(new Uint8Array())),
         stdout,
         stderr,
-        new PreopenDirectory('/', root.contents),
+        preopenRoot(root),
     ];
     const wasi = new WASI(args, env, fds, { debug: false });
     const instance = await WebAssembly.instantiate(module, { wasi_snapshot_preview1: wasi.wasiImport });
@@ -294,15 +442,18 @@ export async function runWasi(module, { args, root, stdout, stderr, stdin, env =
  * instance: the frontend leaves LLVM shut down when it returns
  * (swift-toolchain-wasm docs/status.md, "One module for the compiler and the
  * server"), so the compiled module is instantiated again each time, which
- * is cheap next to compiling it.
+ * is cheap next to compiling it. Macro plugins are found in `root`
+ * (pluginHost); what they print goes to `stderr`.
  */
 export async function runFrontend(module, { args, root, stdout, stderr, env = ['TMPDIR=/tmp', 'HOME=/tmp'] }) {
-    const fds = [new OpenFile(new File(new Uint8Array())), stdout, stderr, new PreopenDirectory('/', root.contents)];
+    const fds = [new OpenFile(new File(new Uint8Array())), stdout, stderr, preopenRoot(root)];
     const wasi = new WASI(args, env, fds, { debug: false });
-    const instance = await WebAssembly.instantiate(module, { wasi_snapshot_preview1: wasi.wasiImport });
+    const encoder = new TextEncoder();
+    const host = pluginHost(root, (text) => stderr.fd_write(encoder.encode(text)));
+    const instance = await WebAssembly.instantiate(module, { wasi_snapshot_preview1: wasi.wasiImport, ...host.imports });
+    host.attach(instance.exports.memory);
     wasi.initialize(instance);
     const x = instance.exports;
-    const encoder = new TextEncoder();
     const pointers = args.map((arg) => {
         const bytes = encoder.encode(`${arg}\0`);
         const p = x.lsp_alloc(bytes.length);
@@ -353,7 +504,9 @@ export async function fetchArtifact(name, onLoading) {
             const { done, value } = await reader.read();
             if (done) break;
             loaded += value.length;
-            if (loaded - last >= 1 << 20) {
+            // The end is reported once, below, even when the last chunk
+            // ends a megabyte step.
+            if (loaded - last >= 1 << 20 && (total === 0 || loaded < total)) {
                 last = loaded;
                 onLoading?.(name, loaded, Math.max(total, loaded));
             }
@@ -382,6 +535,7 @@ export const FRONTEND_WASM = 'swift-frontend-lsp.wasm';
 export const LINKER_WASM = 'wasm-ld.wasm';
 export const SYSROOT_TAR = 'swift-sysroot.tar';
 export const XCTEST_TAR = 'swift-xctest.tar';
+export const TESTING_TAR = 'swift-testing.tar';
 
 /**
  * Adds the browser's XCTest (xctest/, built by tools/build-xctest.mjs) to a
@@ -392,6 +546,20 @@ export const XCTEST_TAR = 'swift-xctest.tar';
  */
 export async function loadXCTest(root, onLoading) {
     const response = await fetchArtifact(XCTEST_TAR, onLoading);
+    untar(root, new Uint8Array(await response.arrayBuffer()), SYSROOT);
+}
+
+/**
+ * Adds swift-testing to a sysroot from loadSysroot, for projects that
+ * import Testing (build.sh, "swift-testing.tar"): its module (the SDK's
+ * .swiftinterface, which the compiler builds into the module cache on
+ * first use), libTesting.a and the libraries it links, among them
+ * FoundationEssentials and _FoundationCollections, but not Foundation or
+ * ICU (see linkLibraries). Not part of the sysroot so that projects
+ * without swift-testing do not download it.
+ */
+export async function loadSwiftTesting(root, onLoading) {
+    const response = await fetchArtifact(TESTING_TAR, onLoading);
     untar(root, new Uint8Array(await response.arrayBuffer()), SYSROOT);
 }
 

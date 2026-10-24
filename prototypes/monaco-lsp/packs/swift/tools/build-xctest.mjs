@@ -13,6 +13,14 @@
 // The archive is made by llvm-ar (from PATH: build.sh puts the Swift
 // toolchain there) because wasm-ld wants an archive symbol index.
 //
+// -Onone, not -O: swift-toolchain-wasm's macro-enabled compiler (since
+// swift-6.3.3-wasm-3) runs SwiftCompilerSources' optimizer passes, and with
+// -O or -Osize it traps compiling this module (out-of-bounds in free(),
+// from SILModule::flushDeletedInsts after a function pass): a heap
+// corruption in a Swift-implemented pass on wasm32. Earlier toolchains
+// built it with -O. The unoptimised module is 0.35 MB instead of 0.23 MB, and the
+// tests it runs are the student's, whose code is -Onone anyway.
+//
 // One whole-module `-c` with `-emit-module-path`, as the driver does it, and
 // `-module-link-name XCTest`, so that `import XCTest` adds `-lXCTest` to the
 // object's autolink entries and runner.js links it with no special case.
@@ -39,7 +47,7 @@ let log = '';
 const sink = tc.textSink((t) => (log += t));
 const code = await tc.runFrontend(frontend, {
     args: ['swift-frontend', '-frontend', '-c', ...sources, ...tc.commonFrontendArgs('XCTest'),
-        '-parse-as-library', '-module-link-name', 'XCTest', '-O', '-enable-experimental-feature', 'Extern',
+        '-parse-as-library', '-module-link-name', 'XCTest', '-Onone', '-enable-experimental-feature', 'Extern',
         '-emit-module-path', '/out/XCTest.swiftmodule', '-o', '/out/XCTest.o'],
     root: (tc.mkdirp(root, '/out'), root), stdout: sink, stderr: sink,
 });

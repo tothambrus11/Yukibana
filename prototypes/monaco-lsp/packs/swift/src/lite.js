@@ -10,7 +10,7 @@
 // in-memory one (toolchain.js): the sysroot at /sysroot, the project
 // mirrored at /workspace, scratch space in /tmp.
 
-import { File, OpenFile, PreopenDirectory, WASI, WASIProcExit, sink } from './toolchain.js';
+import { File, OpenFile, WASI, WASIProcExit, pluginHost, preopenRoot, sink } from './toolchain.js';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -41,9 +41,14 @@ export class Lite {
     /** A fresh instance with its constructors run. Synchronous: a worker may instantiate a large module without awaiting. */
     start() {
         const stderr = sink((bytes) => this.onStderr(decoder.decode(bytes)));
-        const fds = [new OpenFile(new File(new Uint8Array())), stderr, stderr, new PreopenDirectory('/', this.root.contents)];
+        const fds = [new OpenFile(new File(new Uint8Array())), stderr, stderr, preopenRoot(this.root)];
         const wasi = new WASI(['sourcekit-lsp-lite'], ['TMPDIR=/tmp', 'HOME=/tmp'], fds, { debug: false });
-        const instance = new WebAssembly.Instance(this.module, { wasi_snapshot_preview1: wasi.wasiImport });
+        // sourcekitd expands macros as the compiler does, through the same
+        // plugin host (toolchain.js pluginHost); a plugin's output is logged
+        // with sourcekitd's.
+        const host = pluginHost(this.root, this.onStderr);
+        const instance = new WebAssembly.Instance(this.module, { wasi_snapshot_preview1: wasi.wasiImport, ...host.imports });
+        host.attach(instance.exports.memory);
         wasi.initialize(instance);
         this.exports = instance.exports;
     }
