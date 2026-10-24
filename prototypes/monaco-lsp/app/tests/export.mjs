@@ -224,6 +224,23 @@ async function php(name, files, expectTests) {
 	step(`${name}: PHPUnit runs tests/ through phpunit.xml and vendor/autoload.php`, 'php', [phar], dir, expectTests);
 }
 
+/**
+ * A PHP project whose tests use Eris: composer.json asks for it and Composer
+ * resolves it from Packagist. Not installed and run here (see `php`:
+ * `composer install` clones every dependency's history without a GitHub
+ * token); packs/php/test-run.mjs runs Eris tests in the browser.
+ */
+async function phpEris(name, files) {
+	const dir = await download(name, sample('php'), files);
+	if (!dir) return;
+	if (!has('php') || !has('composer')) return skip(`${name}: php or composer is missing`);
+	const env = { COMPOSER_ALLOW_SUPERUSER: '1', COMPOSER_NO_INTERACTION: '1' };
+	step(`${name}: composer validates composer.json`, 'composer', ['validate', '--no-check-publish'], dir, undefined, env);
+	const resolve = run('composer', ['update', '--dry-run', '--no-progress'], dir, env);
+	if (resolve.status !== 0) skip(`${name}: composer could not resolve from Packagist (offline?): ${tail(resolve.output)}`);
+	else check(/giorgiosironi\/eris \(1\./.test(resolve.output) && /phpunit\/phpunit \(12\./.test(resolve.output), `${name}: composer resolves giorgiosironi/eris 1.x and phpunit/phpunit 12 from Packagist`, tail(resolve.output));
+}
+
 async function rust(name, files, expect) {
 	const dir = await download(name, sample('rust'), files);
 	if (!dir) return;
@@ -266,6 +283,8 @@ const cases = {
 		const money = '<?php\n\nnamespace App;\n\nfinal class Money\n{\n    public function __construct(public readonly int $cents)\n    {\n    }\n}\n';
 		const test = '<?php\n\nuse App\\Money;\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class MoneyTest extends TestCase\n{\n    public function testCents(): void\n    {\n        $this->assertSame(5, (new Money(5))->cents);\n    }\n}\n';
 		await php('php-classmap', { 'main.php': '<?php\necho "hi\\n";\n', 'src/Money.php': money, 'tests/MoneyTest.php': test }, 'OK (1 test, 1 assertion)');
+		const property = '<?php\n\nuse Eris\\Generators;\nuse Eris\\TestTrait;\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class SumTest extends TestCase\n{\n    use TestTrait;\n\n    public function testCommutes(): void\n    {\n        $this->forAll(Generators::int(), Generators::int())->then(fn (int $a, int $b) => $this->assertSame($a + $b, $b + $a));\n    }\n}\n';
+		await phpEris('php-eris', { 'main.php': '<?php\necho "hi\\n";\n', 'tests/SumTest.php': property });
 	},
 	scala: async () => {
 		await scala('scala', sample('scala').sample, 0);

@@ -51,7 +51,7 @@ const BUILD: Record<LanguageId, BuildFiles> = {
 	typescript: { paths: ['package.json'], generate: (p) => ({ 'package.json': typescriptPackageJson(p.language.entry, p.files) }) },
 	web: { paths: ['package.json'], generate: () => ({ 'package.json': vitePackageJson() }) },
 	scala: { paths: ['build.sbt', 'project/build.properties'], generate: (p) => ({ 'build.sbt': buildSbt(p.files), 'project/build.properties': `sbt.version=${SBT_VERSION}\n` }) },
-	php: { paths: ['composer.json', 'phpunit.xml'], generate: (p) => ({ 'composer.json': composerJson(p.language.entry), 'phpunit.xml': phpunitXml(p.files) }) },
+	php: { paths: ['composer.json', 'phpunit.xml'], generate: (p) => ({ 'composer.json': composerJson(p.language.entry, p.files), 'phpunit.xml': phpunitXml(p.files) }) },
 	rust: { paths: ['Cargo.toml'], generate: (p) => ({ 'Cargo.toml': cargoToml(p.files) }) },
 	java: { paths: ['pom.xml'], generate: (p) => ({ 'pom.xml': pomXml(p.files, p.language.entry) }) },
 	kotlin: {
@@ -629,6 +629,8 @@ export function buildSbt(files: Files): string {
 
 /** The PHPUnit the browser tests with (packs/php/build.sh). */
 const PHPUNIT_VERSION = '12.5.40';
+/** The Eris the browser's Test installs for a project that uses it (packs/php/build.sh). */
+const ERIS_VERSION = '1.3.0';
 
 /**
  * composer.json for the project where it is: PHPUnit as a development
@@ -638,15 +640,18 @@ const PHPUNIT_VERSION = '12.5.40';
  * what the browser's Test uses (packs/php/src/autoload.php): the project's
  * files are not in PSR-4 folders, so a class map is the autoloading that
  * fits them without moving anything. PHP 8.3 or later, which PHPUnit 12
- * needs; the browser runs 8.4.
+ * needs; the browser runs 8.4. Eris too, when a PHP file names its
+ * namespace, as the browser's Test then installs it (packs/php/src/runner.js,
+ * `usesEris`).
  */
-export function composerJson(entry: string): string {
+export function composerJson(entry: string, files: Files = {}): string {
+	const eris = Object.entries(files).some(([path, text]) => path.endsWith('.php') && /\bEris\\/.test(text));
 	const json = {
 		name: 'yukibana/php-project',
 		description: 'Written in Yukibana Light.',
 		type: 'project',
 		require: { php: '>=8.3' },
-		'require-dev': { 'phpunit/phpunit': `^${PHPUNIT_VERSION}` },
+		'require-dev': { ...(eris ? { 'giorgiosironi/eris': `^${ERIS_VERSION}` } : {}), 'phpunit/phpunit': `^${PHPUNIT_VERSION}` },
 		autoload: { classmap: ['./'], 'exclude-from-classmap': ['tests/', 'vendor/'] },
 		scripts: { start: `php ${entry}`, test: 'phpunit' },
 		config: { 'sort-packages': true },

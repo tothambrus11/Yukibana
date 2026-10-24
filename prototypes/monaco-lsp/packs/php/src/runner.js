@@ -13,7 +13,7 @@
 // its read() as on a terminal. PHP's CLI writes stdout unbuffered, so a
 // prompt printed before the read has already been posted.
 
-import { download, runCli, startPhp, writeFile } from './php.js';
+import { download, runCli, startPhp, untar, writeFile } from './php.js';
 
 const ROOT = '/workspace';
 const post = (msg) => self.postMessage(msg);
@@ -99,6 +99,17 @@ function phpunitArgs(files) {
     return ['--bootstrap', '/opt/yukibana/autoload.php', '--colors=always', '--do-not-cache-result', ...(configured ? [] : ['tests'])];
 }
 
+/**
+ * Whether a Test needs Eris (property-based testing for PHPUnit): a PHP file
+ * of the project names its namespace (`use Eris\TestTrait;`,
+ * `\Eris\Generators::int()`). Then the runner fetches eris.tar, which only
+ * such a Test pays for, and unpacks it to /opt/yukibana/lib/eris/, where the
+ * bootstrap (autoload.php) loads it from.
+ */
+function usesEris(files) {
+    return Object.entries(files).some(([path, text]) => path.endsWith('.php') && /\bEris\\/.test(text));
+}
+
 let started = false;
 self.onmessage = async ({ data: msg }) => {
     if ((msg?.type !== 'run' && msg?.type !== 'test') || started) return;
@@ -106,11 +117,13 @@ self.onmessage = async ({ data: msg }) => {
     const testing = msg.type === 'test';
     let code = 1;
     try {
-        post({ type: 'phase', text: testing ? 'Loading PHP and PHPUnit' : 'Loading PHP' });
-        const [php, phpunit, autoload] = await Promise.all([
+        const eris = testing && usesEris(msg.files ?? {});
+        post({ type: 'phase', text: testing ? `Loading PHP and PHPUnit${eris ? ' and Eris' : ''}` : 'Loading PHP' });
+        const [php, phpunit, autoload, erisTar] = await Promise.all([
             ready,
             testing ? download('phpunit.phar', report) : null,
             testing ? download('autoload.php', () => {}) : null,
+            eris ? download('eris.tar', report) : null,
         ]);
         input = terminal(msg.stdin ?? null);
         writeProject(php, msg.files ?? {});
@@ -120,6 +133,7 @@ self.onmessage = async ({ data: msg }) => {
         if (testing) {
             writeFile(php, '/opt/phpunit.phar', phpunit);
             writeFile(php, '/opt/yukibana/autoload.php', autoload);
+            if (erisTar) untar(php, erisTar, '/opt/yukibana');
             post({ type: 'phase', text: 'Testing' });
             code = await runCli(php, ['php', ...ini, '/opt/phpunit.phar', ...phpunitArgs(msg.files ?? {})]);
         } else {

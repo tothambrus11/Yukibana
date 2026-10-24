@@ -52,15 +52,17 @@ ini_set('display_errors', 'stderr');
 //   (workspace/didChangeWatchedFiles), not from inotify or `find`;
 // - what is indexed besides the project: phpstorm-stubs (PHP's own
 //   functions and classes, trimmed by build.sh to the extensions php.wasm
-//   has) and the source of PHPUnit's Framework namespace, from the phar the
-//   runner tests with, so `extends TestCase` and `$this->assertSame` resolve.
+//   has), the source of PHPUnit's Framework namespace, from the phar the
+//   runner tests with, so `extends TestCase` and `$this->assertSame` resolve,
+//   and Eris's source (`use Eris\TestTrait`, `Generators::int()`), which
+//   the runner installs for a project that uses it;
 // - diagnostics 500 ms after the last edit rather than 1 s.
 const CONFIG = [
     'language_server.diagnostic_outsource' => false,
     'language_server.code_action_outsource' => false,
     'language_server.diagnostic_sleep_time' => 500,
     'indexer.enabled_watchers' => ['lsp'],
-    'indexer.stub_paths' => ['/opt/phpactor/vendor/jetbrains/phpstorm-stubs', '/opt/phpunit'],
+    'indexer.stub_paths' => ['/opt/phpactor/vendor/jetbrains/phpstorm-stubs', '/opt/phpunit', '/opt/eris'],
 ];
 $_SERVER['argv'][] = '--config-extra=' . json_encode(CONFIG);
 

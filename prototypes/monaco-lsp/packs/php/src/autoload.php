@@ -10,6 +10,14 @@
 // outside tests/ and vendor/; a declaration is found with PHP's own
 // tokenizer, so nothing is run to find it. Files that only declare
 // functions cannot be autoloaded, by Composer either: a test requires them.
+//
+// Libraries the runner installed for this Test (Eris, for a project that
+// uses it) are under /opt/yukibana/lib/<name>/, each with an autoload.php
+// that does what its Composer autoload section says; they are loaded first.
+
+foreach (glob('/opt/yukibana/lib/*/autoload.php') ?: [] as $library) {
+    require_once $library;
+}
 
 (static function (): void {
     $root = getcwd();

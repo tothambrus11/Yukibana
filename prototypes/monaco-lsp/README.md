@@ -72,7 +72,7 @@ no DOM and no npm packages except fast-check, for property-based tests
 | C and C++ | clangd 21 (Emscripten, threads) | clang 21 and wasm-ld, WASI | 8.0 MB | 12.2 MB; Test 0.06 to 0.28 MB (the framework's libraries) |
 | Swift | swift-syntax-ls (ours) plus swift-frontend 6.3.3 for types and errors | the same swift-frontend and wasm-ld | 30.2 MB | 8.2 MB |
 | Rust | rust-analyzer's IDE crates (ra_ap_ide 0.0.358) with our LSP layer, std 1.98 sources | Miri 1.78 (rustc's MIR interpreter, not a compiler) | 4.2 MB | 29.8 MB |
-| PHP | Phpactor 2026.10.07 on PHP 8.4 (php-wasm) | PHP 8.4.25's CLI (php-wasm), PHPUnit 12.5 | 7.5 MB | 2 KB (the same php.wasm); Test 0.6 MB |
+| PHP | Phpactor 2026.10.07 on PHP 8.4 (php-wasm) | PHP 8.4.25's CLI (php-wasm), PHPUnit 12.5, Eris 1.3 | 7.6 MB | 2 KB (the same php.wasm); Test 0.6 MB, Eris 45 KB when used |
 | Java | javac (OpenJDK 25u) compiled to WebAssembly GC by TeaVM 0.16.0 (teavm-javac), with our language service on its trees | the same javac, then TeaVM linking the program to WebAssembly GC in the browser; JUnit Jupiter 5.14 | 2.0 MB | 2.3 MB (TeaVM's class library) |
 | Kotlin | ours, syntax only, on tree-sitter-kotlin 1.1.0 (web-tree-sitter 0.25) | none: no Kotlin compiler runs in a browser | 0.26 MB | none |
 | Haskell | MicroHs 0.16 (its type checker, patched to remember what it resolved) with our LSP layer | the same MicroHs, compiling and running in the worker; hspec-style Test | 1.6 MB | 2 KB (the same files) |
@@ -151,7 +151,9 @@ after weeks without a visit, persistent storage or not.
   checks (unknown classes and methods, types) plus PHP's parser for syntax
   errors; no `php -l` compile errors, no PHPStan or Psalm, no formatting.
   PHP has the extensions of WordPress Playground's build (no Composer
-  packages; no `readline()`: read input with `fgets(STDIN)`).
+  packages but Eris, for property-based tests; no `readline()`: read input
+  with `fgets(STDIN)`). No mutation testing: Infection needs a coverage
+  driver and child processes (packs/php/README.md).
 * **Rust**: not the rust-analyzer program but its analysis crates, with a
   crate graph built from `Cargo.toml` and `src/`; no crates.io
   dependencies, no proc macros, no formatting, and no `cargo check`, so

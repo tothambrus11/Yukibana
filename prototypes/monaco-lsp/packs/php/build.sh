@@ -18,6 +18,11 @@ PHPACTOR_SHA256=b28bf6166e016d539fc2f2aec18ef918b12590e436a6f1ccbdf30b5bbdbdb16b
 # PHPUnit's phar, from phar.phpunit.de.
 PHPUNIT_VERSION=12.5.40
 PHPUNIT_SHA256=83f8098d7e6513befa61cd0df2689d42398d43404969b0dc21528ff52674ebc6
+# Eris, PHP's property-based testing library for PHPUnit (MIT), at a release
+# tag whose commit is checked. GitHub's archive downloads are not reachable
+# from every build machine, its git transport is, so it is cloned.
+ERIS_VERSION=1.3.0
+ERIS_COMMIT=049239fb03b495af80b3d493a3a5c7e5c96224fa
 # The phar leaves its dependencies' licence files out; phpstorm-stubs'
 # (Apache-2.0, which asks for it) is fetched at the commit the phar bundles.
 STUBS_COMMIT=e4f5f6c3de39f3bab3e9f3fca4b8cdb8b061e681
@@ -42,6 +47,14 @@ fetch "https://github.com/phpactor/phpactor/releases/download/$PHPACTOR_VERSION/
 fetch "https://phar.phpunit.de/phpunit-$PHPUNIT_VERSION.phar" "$CACHE/dl/phpunit-$PHPUNIT_VERSION.phar" "$PHPUNIT_SHA256"
 fetch "https://raw.githubusercontent.com/JetBrains/phpstorm-stubs/$STUBS_COMMIT/LICENSE" "$CACHE/dl/phpstorm-stubs-$STUBS_COMMIT-LICENSE" "$STUBS_LICENSE_SHA256"
 
+ERIS="$CACHE/eris-$ERIS_VERSION"
+if [ ! -d "$ERIS/.git" ]; then
+    rm -rf "$ERIS"
+    git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ERIS_VERSION" https://github.com/giorgiosironi/eris "$ERIS"
+fi
+[ "$(git -C "$ERIS" rev-parse HEAD)" = "$ERIS_COMMIT" ] || { echo "eris $ERIS_VERSION is not commit $ERIS_COMMIT" >&2; exit 1; }
+git -C "$ERIS" diff --quiet HEAD || { echo "$ERIS has local changes" >&2; exit 1; }
+
 # 1. PHP: the Asyncify build's loader and wasm, unchanged.
 PHPWASM="$CACHE/php-wasm-web-8-4-$PHPWASM_VERSION"
 if [ ! -f "$PHPWASM/.done" ]; then
@@ -63,14 +76,15 @@ cp "$PHPWASM/asyncify/${PHP_VERSION//./_}/php_8_4.wasm" "$OUT/php.wasm"
 #    functions that fail when the program runs, and cost download and
 #    indexing time. Next to them, PHPUnit's Framework namespace from the
 #    phar the runner uses (TestCase, Assert, the attributes), so tests
-#    resolve; and the index of both, built ahead of time (build-index.mjs).
+#    resolve; Eris's source, so a property-based test resolves too; and the
+#    index of them all, built ahead of time (build-index.mjs).
 STUBS_KEEP="Core standard SPL Reflection date pcre json mbstring ctype dom libxml SimpleXML xml xmlreader xmlwriter
 tokenizer Phar random hash iconv filter fileinfo zlib zip bcmath calendar exif gd session sqlite3 PDO openssl curl soap
 superglobals"
 cp "$HERE/src/php.js" "$OUT/"
 TREE="$CACHE/phpactor-tree"
 TAR=(tar --sort=name --mtime='2026-01-01 00:00:00Z' --owner=0 --group=0 --numeric-owner --format=gnu)
-rm -rf "$TREE" && mkdir -p "$TREE/phpactor" "$TREE/yukibana" "$TREE/phpunit"
+rm -rf "$TREE" && mkdir -p "$TREE/phpactor" "$TREE/yukibana" "$TREE/phpunit" "$TREE/eris"
 php -d phar.readonly=1 -r '(new Phar($argv[1]))->extractTo($argv[2]);' "$CACHE/dl/phpactor-$PHPACTOR_VERSION.phar" "$TREE/phpactor"
 rm -rf "$TREE/phpactor/.box" "$TREE/phpactor/.box_dump"
 STUBS="$TREE/phpactor/vendor/jetbrains/phpstorm-stubs"
@@ -81,12 +95,13 @@ done
 php -d phar.readonly=1 -r '(new Phar($argv[1]))->extractTo($argv[2], null, true);' "$CACHE/dl/phpunit-$PHPUNIT_VERSION.phar" "$TREE/phpunit-all"
 mv "$TREE/phpunit-all/phpunit/Framework" "$TREE/phpunit/Framework"
 rm -rf "$TREE/phpunit-all"
+cp -r "$ERIS/src" "$TREE/eris/src"
 cp "$HERE/src/phpactor.php" "$HERE/src/lint.php" "$HERE/src/rename.php" "$TREE/yukibana/"
 php "$HERE/scripts/patch-signature-helper.php" \
     "$TREE/phpactor/lib/Completion/Bridge/TolerantParser/WorseReflection/WorseSignatureHelper.php" "$TREE/yukibana/WorseSignatureHelper.php"
-"${TAR[@]}" -cf "$TREE.tar" -C "$TREE" phpactor phpunit yukibana
+"${TAR[@]}" -cf "$TREE.tar" -C "$TREE" eris phpactor phpunit yukibana
 node "$HERE/scripts/build-index.mjs" "$OUT" "$TREE.tar" "$TREE/cache"
-"${TAR[@]}" -cf "$OUT/phpactor.tar" -C "$TREE" cache phpactor phpunit yukibana
+"${TAR[@]}" -cf "$OUT/phpactor.tar" -C "$TREE" cache eris phpactor phpunit yukibana
 cp "$TREE/phpactor/LICENSE" "$OUT/LICENSE-phpactor.txt"
 cp "$CACHE/dl/phpstorm-stubs-$STUBS_COMMIT-LICENSE" "$OUT/LICENSE-phpstorm-stubs.txt"
 grep -q "$STUBS_COMMIT" "$TREE/phpactor/vendor/composer/installed.php" || { echo "phpactor bundles another phpstorm-stubs commit" >&2; exit 1; }
@@ -98,6 +113,16 @@ rm -rf "$TREE" "$TREE.tar"
 # 3. PHPUnit for Test, and our bootstrap.
 cp "$CACHE/dl/phpunit-$PHPUNIT_VERSION.phar" "$OUT/phpunit.phar"
 cp "$HERE/src/autoload.php" "$OUT/autoload.php"
+#    Eris for a Test of a project that uses it: its src/ and licence as
+#    released, and our stand-in for its Composer autoload section, unpacked
+#    by the runner to /opt/yukibana/lib/eris/ (unversioned, as phpunit.phar).
+ERIS_TREE="$CACHE/eris-tree"
+rm -rf "$ERIS_TREE" && mkdir -p "$ERIS_TREE/lib/eris"
+cp -r "$ERIS/src" "$ERIS/LICENSE" "$ERIS_TREE/lib/eris/"
+cp "$HERE/src/eris-autoload.php" "$ERIS_TREE/lib/eris/autoload.php"
+"${TAR[@]}" -cf "$OUT/eris.tar" -C "$ERIS_TREE" lib
+rm -rf "$ERIS_TREE"
+cp "$ERIS/LICENSE" "$OUT/LICENSE-eris.txt"
 
 # 4. The workers, and the licences.
 cp "$HERE/src/server.js" "$HERE/src/runner.js" "$OUT/"
@@ -116,7 +141,7 @@ grep -q "Sebastian Bergmann" "$OUT/LICENSE-phpunit.txt" || { echo "no PHPUnit li
 #    20 MB wasm, so siblings are cached by the file's sha256.
 rm -f "$OUT"/*.gz "$OUT"/*.br
 mkdir -p "$CACHE/compressed"
-for f in "$OUT"/php.wasm "$OUT"/php.mjs "$OUT"/phpactor.tar "$OUT"/phpunit.phar \
+for f in "$OUT"/php.wasm "$OUT"/php.mjs "$OUT"/phpactor.tar "$OUT"/phpunit.phar "$OUT"/eris.tar \
     "$OUT"/php.js "$OUT"/server.js "$OUT"/runner.js "$OUT"/autoload.php; do
     key="$CACHE/compressed/$(sha256sum "$f" | cut -c1-32)"
     if [ ! -f "$key.br" ] || [ ! -f "$key.gz" ]; then

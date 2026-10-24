@@ -13,7 +13,8 @@ around them, and `server.js` adds keywords to its completions (below).
 
 **Runner:** the same `php.wasm` running its own CLI SAPI, `php main.php`,
 in a second worker; **Test** runs **PHPUnit 12.5.40** from its own phar over
-`tests/`.
+`tests/`, with **Eris 1.3.0** for property-based tests in a project that
+uses it.
 
 Everything is a pinned upstream release checked by sha256 (`build.sh`);
 nothing is compiled. The build needs curl, tar, node and a PHP CLI (any PHP 8
@@ -43,7 +44,11 @@ hash, so a rebuild takes 1 to 2 minutes).
   but are analysers first (no completion worth the name, no rename);
   Phpactor's own diagnostics cover the common errors.
 * **Tests.** PHPUnit is what PHP projects use; its phar runs on php-wasm as
-  it is.
+  it is. For property-based tests, Eris (giorgiosironi/eris, MIT) is the
+  maintained PHP library for PHPUnit (1.3.0, October 2026, PHPUnit 10 to
+  13), pure PHP with no dependency, and runs unchanged on php-wasm.
+  innmind/black-box was the alternative; it needs PHP ~8.4 and pulls in
+  symfony/var-dumper and php-code-coverage.
 
 ## What is in `app/static/packs/php/`
 
@@ -53,16 +58,17 @@ hash, so a rebuild takes 1 to 2 minutes).
 | `php.mjs` | 271 KB | 61 KB | 51 KB | its Emscripten loader, unchanged |
 | `php.js` | 7 KB | 3 KB | 2 KB | ours: start PHP, run the CLI, unpack a tar |
 | `server.js` | 15 KB | 6 KB | 5 KB | ours: the LSP worker |
-| `phpactor.tar` | 26.0 MB | 2.81 MB | 1.93 MB | Phpactor, trimmed stubs, PHPUnit's `Framework/` source, the prebuilt index, our PHP files |
+| `phpactor.tar` | 26.9 MB | 2.92 MB | 2.01 MB | Phpactor, trimmed stubs, PHPUnit's `Framework/` source, Eris's source, the prebuilt index, our PHP files |
 | `runner.js` | 6 KB | 2 KB | 2 KB | ours: the Run/Test worker |
 | `phpunit.phar` | 6.36 MB | 864 KB | 632 KB | PHPUnit 12.5.40, fetched only by Test |
-| `autoload.php` | 3 KB | 1 KB | 1 KB | ours: Test's class-map autoloader |
+| `autoload.php` | 4 KB | 1 KB | 1 KB | ours: Test's class-map autoloader |
+| `eris.tar` | 276 KB | 57 KB | 45 KB | Eris 1.3.0's `src/` and licence, and our autoloader for it, fetched only by a Test that uses Eris |
 | `LICENSE-*.txt`, `phpactor-packages.txt` | | | | licences (below) |
 
-The language server transfers **7.5 MB** with brotli (10.6 MB gzip, 46 MB
+The language server transfers **7.6 MB** with brotli (10.7 MB gzip, 47 MB
 raw from a host that compresses nothing). Run then needs only `runner.js`:
 `php.wasm` and its loader are the same URLs, already cached. Test adds
-`phpunit.phar`, 0.6 MB. A Run before the server has loaded downloads
+`phpunit.phar`, 0.6 MB, and `eris.tar`, 45 KB, when the project uses Eris. A Run before the server has loaded downloads
 `php.wasm` itself (5.6 MB).
 
 `phpactor.tar` is the phar's files unpacked: a phar compresses each file
@@ -78,6 +84,10 @@ below, 1.9 MB with PHPUnit's source and the index added). Inside it:
 * **PHPUnit's `Framework/` source** (256 files, from the phar the runner
   uses), indexed as stubs, so `extends TestCase`, `$this->assertSame` and
   `#[DataProvider]` resolve, complete and hover in tests.
+* **Eris's `src/`** (67 files, from the release the runner installs),
+  indexed as stubs the same way, so `use Eris\TestTrait`,
+  `Generators::int()` and `$this->forAll(...)` resolve and complete: 75 KB
+  more brotli for every PHP session (the tar is one download).
 * **Phpactor's index of both, built at build time** (`scripts/build-index.mjs`
   runs `phpactor index:build` with this php.wasm in Node, with the same
   paths and configuration). Indexing those 349 files takes about 10 s of
@@ -164,7 +174,8 @@ across files, references across files, document symbols, rename of a
 method and of a class across files (no file moved), signature help in a
 constructor call and in a call of a `use function` import, keyword
 completion (`retu` → `return`, and none after `$`), a quick fix (import a
-class), shutdown. Phpactor
+class), an Eris property test (no errors, completion after `Generators::`,
+hover on `forAll`), shutdown. Phpactor
 also offers document highlight, workspace symbols, type definition,
 implementation, selection ranges and its refactorings (extract method,
 generate accessors...); the app uses what it supports.
@@ -176,7 +187,54 @@ PHP's CLI), warnings on stderr without stopping, `exit(3)`, UTF-8,
 stdout/stderr order, streamed output, 100 000 lines, Stop of an infinite
 loop. Test: PHPUnit over `tests/` with colours, a failing assertion (exit
 1), a project class autoloaded without `require`, a project's own
-`phpunit.xml` choosing its suites, and a project without tests (exit 2).
+`phpunit.xml` choosing its suites, a project without tests (exit 2), and
+Eris (below).
+
+## Property-based testing: Eris
+
+**Eris 1.3.0** (commit `049239fb`, MIT) in Test, unchanged: a test class
+`use`s `Eris\TestTrait` and says
+
+```php
+$this->forAll(Generators::int(), Generators::int())
+    ->then(function (int $x, int $y): void {
+        $this->assertGreaterThanOrEqual(0.0, (new Point($x, $y))->norm());
+    });
+```
+
+* **When.** The runner fetches `eris.tar` only for a Test of a project
+  whose PHP files name the `Eris\` namespace (`usesEris` in `runner.js`),
+  and unpacks it to `/opt/yukibana/lib/eris/`; the bootstrap
+  (`autoload.php`) requires each `/opt/yukibana/lib/*/autoload.php`, and
+  Eris's (`src/eris-autoload.php`) does what Eris's `composer.json`
+  autoload section does: PSR-4 for `Eris\` and its `functions.php`. Not in
+  Run: Eris is built around PHPUnit's TestCase.
+* **Report.** PHPUnit's, with Eris's additions: a failing property fails
+  its test with the assertion's message for the **shrunk** counterexample
+  (`Failed asserting that 100.0 is less than 100.0.` for
+  `Generators::choose(0, 1000)` and `norm() < 100`, in the test below), and
+  Eris prints `Reproduce with: ERIS_SEED=… vendor/bin/phpunit --filter …`.
+  That command is for a real checkout; here there are no environment
+  variables to set, so a test replays a seed by setting `$this->seed = …;`
+  before `forAll` (the property Eris reads `ERIS_SEED` into).
+* **Build.** GitHub's archive downloads are refused from the build
+  machine used here (HTTP 403 from its proxy) while git works, so
+  `build.sh` clones the `1.3.0` tag and checks it is commit
+  `049239fb03b495af80b3d493a3a5c7e5c96224fa` with no local change.
+
+## Mutation testing: not available
+
+Infection (0.35.8), PHP's mutation testing tool, cannot run here, and
+nothing imitates it. It needs a code coverage driver to choose the tests
+per mutant (Xdebug, PCOV or phpdbg) and runs PHPUnit once per mutant in a
+child process through symfony/process (`proc_open`). This php.wasm has
+none of the three, and its `proc_open` fails: checked with this pack's
+runner (2026-10-24), `proc_open(['php', '-v'], …)` returns false with
+`proc_open(): proc_open() failed`, `function_exists('pcntl_fork')`,
+`extension_loaded('xdebug')`, `extension_loaded('pcov')` are all false
+(Playground's own layer can route `proc_open` to a JavaScript callback,
+which would mean writing a process model for PHP in the worker, not
+running Infection).
 
 ## What does not
 
@@ -222,6 +280,10 @@ Packagist), `composer dump-autoload`, and PHPUnit run through
 requiring it. `composer install` itself is not run there: without a GitHub
 token, Composer clones PHPUnit's dependencies with their full histories
 instead of downloading release zips, which filled this machine's disk.
+A project whose PHP files use `Eris\` also gets `giorgiosironi/eris`
+`^1.3.0` in `require-dev`; the export test checks that Composer resolves
+it (and PHPUnit 12) for such a project. The sample's tests do not use Eris,
+so its Download stays checkable end to end without `composer install`.
 
 ## Licences
 
@@ -239,6 +301,7 @@ instead of downloading release zips, which filled this machine's disk.
   (fetched at the commit the phar bundles).
 * PHPUnit and its bundled dependencies: BSD-3-Clause and others, all their
   licence files collected in `LICENSE-phpunit.txt`.
+* Eris: MIT, `LICENSE-eris.txt` (also inside `eris.tar`).
 
 ## Tests
 

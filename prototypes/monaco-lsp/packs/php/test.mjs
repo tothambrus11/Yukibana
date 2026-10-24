@@ -111,6 +111,29 @@ final class GeometryTest extends TestCase
     }
 }
 `;
+// A property-based test with Eris: its classes come from the stubs index.
+const PROPS = `<?php
+
+namespace Geometry\\Tests;
+
+use Eris\\Generators;
+use Eris\\TestTrait;
+use Geometry\\Point;
+use PHPUnit\\Framework\\TestCase;
+
+final class PropertiesTest extends TestCase
+{
+    use TestTrait;
+
+    public function testNormIsNotNegative(): void
+    {
+        $this->forAll(Generators::int(), Generators::int())
+            ->then(function (int $x, int $y): void {
+                $this->assertGreaterThanOrEqual(0.0, (new Point($x, $y))->norm());
+            });
+    }
+}
+`;
 const MAIN_MISSING = MAIN + `$b->nope();\n`;
 const MAIN_SYNTAX = MAIN + `echo "unterminated\n`;
 const MAIN_CIRCLE = MAIN + `echo (new Circle())->area();\n`;
@@ -237,8 +260,23 @@ try {
     diags = await diagnostics('main.php', (d) => d.length === 0 || !d.some((x) => /Circle/.test(x.message)));
     check('adding that file resolves it, and main.php has no errors', diags !== undefined && !diags.some((d) => d.severity === 1), JSON.stringify(diags?.map((d) => d.message)));
 
-    const testDiags = await diagnostics('tests/GeometryTest.php', () => true, 20000);
+    const testDiags = await diagnostics('tests/GeometryTest.php', () => true);
     check('the test file, which extends PHPUnit\'s TestCase, has no errors', testDiags !== undefined && !testDiags.some((d) => d.severity === 1), JSON.stringify(testDiags?.map((d) => d.message)));
+
+    // Opened after the other files have their diagnostics: Phpactor keeps
+    // one pending document for diagnostics, so of files opened in a burst
+    // only the last is checked until one of them changes.
+    await lsp.notify('textDocument/didOpen', { textDocument: { uri: uri('tests/PropertiesTest.php'), languageId: 'php', version: 1, text: PROPS } });
+    const propsDiags = await diagnostics('tests/PropertiesTest.php', () => true);
+    check('an Eris property test (TestTrait, Generators) has no errors', propsDiags !== undefined && !propsDiags.some((d) => d.severity === 1), JSON.stringify(propsDiags?.map((d) => d.message)));
+    const propsLines = PROPS.split('\n');
+    const forAllLine = propsLines.findIndex((l) => l.includes('$this->forAll('));
+    const generators = await lsp.request('textDocument/completion', at('tests/PropertiesTest.php', forAllLine, propsLines[forAllLine].indexOf('Generators::') + 'Generators::'.length));
+    const generatorItems = (generators.result?.items ?? generators.result ?? []).map((i) => i.label);
+    check('completion after `Generators::` offers Eris\'s generators', ['int', 'string', 'choose', 'elements', 'tuple'].every((l) => generatorItems.includes(l)), JSON.stringify(generatorItems.slice(0, 12)));
+    const forAllHover = await lsp.request('textDocument/hover', at('tests/PropertiesTest.php', forAllLine, propsLines[forAllLine].indexOf('forAll') + 2));
+    const forAllText = forAllHover.result?.contents?.value ?? JSON.stringify(forAllHover.result);
+    check('hover on `$this->forAll` shows Eris\'s TestTrait method', /forAll/.test(forAllText) && /TestTrait|ForAll/.test(forAllText), JSON.stringify(forAllText.slice(0, 200)));
 
     await change('main.php', MAIN_MISSING);
     diags = await diagnostics('main.php', (d) => d.some((x) => /nope/.test(x.message)));

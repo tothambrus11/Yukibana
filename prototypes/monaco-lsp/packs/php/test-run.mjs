@@ -25,8 +25,11 @@ const ISOLATION = { 'cross-origin-opener-policy': 'same-origin', 'cross-origin-e
 
 // Raw files, no content-encoding negotiation: the worst-case transfer.
 let bytesServed = 0;
+/** Every path asked for, so a check can tell what a Test fetched. */
+const served = [];
 const server = createServer(async (req, res) => {
     const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    served.push(path);
     if (path === '/__test.html') {
         res.writeHead(200, { 'content-type': 'text/html', ...ISOLATION });
         res.end('<!doctype html><link rel=icon href="data:,"><title>php runner test</title>');
@@ -382,6 +385,60 @@ var_dump(fgets(STDIN));
     check('test: a phpunit.xml of the project chooses the tests (spec/ here), with our bootstrap', t4.code === 0 && /OK \(4 tests/.test(t4.stdout), `code=${t4.code} ${short(t4.stdout.trim().split('\n').slice(-3).join(' | '), 300)} ${short(t4.stderr)}`);
     const t5 = await test({ ...SAMPLE });
     check('test: a project without tests says so, exit non-zero', t5.code !== 0, `code=${t5.code} ${short(t5.stdout.trim() + ' ' + t5.stderr.trim(), 200)}`);
+
+
+    // 6. Property-based tests with Eris: fetched only by a Test that uses it.
+    const fetchedEris = () => served.includes('/packs/php/eris.tar');
+    check('test: Eris is not fetched by a Test that does not use it', !fetchedEris());
+    const PROPERTIES = `<?php
+
+declare(strict_types=1);
+
+namespace Geometry\\Tests;
+
+use Eris\\Generators;
+use Eris\\TestTrait;
+use Geometry\\Point;
+use PHPUnit\\Framework\\TestCase;
+
+use function Geometry\\distance;
+
+require_once __DIR__ . '/../geometry.php';
+
+final class PropertiesTest extends TestCase
+{
+    use TestTrait;
+
+    public function testDistanceIsSymmetric(): void
+    {
+        $this->forAll(Generators::int(), Generators::int(), Generators::int(), Generators::int())
+            ->then(function (int $ax, int $ay, int $bx, int $by): void {
+                $a = new Point($ax, $ay);
+                $b = new Point($bx, $by);
+                $this->assertSame(distance($a, $b), distance($b, $a));
+            });
+    }
+
+    public function testNormStaysUnder100(): void
+    {
+        $this->forAll(Generators::choose(0, 1000))
+            ->then(function (int $x): void {
+                $this->assertLessThan(100.0, (new Point($x, 0))->norm());
+            });
+    }
+}
+`;
+    const t6 = await test({ ...SAMPLE, 'tests/GeometryTest.php': TESTS, 'tests/PropertiesTest.php': PROPERTIES });
+    check(
+        'test: Eris: a passing property passes; a failing one fails with its counterexample shrunk to 100 and the seed to replay it',
+        t6.code === 1 &&
+            /Tests: 6, Assertions: \d+, Failures: 1/.test(t6.stdout) &&
+            /PropertiesTest::testNormStaysUnder100/.test(t6.stdout) &&
+            /Failed asserting that 100\.0 is less than 100\.0/.test(t6.stdout) &&
+            /ERIS_SEED=\d+/.test(t6.stdout + t6.stderr),
+        `${timing(t6)} phases: ${t6.phases.join(', ')}; loading: ${JSON.stringify(t6.loading['eris.tar'])}\n${t6.stdout.trimEnd().replace(/^/gm, '      | ')}${t6.stderr ? `\nstderr ${short(t6.stderr, 600)}` : ''}`,
+    );
+    check('test: Eris is fetched once a test uses it', fetchedEris());
 
     check('no page errors', pageErrors.length === 0, pageErrors.join('; '));
 } finally {
