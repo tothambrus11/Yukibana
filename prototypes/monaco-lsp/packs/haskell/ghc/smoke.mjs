@@ -101,6 +101,24 @@ await ask(['info', '/tmp/workspace/Main.hs', '17', '5']); // print
 await ask(['refs', '/tmp/workspace/Main.hs', '16', '10']);
 const sc = await ask(['scope', '/tmp/workspace/Main.hs', '16', '3']);
 console.log(`scope: ${sc.names?.length} names, ${sc.locals?.length} locals, ${sc.modules?.length} modules`);
+// Signature help and semantic tokens: a failure here is a GHC API
+// mistake in Yuki.hs, which only CI can compile.
+const expect = (what, ok, got) => {
+    if (!ok) {
+        console.error(`unexpected ${what}: ${JSON.stringify(got).slice(0, 400)}`);
+        process.exitCode = 1;
+    }
+};
+const s1 = await ask(['sig', '/tmp/workspace/Main.hs', '16', '10', 'norm']);
+expect('sig of norm', s1.found && s1.args?.[0] === 'Point' && s1.result === 'Double', s1);
+const s2 = await ask(['sig', '/tmp/workspace/Main.hs', '17', '10', 'M.fromList']);
+expect('sig of M.fromList', s2.found && s2.context?.[0] === 'Ord k' && s2.args?.length === 1, s2);
+const s3 = await ask(['sig', '/tmp/workspace/Main.hs', '18', '10', 'modify']);
+expect('sig of modify', s3.found && s3.args?.[0] === '(s -> s)', s3);
+const s4 = await ask(['sig', '/tmp/workspace/Main.hs', '15', '11', 'Point']);
+expect('sig of the constructor Point', s4.found && s4.args?.length === 2, s4);
+const tk = await ask(['tokens', '/tmp/workspace/Main.hs']);
+expect('tokens of Main.hs', Array.isArray(tk) && tk.length >= 5 * 10 && tk.includes('norm') && tk.includes('enumMember') && tk.includes('function'), tk);
 if (!first.diagnostics || first.diagnostics.length < 3) {
     console.error('expected several diagnostics');
     process.exitCode = 1;

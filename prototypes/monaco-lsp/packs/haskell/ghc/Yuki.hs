@@ -9,8 +9,9 @@
 -- Two JavaScript functions are exported. @yukiInit@ starts a GHC session
 -- once per worker, @yukiRequest@ answers one request at a time. A request is
 -- lines of text (the first names it); an answer is JSON. The language server
--- (server.js) checks the project with 'check' and asks 'info', 'refs' and
--- 'scope' about what that check saw; the runner (runner.js) uses 'run'.
+-- (server.js) checks the project with 'check' and asks 'info', 'refs',
+-- 'scope', 'sig' and 'tokens' about what that check saw; the runner
+-- (runner.js) uses 'run'.
 --
 -- A session is either an editor's (GHC's type checker only, no code: what
 -- @ghc -fno-code@ does, writing .hie files that the queries read) or a
@@ -45,8 +46,9 @@ import System.IO.Unsafe (unsafePerformIO)
 import Text.Read (readMaybe)
 
 import GHC
+import GHC.Core.ConLike (ConLike (..))
 import GHC.Data.Bag (bagToList)
-import GHC.Data.FastString (unpackFS)
+import GHC.Data.FastString (FastString, unpackFS)
 import GHC.Driver.Env (hscInterp, hsc_NC, hsc_units)
 import GHC.Driver.Monad (Session (..), modifyLogger, reflectGhc)
 import GHC.Driver.Ppr (showSDoc)
@@ -65,7 +67,10 @@ import GHC.Types.Name.Occurrence (isDataOcc, isTcOcc, isTvOcc, occNameString)
 import GHC.Types.Name.Reader (ImpDeclSpec (..), ImportSpec (..), globalRdrEnvElts, gre_imp, gre_lcl, gre_name)
 import GHC.Types.SrcLoc (mkRealSrcLoc, mkRealSrcSpan)
 import GHC.Iface.Syntax (showToIface)
-import GHC.Types.Id (isDataConId_maybe)
+import GHC.Core.TyCo.Rep (scaledThing)
+import GHC.Tc.Utils.TcType (tcSplitFunTys, tcSplitNestedSigmaTys)
+import GHC.Types.Id (isClassOpId, isDataConId_maybe)
+import GHC.Utils.Outputable (ppr)
 import GHC.Types.TyThing.Ppr (pprTyThing, pprTyThingHdr)
 import GHC.Unit.Module (ml_hie_file, ml_hs_file, moduleNameString, moduleUnit, unitString)
 import GHC.Unit.Module.ModSummary (msHsFilePath)
@@ -173,6 +178,8 @@ yukiRequest jsReq = do
       ["info", f, l, c] -> withPos l c (info st f)
       ["refs", f, l, c] -> withPos l c (refs st f)
       ["scope", f, l, c] -> withPos l c (scope st f)
+      ["sig", f, l, c, name] -> withPos l c (\line col -> sig st f line col name)
+      ["tokens", f] -> tokens st f
       ("run" : rest) -> run st rest
       _ -> pure (obj [("failure", str ("unknown request: " ++ unwords (take 1 req)))])
   answer <- case r of
@@ -344,10 +351,14 @@ identAt hf line col = listToMaybe (mapMaybe inAst (M.elems (getAsts (hie_asts hf
           either (const True) (not . generated) i,
           not (any isEvidence (S.toList (identInfo d)))
       ]
-    isEvidence = \case
-      EvidenceVarBind {} -> True
-      EvidenceVarUse -> True
-      _ -> False
+
+-- | Whether a name's use is evidence (an instance dictionary) GHC records
+-- at the span of what needed it, rather than a name written there.
+isEvidence :: ContextInfo -> Bool
+isEvidence = \case
+  EvidenceVarBind {} -> True
+  EvidenceVarUse -> True
+  _ -> False
 
 lookupHie :: State -> FilePath -> IO (Maybe HieFile)
 lookupHie st f = M.lookup f <$> readIORef (stHie st)
@@ -494,7 +505,7 @@ scope st f line col = do
                 Just ni <- [M.lookup SourceInfo (getSourcedNodeInfo (sourcedNodeInfo node))],
                 (Right n, d) <- M.toList (nodeIdentifiers ni),
                 isInternalName n,
-                any (inScope (srcSpanFile (nodeSpan ast))) (S.toList (identInfo d))
+                any (inScopeAt (srcSpanFile (nodeSpan ast)) line col) (S.toList (identInfo d))
             ]
   pure $
     obj
@@ -504,17 +515,221 @@ scope st f line col = do
       ]
   where
     flatten n = n : concatMap flatten (nodeChildren n)
-    inScope fs ctx =
-      let p = mkRealSrcSpan (mkRealSrcLoc fs line col) (mkRealSrcLoc fs line col)
-          covers = \case
-            LocalScope sp -> sp `containsSpan'` p
-            _ -> False
-       in case ctx of
-            ValBind _ sc _ -> covers sc
-            PatternBind a b _ -> covers a || covers b
-            _ -> False
+
+-- | Whether a local binding (a let, where or pattern variable, from its
+-- .hie context) is in scope at a position of file @fs@.
+inScopeAt :: FastString -> Int -> Int -> ContextInfo -> Bool
+inScopeAt fs line col ctx =
+  let p = mkRealSrcSpan (mkRealSrcLoc fs line col) (mkRealSrcLoc fs line col)
+      covers = \case
+        LocalScope sp -> sp `containsSpan'` p
+        _ -> False
+   in case ctx of
+        ValBind _ sc _ -> covers sc
+        PatternBind a b _ -> covers a || covers b
+        _ -> False
+  where
     containsSpan' a b = srcSpanStartLine a < srcSpanStartLine b || (srcSpanStartLine a == srcSpanStartLine b && srcSpanStartCol a <= srcSpanStartCol b)
       && (srcSpanEndLine a > srcSpanEndLine b || (srcSpanEndLine a == srcSpanEndLine b && srcSpanEndCol a >= srcSpanEndCol b))
+
+-- * Signature help
+
+-- | @sig file line col name@: the signature of the function a call at a
+-- position applies, for signature help. @name@ is the call's head as
+-- written (@distance@, @Map.insert@, @Point@); the server finds it in the
+-- text as it is now, so a check that is a keystroke behind does not move
+-- it. A local (a let, where or lambda binding in scope at the position)
+-- is looked up in the file's .hie file and has the type GHC inferred for
+-- it; anything else in the module's scope as GHC's renamer has it, with
+-- the qualifier it is written with, and has its declared type. Answers
+-- {"found": false} or the name, its context (the constraints, each as
+-- GHC prints it), its arguments' types, its result's type and its
+-- Haddock comment. Foralls and constraints are taken from under the
+-- arrows too (GHC's tcSplitNestedSigmaTys), so a class method's arguments
+-- are counted as written (@fmap :: Functor f => (a -> b) -> f a -> f b@).
+sig :: State -> FilePath -> Int -> Int -> String -> IO JsonDoc
+sig st f line col written = do
+  let (qual, occ) = splitQualified written
+  df <- inGhc st getSessionDynFlags
+  hie <- lookupHie st f
+  let local = case (qual, hie) of
+        (Nothing, Just hf) ->
+          listToMaybe
+            [ recoverFullType t (hie_types hf)
+              | ast <- M.elems (getAsts (hie_asts hf)),
+                node <- flatten ast,
+                Just ni <- [M.lookup SourceInfo (getSourcedNodeInfo (sourcedNodeInfo node))],
+                (Right n, d) <- M.toList (nodeIdentifiers ni),
+                isInternalName n,
+                occNameString (nameOccName n) == occ,
+                any (inScopeAt (srcSpanFile (nodeSpan ast)) line col) (S.toList (identInfo d)),
+                Just t <- [identType d]
+            ]
+        _ -> Nothing
+  case local of
+    Just t ->
+      let (ctx, args, res) = splitHie t
+       in pure (answer occ (map (renderHieType df) ctx) (map (renderHieType df) args) (renderHieType df res) "")
+    Nothing -> do
+      sums <- readIORef (stSummaries st)
+      case M.lookup f sums of
+        Nothing -> pure notFound
+        Just ms -> do
+          r <- try (inGhc st (parseModule ms >>= typecheckModule))
+          case r of
+            Left (_ :: SomeException) -> pure notFound
+            Right tm -> do
+              let candidates =
+                    [ gre_name gre
+                      | gre <- globalRdrEnvElts (tcg_rdr_env (fst (tm_internals_ tm))),
+                        let n = gre_name gre
+                            o = nameOccName n
+                            specs = map is_decl (bagToList (gre_imp gre))
+                            quals = [moduleNameString (is_as s) | s <- specs] ++ [moduleNameString (ms_mod_name ms) | gre_lcl gre]
+                            unqual = gre_lcl gre || any (not . is_qual) specs,
+                        occNameString o == occ,
+                        not (isTcOcc o || isTvOcc o),
+                        maybe unqual (`elem` quals) qual
+                    ]
+              case candidates of
+                [] -> pure notFound
+                (n : _) -> do
+                  thing <- inGhc st (lookupName n)
+                  case thing >>= thingType of
+                    Nothing -> pure notFound
+                    Just ty -> do
+                      doc <- inGhc st (docOf n)
+                      let (_, theta, rho) = tcSplitNestedSigmaTys ty
+                          (args, res) = tcSplitFunTys rho
+                          sh :: Type -> String
+                          sh = showSDoc df . ppr
+                      pure (answer occ (map sh theta) (map (sh . scaledThing) args) (sh res) doc)
+  where
+    notFound = obj [("found", J.JSBool False)]
+    flatten n = n : concatMap flatten (nodeChildren n)
+    answer name ctx args res doc =
+      obj
+        [ ("found", J.JSBool True),
+          ("name", str name),
+          ("context", J.JSArray (map str ctx)),
+          ("args", J.JSArray (map (str . parenArrow) args)),
+          ("result", str res),
+          ("doc", str doc)
+        ]
+    -- An argument that is itself a function is written in parentheses.
+    parenArrow s = if topLevelArrow (0 :: Int) s then "(" ++ s ++ ")" else s
+    topLevelArrow depth = \case
+      '-' : '>' : rest -> depth == 0 || topLevelArrow depth rest
+      c : rest
+        | c `elem` "([{" -> topLevelArrow (depth + 1) rest
+        | c `elem` ")]}" -> topLevelArrow (depth - 1) rest
+        | otherwise -> topLevelArrow depth rest
+      [] -> False
+
+-- | The type of a value: an identifier's, or a data constructor's as a
+-- function of its fields.
+thingType :: TyThing -> Maybe Type
+thingType = \case
+  AnId i -> Just (idType i)
+  AConLike (RealDataCon dc) -> Just (dataConWrapperType dc)
+  _ -> Nothing
+
+-- | A .hie type's constraints, arguments and result, foralls dropped, as
+-- 'sig' splits a declared type.
+splitHie :: HieTypeFix -> ([HieTypeFix], [HieTypeFix], HieTypeFix)
+splitHie t@(Roll ty) = case ty of
+  HForAllTy _ b -> splitHie b
+  HQualTy c b -> let (cs, xs, r) = splitHie b in (c : cs, xs, r)
+  HFunTy _ a b -> let (cs, xs, r) = splitHie b in (cs, a : xs, r)
+  _ -> ([], [], t)
+
+-- | @M.N.name@ as its qualifier and its name.
+splitQualified :: String -> (Maybe String, String)
+splitQualified s = case break (== '.') s of
+  (m@(c : _), '.' : rest) | c >= 'A' && c <= 'Z', not (null rest) ->
+    let (q, n) = splitQualified rest in (Just (maybe m ((m ++ ".") ++) q), n)
+  _ -> (Nothing, s)
+
+-- * Semantic tokens
+
+-- | @tokens file@: every name written in a file at its last check, for
+-- semantic highlighting, as HLS's semantic tokens plugin classifies them
+-- from the same .hie file: a flat array of [line, startCol, endCol, kind,
+-- name] (GHC's 1-based lines and columns, one line each). The kinds are
+-- "variable", "function" (a value whose type is a function's), "method"
+-- (a class method), "property" (a record field), "enumMember" (a data
+-- constructor), "macro" (a pattern synonym), "type", "class",
+-- "interface" (a type family), "typeParameter", "operator" (a value
+-- written in symbols) and "namespace" (a module). The name is the one
+-- written there without its qualifier: the server keeps a token only
+-- where the text still says it, so a check a keystroke behind colours
+-- nothing wrongly, and a name a splice generated (its span the splice's)
+-- is dropped.
+tokens :: State -> FilePath -> IO JsonDoc
+tokens st f =
+  lookupHie st f >>= \case
+    Nothing -> pure (J.JSArray [])
+    Just hf -> do
+      let found =
+            M.fromList
+              [ ((srcSpanStartLine sp, srcSpanStartCol sp), (sp, i, d))
+                | ast <- M.elems (getAsts (hie_asts hf)),
+                  node <- flatten ast,
+                  Just ni <- [M.lookup SourceInfo (getSourcedNodeInfo (sourcedNodeInfo node))],
+                  (i, d) <- M.toList (nodeIdentifiers ni),
+                  either (const True) (not . generated) i,
+                  not (any isEvidence (S.toList (identInfo d))),
+                  let sp = nodeSpan node,
+                  srcSpanStartLine sp == srcSpanEndLine sp,
+                  srcSpanEndCol sp > srcSpanStartCol sp
+              ]
+          globals = nub [n | (_, Right n, _) <- M.elems found, not (isInternalName n)]
+      things <- M.fromList . catMaybes <$> forM globals (\n -> fmap (\t -> (n, t)) <$> inGhc st (lookupName n))
+      pure . J.JSArray . concat $
+        [ [J.JSInt (srcSpanStartLine sp), J.JSInt (srcSpanStartCol sp), J.JSInt (srcSpanEndCol sp), str kind, str name]
+          | (sp, i, d) <- M.elems found,
+            let (kind, name) = case i of
+                  Left m -> ("namespace", lastComponent (moduleNameString m))
+                  Right n -> (tokenKind hf (M.lookup n things) n d, occNameString (nameOccName n))
+        ]
+  where
+    flatten n = n : concatMap flatten (nodeChildren n)
+    lastComponent m = reverse (takeWhile (/= '.') (reverse m))
+
+tokenKind :: HieFile -> Maybe TyThing -> Name -> IdentifierDetails TypeIndex -> String
+tokenKind hf thing n d
+  | any isField (S.toList (identInfo d)) = "property"
+  | otherwise = case thing of
+      Just (AnId i)
+        | isClassOpId i -> "method"
+        | isRecordSelector i -> "property"
+        | symbolic -> "operator"
+        | isFunction (idType i) -> "function"
+        | otherwise -> "variable"
+      Just (AConLike (RealDataCon _)) -> "enumMember"
+      Just (AConLike PatSynCon {}) -> "macro"
+      Just (ATyCon tc)
+        | isClassTyCon tc -> "class"
+        | isTypeFamilyTyCon tc -> "interface"
+        | otherwise -> "type"
+      _
+        | isTvOcc o -> "typeParameter"
+        | isTcOcc o -> "type"
+        | isDataOcc o -> "enumMember"
+        | symbolic -> "operator"
+        | Just t <- identType d, hieFunction (recoverFullType t (hie_types hf)) -> "function"
+        | otherwise -> "variable"
+  where
+    o = nameOccName n
+    symbolic = case occNameString o of
+      c : _ -> not (c == '_' || isAlphaChar c)
+      [] -> False
+    isAlphaChar c = c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c > '\x7f'
+    isField = \case
+      RecField {} -> True
+      _ -> False
+    isFunction ty = let (_, _, rho) = tcSplitNestedSigmaTys ty in not (null (fst (tcSplitFunTys rho)))
+    hieFunction t = let (_, args, _) = splitHie t in not (null args)
 
 -- * Run
 
