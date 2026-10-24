@@ -146,6 +146,11 @@ else
   echo "skipped: no cc-cross.wasm or targets/ (build-cross.sh, build-targets.sh)"
 fi
 
+step "sanitizer runtimes (asan.tar, ubsan.tar, targets/<arch>/asan.tar, ubsan.tar)"
+# Fetched by runner.js only for a project that asks for a sanitizer
+# (README, "Sanitizers"); compressed by the script itself.
+"$HERE/build-sanitizers.sh"
+
 step "runner.js, explorer.js"
 (cd "$HERE" && [ -d node_modules/esbuild ] || npm ci --no-audit --no-fund >/dev/null)
 size() { stat -c %s "$1" 2>/dev/null || echo 0; }
@@ -156,17 +161,22 @@ defines=(--define:CC_WASM_SIZE="$(size "$OUT/cc.wasm")" --define:CC_CROSS_WASM_S
   --define:WASI_SYSROOT_SIZE="$(size "$OUT/wasi-sysroot.tar.gz")" --define:SYSROOT_SIZE="$(size "$OUT/sysroot.tar.gz")"
   --define:GTEST_SIZE="$(size "$OUT/gtest.tar")" --define:CATCH2_SIZE="$(size "$OUT/catch2.tar")"
   --define:DOCTEST_SIZE="$(size "$OUT/doctest.tar")" --define:RAPIDCHECK_SIZE="$(size "$OUT/rapidcheck.tar")" --define:DEMANGLE_WASM_SIZE="$(size "$OUT/demangle.wasm")"
+  --define:ASAN_SIZE="$(size "$OUT/asan.tar")" --define:UBSAN_SIZE="$(size "$OUT/ubsan.tar")"
   --define:TARGET_SIZES="$target_sizes")
 # runner-linux.js (linking and running for a Linux target) and vm.js (the
 # emulator's bundle, build-vm.sh) are imported by runner.js only for a Linux
-# target, so they stay separate files; the compilers' and the demangler's
-# glue are imported by URL at run time.
-for worker in runner runner-linux explorer; do
-  "$HERE/node_modules/.bin/esbuild" "$HERE/src/$worker.js" --bundle --outfile="$OUT/$worker.js" --format=esm --minify \
+# target, and sanitizer.js (a sanitized program's host half and report
+# symbolizer) only for a project that asks for a sanitizer, so they stay
+# separate files; the compilers' and the demangler's glue are imported by
+# URL at run time. Each is written beside its target and renamed over it, so
+# that a hard link to the old file (the app's build) does not change.
+for worker in runner runner-linux explorer sanitizer; do
+  "$HERE/node_modules/.bin/esbuild" "$HERE/src/$worker.js" --bundle --outfile="$OUT/$worker.js.part" --format=esm --minify \
     --target=es2022 --external:./runner-linux.js --external:./vm.js --external:./cc.js --external:./cc-cross.js \
-    "${defines[@]}" --log-level=warning
+    --external:./sanitizer.js "${defines[@]}" --log-level=warning
+  if cmp -s "$OUT/$worker.js.part" "$OUT/$worker.js"; then rm "$OUT/$worker.js.part"; else mv "$OUT/$worker.js.part" "$OUT/$worker.js"; fi
 done
-files=("$OUT/runner.js" "$OUT/runner-linux.js" "$OUT/explorer.js" "$OUT/gtest.tar" "$OUT/catch2.tar" "$OUT/doctest.tar" "$OUT/rapidcheck.tar" "${linux_testfw[@]}")
+files=("$OUT/runner.js" "$OUT/runner-linux.js" "$OUT/explorer.js" "$OUT/sanitizer.js" "$OUT/gtest.tar" "$OUT/catch2.tar" "$OUT/doctest.tar" "$OUT/rapidcheck.tar" "${linux_testfw[@]}")
 [ -f "$OUT/cc.wasm" ] && files+=("$OUT/cc.js" "$OUT/cc.wasm")
 [ -f "$OUT/cc-cross.wasm" ] && files+=("$OUT/cc-cross.js" "$OUT/cc-cross.wasm")
 # Brotli at quality 11 takes minutes on a compiler: only when the file changed.

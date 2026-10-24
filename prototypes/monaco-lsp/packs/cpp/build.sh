@@ -25,6 +25,11 @@
 #   runner-linux.js      linking and running for a Linux target (with vm.js)
 #   targets/<arch>/      include.tar, lib.tar: a Linux target's musl and LLVM runtimes
 #   demangle.js, .wasm   llvm::demangle, for the views
+#   sanitizer.js         a sanitized program's host half and report symbolizer
+#   asan.tar, ubsan.tar  the sanitizer runtimes for WebAssembly, and
+#                        targets/<arch>/ the same for Linux (build-sanitizers.sh;
+#                        README, "Sanitizers"), fetched only for a project
+#                        whose compile_flags.txt asks for a sanitizer
 #
 # Idempotent: each step is skipped when its output is in the cache
 # ($PACK_CACHE/cpp, default ~/.cache/yukibana-packs/cpp). Needs a Linux host

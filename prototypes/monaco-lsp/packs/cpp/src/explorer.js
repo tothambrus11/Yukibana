@@ -23,6 +23,7 @@
 import { createToolchain, compileArgs } from './toolchain.js';
 import { targetOf, unsupportedMessage } from './targets.js';
 import { filterAsm, filterIr, demangleLines } from './emit-filter.js';
+import { loadDemangler as loadLLVMDemangler } from './demangler.js';
 
 /* global CC_WASM_SIZE, CC_CROSS_WASM_SIZE, WASI_SYSROOT_SIZE, SYSROOT_SIZE, DEMANGLE_WASM_SIZE, TARGET_SIZES */
 const SIZES = {
@@ -56,38 +57,7 @@ let lastCompiler = null;
  * the next request tries again.
  */
 function loadDemangler() {
-    demangler ??= (async () => {
-        const [{ default: create }, response] = await Promise.all([
-            import(new URL('demangle.js', base).href),
-            toolchain.download('demangle.wasm'),
-        ]);
-        const module = await WebAssembly.compile(await response.arrayBuffer());
-        // Emscripten's create() waits for done() and never hears that
-        // instantiation failed; the failure rejects this instead (as in
-        // toolchain.tool), or every later request would wait forever.
-        let failed;
-        const failure = new Promise((_, reject) => (failed = reject));
-        const mod = await Promise.race([
-            create({
-                instantiateWasm(imports, done) {
-                    WebAssembly.instantiate(module, imports).then(
-                        (instance) => done(instance, module),
-                        (error) => failed(new Error(`demangle.wasm could not start: ${error?.message ?? error}`)));
-                    return {};
-                },
-            }),
-            failure,
-        ]);
-        return (names) => {
-            const input = mod.stringToNewUTF8(names.join('\n'));
-            const output = mod._yk_demangle_lines(input);
-            mod._free(input);
-            if (!output) return names;
-            const text = mod.UTF8ToString(output);
-            mod._free(output);
-            return text.split('\n');
-        };
-    })();
+    demangler ??= loadLLVMDemangler(base, toolchain.download);
     const loading = demangler;
     loading.catch(() => {
         if (demangler === loading) demangler = null;

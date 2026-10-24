@@ -444,7 +444,7 @@ against the directory of `compile_flags.txt`).
 
 | file | what | raw | gzip | brotli |
 | --- | --- | --- | --- | --- |
-| `runner.js` | the worker, with `wasi.js` and `toolchain.js` (esbuild-minified) | 14.0 KB | 6.3 KB | 5.8 KB |
+| `runner.js` | the worker, with `wasi.js` and `toolchain.js` (esbuild-minified) | 16.4 KB | 7.3 KB | 6.7 KB |
 | `cc.js` | Emscripten glue, ES module | 74 KB | 20 KB | 18 KB |
 | `cc.wasm` | clang + wasm-ld 21.1.8, `-Oz` | 42.4 MB | 15.7 MB | 11.3 MB |
 | `wasi-sysroot.tar.gz` | 234 files: wasi-libc headers, libs (libc++ with exceptions), crt1, builtins | 0.99 MB (gzip, unpacked in the worker) | | |
@@ -726,7 +726,8 @@ SharedArrayBuffer (a page that is not isolated), stdin is at end of file.
   without sanitizers: `a[50]` on an `int a[4]`, a pointer past a malloc'd
   block or past a global reads or overwrites neighbouring memory and the
   program goes on, often exiting 0. Only an access beyond the end of all
-  memory traps. The exception is libc++: C++ is compiled with
+  memory traps. AddressSanitizer finds them (`-fsanitize=address`, the
+  Sanitizers menu; "Sanitizers" below). The exception is libc++: C++ is compiled with
   `-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST`, so
   `std::vector`, `std::string`, `std::array`, `std::span` `operator[]`,
   `front()`, `back()` and the like check their index and stop the program
@@ -884,7 +885,7 @@ not installed (packs/cpp/vm.js)".
 | --- | --- | --- | --- | --- |
 | `cc-cross.js` | Emscripten glue, ES module (also loads in Node, for the tests) | 75 KB | 20 KB | 18 KB |
 | `cc-cross.wasm` | clang + ld.lld 21.1.8 for x86-64, AArch64, RISC-V 64, `-Oz` | 67.2 MB | 22.1 MB | 15.7 MB |
-| `runner-linux.js` | the runner's link-and-run step for a Linux target, loaded only for one | 1.6 KB | 1.0 KB | 0.9 KB |
+| `runner-linux.js` | the runner's link-and-run step for a Linux target, loaded only for one | 2.9 KB | 1.6 KB | 1.4 KB |
 | `targets/x86_64/include.tar` | musl `bits/` for x86-64 (35 headers) | 92 KB | 14 KB | 10.6 KB |
 | `targets/x86_64/lib.tar` | crt files, libc, libc++ (+abi), libunwind, compiler-rt | 6.15 MB | 1.31 MB | 0.94 MB |
 | `targets/aarch64/include.tar` | musl `bits/` for AArch64 | 82 KB | 13 KB | 9.5 KB |
@@ -1084,6 +1085,212 @@ and in Chromium that the explorer's assembly at `-O0` is longer than at
 runs the sample at each level and exceptions at `-O0`; the app's e2e test
 chooses `-O0` in the picker and checks the file, the view and Run.
 
+## Sanitizers
+
+AddressSanitizer (with LeakSanitizer) and UndefinedBehaviorSanitizer work
+for Run and Test, on WebAssembly and on every Linux target. Like the target
+and the level, a sanitizer is a line of `compile_flags.txt`,
+`-fsanitize=address`, `-fsanitize=undefined` or both
+(`-fsanitize=address,undefined`), so clangd, Run, Test, the views and
+Download all read the same flag, and a hand-written line is honoured as
+clang reads it (lists, `-fno-sanitize=`, single checks such as
+`-fsanitize=signed-integer-overflow`, `-fno-sanitize-recover`,
+`-fsanitize-minimal-runtime`). The app's **Sanitizers** menu (next to
+Target; `app/src/lib/cpp-sanitizers.ts`) ticks the two and rewrites only
+that line. Download's CMakeLists.txt passes the flags to the link as well
+(`target_link_options`), with `-fno-omit-frame-pointer` for
+AddressSanitizer, and says to build with `-DCMAKE_BUILD_TYPE=Debug` for
+lines in reports.
+
+Nothing of it is downloaded until a project asks for a sanitizer: the
+runtime archives and `sanitizer.js` are fetched by the first sanitized Run
+or Test (and cached like the other pack files; Download everything
+includes them). A report is printed on stderr as clang's runtime prints it
+natively, with every frame symbolized (`in function file:line:column`,
+inlined functions as frames of their own, as `llvm-symbolizer --inlines`
+prints them), and the SUMMARY line; the terminal shows a project file's
+`file:line[:column]` as a link to that line (`app/src/lib/terminal-links.ts`;
+it does the same for compiler diagnostics). The exit status is the
+runtime's: 1 after an AddressSanitizer or LeakSanitizer report, the
+program's own after UBSan reports (it recovers), 1 with
+`-fno-sanitize-recover`. When sanitizing, `compileArgs` adds
+`-gline-tables-only` before the project's flags, so reports have lines
+without the size of full debug information (a `-g` in the project still
+wins), and on Linux `-fno-omit-frame-pointer` for AddressSanitizer, whose
+malloc and free stacks are walked through frame pointers there.
+
+A heap buffer overflow (`test-sanitizers.mjs`'s, at `-O1`; the shadow
+bytes that follow are left out), on WebAssembly:
+
+```
+=================================================================
+==42==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x11a00780 at pc 0x00000df4 bp 0x10cb3ed0 sp 0x10cb3edc
+WRITE of size 4 at 0x11a00780 thread T0
+    #0 0x00000df4 in heap_overflow(int) main.cpp:5:100
+    #1 0x000011c6 in main main.cpp:15:38
+    #2 0x00030ba5 in __main_void (program.wasm+0x30ba5)
+    #3 0x00000d66 in _start (program.wasm+0xd66)
+
+0x11a00780 is located 0 bytes after 16-byte region [0x11a00770,0x11a00780)
+allocated by thread T0 here:
+    #0 0x000203ae in malloc (program.wasm+0x203ae)
+    #1 0x00000d92 in heap_overflow(int) main.cpp:5:70
+    #2 0x000011c6 in main main.cpp:15:38
+    #3 0x00030ba5 in __main_void (program.wasm+0x30ba5)
+    #4 0x00000d66 in _start (program.wasm+0xd66)
+
+SUMMARY: AddressSanitizer: heap-buffer-overflow main.cpp:5:100 in heap_overflow(int)
+```
+
+and on x86-64 Linux, where the frames outside the program are the
+loader's:
+
+```
+==26==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x7b45e0e20020 at pc 0x56194f96f9a7 bp 0x7ffc13356a70 sp 0x7ffc13356a68
+WRITE of size 4 at 0x7b45e0e20020 thread T0
+    #0 0x56194f96f9a6 in heap_overflow(int) main.cpp:5:100
+    #1 0x56194f96fd60 in main main.cpp:15:38
+    #2 0x7f25e121488f  (/lib/ld-musl-x86_64.so.1+0x4188f) (BuildId: 8890f331d0a2d3dae7e0ef14797b9ba11d5c15bf)
+...
+allocated by thread T0 here:
+    #0 0x56194f92a0b0 in __interceptor_malloc (/yk/prog+0xed0b0)
+    #1 0x56194f96f951 in heap_overflow(int) main.cpp:5:70
+```
+
+The lines and columns are native clang's for the same source; a `main`
+without parameters, which clang calls `__original_main` on WASI, is named
+`main` (llvm-symbolizer would print the internal name).
+
+**Files** (fetched only for a project that asks for a sanitizer, and only
+the one it asks for; `-fsanitize=address,undefined` takes `asan.tar`
+alone):
+
+| file | what | raw | gzip | brotli |
+| --- | --- | --- | --- | --- |
+| `sanitizer.js` | the host half of the WebAssembly runtimes and the Linux reports' symbolizer: `sanitizer.js`, `symbolizer.js`, `dwarf.js` (esbuild-minified) | 15.3 KB | 6.5 KB | 5.9 KB |
+| `asan.tar` | `libclang_rt.asan.a` for wasm32-wasip1: AddressSanitizer, LeakSanitizer and UBSan in one archive, as Emscripten links them | 10.3 MB | 315 KB | 215 KB |
+| `ubsan.tar` | `libclang_rt.ubsan_standalone.a` and `libclang_rt.ubsan_minimal.a` for wasm32-wasip1 | 9.7 MB | 169 KB | 117 KB |
+| `targets/x86_64/asan.tar` | Alpine's `libclang_rt.asan*` for x86-64 (compiler-rt 21.1.2) and musl's dynamic loader as `libc.so` | 4.10 MB | 1.13 MB | 791 KB |
+| `targets/x86_64/ubsan.tar` | Alpine's `libclang_rt.ubsan_standalone*` and `ubsan_minimal` for x86-64 | 1.12 MB | 268 KB | 175 KB |
+| `targets/aarch64/asan.tar` | as for x86-64 | 4.36 MB | 1.14 MB | 766 KB |
+| `targets/aarch64/ubsan.tar` | as for x86-64 | 1.17 MB | 274 KB | 172 KB |
+| `targets/riscv64/asan.tar` | as for x86-64 | 9.33 MB | 1.79 MB | 1.22 MB |
+| `targets/riscv64/ubsan.tar` | as for x86-64 | 2.52 MB | 459 KB | 281 KB |
+
+A Linux report also fetches `demangle.wasm` and `demangle.js` (31 KB, see
+"Compiler output views") the first time. The runtimes are built by
+`build-sanitizers.sh` (a step of `pack-runner.sh`), which caches its
+inputs and outputs in `~/.cache/yukibana-packs/cpp/sanitizers`.
+
+### On WebAssembly (wasm32-wasip1)
+
+compiler-rt has no WASI port, but Emscripten has one of its own
+(`SANITIZER_EMSCRIPTEN`, in Emscripten's tree): AddressSanitizer,
+LeakSanitizer and UBSan on wasm32, where the runtime asks Emscripten's
+JavaScript for what a wasm program cannot do itself. `build-sanitizers.sh`
+builds that port, from emsdk 4.0.22 (LLVM 20.1.8's compiler-rt), for
+wasm32-wasip1 with the pack's own clang (wasi-sdk 30's, the one that
+built `cc.wasm`), compiling the same sources Emscripten's
+`system_libs.py` lists for each library. What Emscripten's JavaScript
+gives the runtime, the runner gives it instead: the C half is
+`src/sanitizer-rt/` (`wasi_emscripten.c`, `wasi_heap.c`, `wasi_asan.c`),
+the JavaScript half `src/sanitizer.js`, imported as the module
+`yukibana:sanitizer`:
+
+- **Stacks** are the engine's own: `new Error().stack`, whose wasm frames
+  read `wasm-function[7]:0x1a3`, the offset of the call in the module,
+  which is what the runtime calls a program counter (as Emscripten's
+  `libstack_trace.js` does).
+- **Symbols** come from the linked module itself, as `llvm-symbolizer`
+  reads them: the name section for the outermost function at a pc, and
+  DWARF (`.debug_line`, `.debug_info`, in `src/dwarf.js`, a small reader
+  of DWARF 4 and 5) for its lines and for inlined functions, the innermost
+  frame's line from the line table and the others from the call sites.
+  `test-sanitizers.mjs` compares names, files, lines and columns with
+  native clang's on the same programs.
+- **Memory**: AddressSanitizer's shadow is the first 256 MiB of memory
+  (`kLowShadowEnd`, as on Emscripten), so the runner links the program
+  with `--global-base=268435456` and a 2 GiB maximum (Emscripten's
+  defaults for ASan) instead of `--stack-first`. The program's heap is a
+  private dlmalloc (`wasi_asan.c`, Emscripten's `dlmalloc.c`), which the
+  runtime's own allocator sits on, as on Emscripten; `malloc` and the
+  others are the runtime's.
+
+Patches: `patches/compiler-rt-wasi.patch` (about 490 lines, against
+Emscripten's port; its header lists each change and why). Upstream
+status: not sent. compiler-rt does not list WASI as a sanitizer platform
+and Emscripten's port lives in Emscripten's tree; a WASI port upstream
+would want its own `sanitizer_wasi.cpp` rather than conditionals in the
+Emscripten and Linux files. clang itself needs no patch: clang 21 accepts
+`-fsanitize=address` and `undefined` for `wasm32-unknown-wasip1` and
+instruments as for Emscripten, but links no runtime there, so the runner
+adds the archive to the link itself.
+
+What does not work there, and why:
+
+- **ThreadSanitizer, MemorySanitizer, `-fsanitize=leak` alone**: none
+  exists for wasm32 (Emscripten has none either); clang refuses them for
+  the target.
+- **Stack overflow**: with the data first, a deep recursion runs into the
+  globals instead of trapping below 0, as `--stack-first` would make it
+  (AddressSanitizer does not check the stack's bound on WebAssembly).
+- **Faults**: a WebAssembly trap (an access outside memory, `abort()`)
+  ends the program as without a sanitizer, "The program crashed", 134;
+  there are no signals for the runtime to catch.
+- **Threads**: none on WASI anyway.
+
+### On Linux (x86-64, AArch64, RISC-V 64)
+
+Upstream's runtimes, unmodified: Alpine's `compiler-rt` package (21.1.2,
+built for musl) provides the archives, pinned by URL and sha256 like the
+target libraries (`build-targets.sh`). No patch.
+
+- **AddressSanitizer links dynamically.** compiler-rt refuses a static
+  program on Linux (`AsanDoesNotSupportStaticLinkage`: it needs the
+  dynamic loader's `_DYNAMIC` to find its interceptors), so a sanitized
+  program is linked against musl's dynamic loader, which is also musl's
+  `libc.so` (Alpine's `musl` package, pinned), shipped in `asan.tar`; the
+  runner gives the guest the same file as `/lib/ld-musl-<arch>.so.1`
+  (`runLinux`'s `files`). libc++ and the rest stay static. UBSan links
+  statically as before.
+- **Symbolized in the page.** The guest has no `llvm-symbolizer`, so the
+  runtime prints a frame as `#0 0x55b070773959  (/yk/prog+0x146959)`;
+  `sanitizer.js` rewrites the report line by line as the runtime prints
+  it with `llvm-symbolizer` beside it, from the program's own ELF
+  (`.symtab`, DWARF) and `demangle.wasm` for its names, renumbering the
+  frames after an inlined one.
+- Where the report differs from a native one, it is the runtime's: frames
+  in Alpine's runtime itself are named `__interceptor_malloc` and so on
+  (what `llvm-symbolizer` prints for that build), and frames in musl's
+  loader stay `(/lib/ld-musl-x86_64.so.1+0x...)` (it is stripped).
+
+What does not work there yet: ThreadSanitizer, MemorySanitizer and
+`-fsanitize=leak` alone are not packaged, so the link fails for want of
+their runtime. Alpine's package has all three (MemorySanitizer for x86-64
+and AArch64 only), and the Linux targets have threads, so ThreadSanitizer
+is the useful next one: its archive, the same dynamic link as
+AddressSanitizer's, and a check that its shadow mapping fits the guest's
+address space under QEMU (not tried). MemorySanitizer would also need
+libc++ built with it, or it reports every read of memory libc++ wrote. The
+minimal UBSan runtime is shipped but tested on WebAssembly only.
+
+### Tested
+
+`test-sanitizers.mjs` (Chromium, through the runner as the app drives it;
+`node test-sanitizers.mjs x86_64 aarch64 riscv64` adds the Linux targets,
+`SHOW=1` prints every run): a tiny program per bug class (heap, stack and
+global overflow, use after free, double free, leak, an inlined access,
+UBSan's checks with and without recovery and with `print_stacktrace`),
+checking the error line, every frame's function, file, line and column
+against native clang's, the SUMMARY line and the exit status; a clean C++
+program with exceptions, containers and stdin, and a clean C program,
+report nothing under both; a run without a sanitizer fetches none of their
+files. 52 tests, all passing on the four targets. The app's
+`tests/cpp-sanitizers.mjs` checks the menu's rewriting of
+`compile_flags.txt`, `tests/export.mjs` the CMake link options, and the
+e2e test ticks AddressSanitizer, runs a heap overflow and follows the
+terminal's link to the allocation.
+
 ## Compiler output views
 
 The app's **LLVM IR** and **Assembly** views come from a third worker,
@@ -1147,7 +1354,7 @@ since each view is usually open alone).
 
 | file | what | raw | gzip | brotli |
 | --- | --- | --- | --- | --- |
-| `explorer.js` | the worker, with `toolchain.js` and `emit-filter.js` (esbuild-minified) | 13.3 KB | 6.1 KB | 5.6 KB |
+| `explorer.js` | the worker, with `toolchain.js`, `emit-filter.js` and `demangler.js` (esbuild-minified) | 13.3 KB | 6.1 KB | 5.6 KB |
 | `demangle.js` | Emscripten glue for the demangler | 10.3 KB | 3.5 KB | 3.2 KB |
 | `demangle.wasm` | `llvm::itaniumDemangle` (LLVMDemangle 21.1.8, `ItaniumDemangle.cpp` only), `-Oz`, emmalloc | 82 KB | 33 KB | 28 KB |
 

@@ -33,18 +33,23 @@
 //                        the same two for a Linux target
 //                        (build-test-frameworks-linux.sh); Catch2 and
 //                        doctest are not built for Linux
+//   asan.tar, ubsan.tar  the sanitizer runtimes (build-sanitizers.sh),
+//                        fetched only for a project whose compile_flags.txt
+//                        asks for a sanitizer, with sanitizer.js, the
+//                        runtime's host half (README, "Sanitizers");
+//                        targets/<arch>/asan.tar, ubsan.tar for Linux
 //
 // Each tool call gets a fresh instance of the compiler (compiled once; see
 // toolchain.js): clang and lld keep global state, and a browser cannot fork.
 // Files go from one instance to the next as bytes.
 
 import { createWasi, ProcExit } from './wasi.js';
-import { createToolchain, compileArgs, withSourceNames } from './toolchain.js';
+import { createToolchain, compileArgs, withSourceNames, flagsFor, sanitizersOf } from './toolchain.js';
 import { targetOf, unsupportedMessage, DEFAULT_TARGET } from './targets.js';
 
 // A Linux target's files (targets/<arch>/*.tar) report a total of 0
 // (unknown): their sizes would cost the default target's runner.js bytes.
-/* global CC_WASM_SIZE, CC_CROSS_WASM_SIZE, WASI_SYSROOT_SIZE, SYSROOT_SIZE, GTEST_SIZE, CATCH2_SIZE, DOCTEST_SIZE, RAPIDCHECK_SIZE */
+/* global CC_WASM_SIZE, CC_CROSS_WASM_SIZE, WASI_SYSROOT_SIZE, SYSROOT_SIZE, GTEST_SIZE, CATCH2_SIZE, DOCTEST_SIZE, RAPIDCHECK_SIZE, ASAN_SIZE, UBSAN_SIZE, DEMANGLE_WASM_SIZE */
 const SIZES = {
     'cc.wasm': typeof CC_WASM_SIZE === 'number' ? CC_WASM_SIZE : 0,
     'cc-cross.wasm': typeof CC_CROSS_WASM_SIZE === 'number' ? CC_CROSS_WASM_SIZE : 0,
@@ -54,6 +59,9 @@ const SIZES = {
     'catch2.tar': typeof CATCH2_SIZE === 'number' ? CATCH2_SIZE : 0,
     'doctest.tar': typeof DOCTEST_SIZE === 'number' ? DOCTEST_SIZE : 0,
     'rapidcheck.tar': typeof RAPIDCHECK_SIZE === 'number' ? RAPIDCHECK_SIZE : 0,
+    'asan.tar': typeof ASAN_SIZE === 'number' ? ASAN_SIZE : 0,
+    'ubsan.tar': typeof UBSAN_SIZE === 'number' ? UBSAN_SIZE : 0,
+    'demangle.wasm': typeof DEMANGLE_WASM_SIZE === 'number' ? DEMANGLE_WASM_SIZE : 0,
 };
 
 const CXX = /\.(cpp|cc|cxx|c\+\+|C)$/;
@@ -61,6 +69,27 @@ const C = /\.c$/;
 const OBJ = '.yukibana/obj/';
 const WASM = DEFAULT_TARGET;
 const LIB = '/wasi/lib/wasm32-wasip1';
+/** compiler-rt's runtimes for wasm32-wasip1: the builtins (wasi-sysroot.tar.gz), the sanitizers (asan.tar, ubsan.tar). */
+const RT = '/usr/lib/clang/21/lib/wasm32-unknown-wasip1/';
+/**
+ * The sanitizer runtime's library for wasm32-wasip1, by sanitizersOf's
+ * `runtime`, and wasi-libc's emulations of what WASI lacks, which the
+ * runtimes call (signal(), mmap(), getpid(), clock()).
+ */
+const SANITIZER_LIBS = {
+    asan: [RT + 'libclang_rt.asan.a'],
+    ubsan: [RT + 'libclang_rt.ubsan_standalone.a'],
+    'ubsan-minimal': [RT + 'libclang_rt.ubsan_minimal.a'],
+};
+const WASI_EMULATED = ['-lwasi-emulated-signal', '-lwasi-emulated-mman', '-lwasi-emulated-getpid', '-lwasi-emulated-process-clocks'];
+/**
+ * AddressSanitizer's memory on wasm32, as Emscripten lays it out: the
+ * shadow (one byte per 8) from address 0, the program's data, stack and
+ * heap above it, at most 2 GiB in all (Emscripten's default maximum), so
+ * the shadow is 256 MiB and the data starts there (--global-base, which
+ * the runtime reads as the shadow's end).
+ */
+const ASAN_MEMORY = 2 ** 31;
 /** Where a project keeps its tests (type 'test'); left out of a plain run. */
 const TESTS = /^tests\//;
 
@@ -212,12 +241,16 @@ async function build({ type, files, entry, stdin, options }) {
     const fw = framework ? FRAMEWORKS[framework] : null;
     const properties = scanned.some((p) => RAPIDCHECK.include.test(withoutComments(files[p] ?? '')));
     const cxxProgram = sources.some((p) => CXX.test(p));
+    // The sanitizers compile_flags.txt turns on, and the runtime they link
+    // (README, "Sanitizers"), fetched only then.
+    const sanitize = sanitizersOf(flagsFor(files, cxxProgram));
+    const runtime = sanitize.runtime ? (linux ? `targets/${target.arch}/${sanitize.runtime}.tar` : `${sanitize.runtime}.tar`) : null;
     phase('Loading the compiler');
     // Every download at once: a Linux target's libraries too, for the link.
     // A Linux target's framework archives are its own (targets/<arch>/).
     const archives = [...(framework ? [FRAMEWORKS[framework].archive] : []), ...(properties ? [RAPIDCHECK.archive] : [])]
         .map((name) => (linux ? `targets/${target.arch}/${name}` : name));
-    await Promise.all([toolchain.load(target, { link: linux }), ...archives.map(toolchain.archive)]);
+    await Promise.all([toolchain.load(target, { link: linux }), ...[...archives, ...(runtime ? [runtime] : [])].map(toolchain.archive)]);
 
     const objects = {};
     for (const [i, source] of sources.entries()) {
@@ -257,7 +290,7 @@ async function build({ type, files, entry, stdin, options }) {
         // as an ordinary archive member.
         const { runOnLinux } = await import('./runner-linux.js');
         const libs = [...(frameworkMain ? fw.main : []), ...(properties ? RAPIDCHECK.libs : []), ...(fw ? fw.libs : [])];
-        return runOnLinux({ toolchain, target, objects, cxx: cxxProgram, libs, archives, args, env, stdin, options, post, started });
+        return runOnLinux({ toolchain, target, objects, cxx: cxxProgram, libs, archives: [...archives, ...(runtime ? [runtime] : [])], sanitize, args, env, stdin, options, post, started });
     }
 
     phase('Linking');
@@ -275,6 +308,9 @@ async function build({ type, files, entry, stdin, options }) {
             ...(frameworkMain ? ['-u', '__main_argc_argv', ...fw.main] : []),
             ...(properties ? RAPIDCHECK.libs : []),
             ...(fw ? fw.libs : []),
+            // The sanitizer's runtime, before the C library whose malloc
+            // AddressSanitizer's replaces.
+            ...(sanitize.runtime ? [...SANITIZER_LIBS[sanitize.runtime === 'ubsan' && sanitize.minimal ? 'ubsan-minimal' : sanitize.runtime], ...WASI_EMULATED] : []),
             // libc-printscan-long-double: without it, printing a long double
             // (printf("%Lf"), or cout, through libc++'s num_put) aborts with
             // "Support for formatting long double values is currently disabled".
@@ -292,17 +328,23 @@ async function build({ type, files, entry, stdin, options }) {
             // like a Linux main thread, placed first so an overflow runs off
             // the start of memory and traps. (Call depth is limited sooner,
             // by the browser's own stack: see the crash message below.)
-            '-z', 'stack-size=8388608', '--stack-first',
+            // AddressSanitizer's shadow is at the start of memory instead,
+            // and the stack follows the data, as on Emscripten.
+            '-z', 'stack-size=8388608',
+            ...(sanitize.address ? [`--global-base=${ASAN_MEMORY / 8}`, `--max-memory=${ASAN_MEMORY}`] : ['--stack-first']),
             '-o', '.yukibana/program.wasm',
         ],
         objects,
         ['.yukibana/program.wasm'],
-        { rewrite: withSourceNames, archives }
+        { rewrite: withSourceNames, archives: [...archives, ...(runtime ? [runtime] : [])] }
     );
     if (code !== 0 || !out['.yukibana/program.wasm']) return code || 1;
 
     phase(testing ? 'Running the tests' : 'Running');
     const program = await WebAssembly.compile(out['.yukibana/program.wasm']);
+    // A sanitized program's runtime asks the host for its stacks and their
+    // source lines (sanitizer.js, fetched only for one).
+    const sanitizer = sanitize.runtime ? (await import('./sanitizer.js')).createSanitizerHost(out['.yukibana/program.wasm']) : null;
     let instance = null;
     const flushStdout = () => {
         const { fflush, stdout, memory } = instance?.exports ?? {};
@@ -320,8 +362,9 @@ async function build({ type, files, entry, stdin, options }) {
         // program waits. Flush it here, as glibc would.
         beforeWait: flushStdout,
     });
-    instance = await WebAssembly.instantiate(program, wasi.importsFor(program));
+    instance = await WebAssembly.instantiate(program, { ...wasi.importsFor(program), ...sanitizer?.imports() });
     wasi.setMemory(instance.exports.memory);
+    sanitizer?.setMemory(instance.exports.memory);
     try {
         instance.exports._start();
         return 0;

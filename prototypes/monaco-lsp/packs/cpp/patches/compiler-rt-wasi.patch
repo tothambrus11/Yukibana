@@ -1,0 +1,490 @@
+compiler-rt's sanitizer runtimes for wasm32-wasip1 (build-sanitizers.sh;
+README, "Sanitizers"), as a patch to Emscripten 4.0.22's port of
+compiler-rt (emsdk's upstream/emscripten/system/lib/compiler-rt, LLVM
+20.1.8's compiler-rt with Emscripten's changes, which build for wasm32).
+
+WASI builds Emscripten's port: SANITIZER_EMSCRIPTEN is on for __wasi__
+too, and SANITIZER_WASI marks where WASI differs from Emscripten:
+
+- no signals, ucontext, pipes, dup, fork, uid, link.h or sys/wait.h:
+  those calls become no-ops or report failure, and a fault is a
+  WebAssembly trap, which the host reports (as on Emscripten);
+- GET_CALLER_PC() calls emscripten_return_address(0) itself (clang
+  refuses __builtin_return_address for non-Emscripten wasm);
+- a wasm pc is the offset of the call (the host reads it from the
+  engine's stack trace), so GetPreviousInstructionPc is the pc itself;
+- a function's address is its index in the indirect function table, so
+  the frame that holds a stack variable is found from the host's map of
+  the table (as PowerPC64 ELFv1 reads a function descriptor);
+- the symbolizer asks the host for every inlined frame at a pc
+  (llvm-symbolizer --inlines), not one function and one line, and names
+  the module for a frame without a line;
+- UBSan prints its SUMMARY line, as natively (Emscripten turns it off).
+
+Upstream status: not sent. compiler-rt does not list WASI as a sanitizer
+platform, and Emscripten's port lives in Emscripten's tree; a WASI port
+upstream would want its own sanitizer_wasi.cpp rather than these
+conditionals in the Emscripten and Linux files.
+
+--- a/lib/asan/asan_descriptions.cpp
++++ b/lib/asan/asan_descriptions.cpp
+@@ -17,6 +17,10 @@
+ #include "asan_stack.h"
+ #include "sanitizer_common/sanitizer_stackdepot.h"
+ 
++#if SANITIZER_WASI
++extern "C" __sanitizer::uptr _wasi_function_pc(__sanitizer::uptr pointer);
++#endif
++
+ namespace __asan {
+ 
+ AsanThreadIdAndName::AsanThreadIdAndName(AsanThreadContext *t) {
+@@ -216,6 +220,10 @@
+   // three-doubleword data structure with the first field containing
+   // the address of the function's code.
+   descr->frame_pc = *reinterpret_cast<uptr *>(descr->frame_pc);
++#elif SANITIZER_WASI
++  // On WebAssembly the address of a function is its index in the indirect
++  // function table; the host gives the offset of its code (wasi_emscripten.c).
++  descr->frame_pc = _wasi_function_pc(descr->frame_pc);
+ #endif
+   descr->frame_pc += 16;
+ 
+--- a/lib/asan/asan_posix.cpp
++++ b/lib/asan/asan_posix.cpp
+@@ -178,7 +178,7 @@
+ 
+ void InstallAtForkHandler() {
+ #  if SANITIZER_SOLARIS || SANITIZER_NETBSD || SANITIZER_APPLE || \
+-      (SANITIZER_LINUX && SANITIZER_SPARC)
++      (SANITIZER_LINUX && SANITIZER_SPARC) || SANITIZER_WASI
+   // While other Linux targets use clone in internal_fork which doesn't
+   // trigger pthread_atfork handlers, Linux/sparc64 uses __fork, causing a
+   // hang.
+--- a/lib/sanitizer_common/sanitizer_emscripten.cpp
++++ b/lib/sanitizer_common/sanitizer_emscripten.cpp
+@@ -23,6 +23,7 @@
+ #include <time.h>
+ #include <unistd.h>
+ #include <math.h>
++#include <sched.h>
+ 
+ #if SANITIZER_EMSCRIPTEN
+ 
+@@ -66,10 +67,16 @@
+ 
+ void ListOfModules::fallbackInit() { clear(); }
+ 
++#if SANITIZER_WASI
++int internal_sigaction(int signum, const void *act, void *oldact) {
++  return -1;
++}
++#else
+ int internal_sigaction(int signum, const void *act, void *oldact) {
+   return sigaction(signum, (const struct sigaction *)act,
+                    (struct sigaction *)oldact);
+ }
++#endif
+ 
+ uptr internal_mmap(void *addr, uptr length, int prot, int flags, int fd,
+                    u64 offset) {
+@@ -174,7 +181,11 @@
+ }
+ 
+ uptr internal_dup(int oldfd) {
++#if SANITIZER_WASI
++  return -1;
++#else
+   return dup(oldfd);
++#endif
+ }
+ 
+ uptr internal_getpid() {
+@@ -185,6 +196,14 @@
+   return sched_yield();
+ }
+ 
++#if SANITIZER_WASI
++void internal_sigfillset(__sanitizer_sigset_t *set) { *set = ~0UL; }
++
++uptr internal_sigprocmask(int how, __sanitizer_sigset_t *set,
++                          __sanitizer_sigset_t *oldset) {
++  return 0;
++}
++#else
+ void internal_sigfillset(__sanitizer_sigset_t *set) {
+   sigfillset(set);
+ }
+@@ -193,6 +212,7 @@
+                           __sanitizer_sigset_t *oldset) {
+   return sigprocmask(how, set, oldset);
+ }
++#endif
+ 
+ void internal_usleep(u64 useconds) {
+   usleep(useconds);
+@@ -203,7 +223,11 @@
+ }
+ 
+ tid_t GetTid() {
++#if SANITIZER_WASI
++  return 1;
++#else
+   return gettid();
++#endif
+ }
+ 
+ uptr internal_clock_gettime(__sanitizer_clockid_t clk_id, void *tp) {
+--- a/lib/sanitizer_common/sanitizer_internal_defs.h
++++ b/lib/sanitizer_common/sanitizer_internal_defs.h
+@@ -402,7 +402,15 @@
+ 
+ enum LinkerInitialized { LINKER_INITIALIZED = 0 };
+ 
+-#if !defined(_MSC_VER) || defined(__clang__)
++#if defined(__wasi__)
++extern "C" void *emscripten_return_address(int level);
++#  define GET_CALLER_PC() \
++    ((__sanitizer::uptr)__sanitizer::emscripten_return_address(0))
++#  define GET_CURRENT_FRAME() ((__sanitizer::uptr)__builtin_frame_address(0))
++inline void Trap() {
++  __builtin_trap();
++}
++#elif !defined(_MSC_VER) || defined(__clang__)
+ #  define GET_CALLER_PC()                              \
+     ((__sanitizer::uptr)__builtin_extract_return_addr( \
+         __builtin_return_address(0)))
+--- a/lib/sanitizer_common/sanitizer_linux.cpp
++++ b/lib/sanitizer_common/sanitizer_linux.cpp
+@@ -58,7 +58,9 @@
+ #  include <dlfcn.h>
+ #  include <errno.h>
+ #  include <fcntl.h>
+-#  include <link.h>
++#  if !SANITIZER_WASI
++#    include <link.h>
++#  endif
+ #  include <pthread.h>
+ #  include <sched.h>
+ #  include <signal.h>
+@@ -71,7 +73,9 @@
+ #  include <sys/syscall.h>
+ #  include <sys/time.h>
+ #  include <sys/types.h>
+-#  include <ucontext.h>
++#  if !SANITIZER_WASI
++#    include <ucontext.h>
++#  endif
+ #  include <unistd.h>
+ 
+ #  if SANITIZER_LINUX
+@@ -171,7 +175,9 @@
+ namespace __sanitizer {
+ 
+ void SetSigProcMask(__sanitizer_sigset_t *set, __sanitizer_sigset_t *oldset) {
++#  if !SANITIZER_WASI
+   CHECK_EQ(0, internal_sigprocmask(SIG_SETMASK, set, oldset));
++#  endif
+ }
+ 
+ #  if SANITIZER_LINUX
+@@ -1341,7 +1347,7 @@
+   return (name[base_name_length] == '-' || name[base_name_length] == '.');
+ }
+ 
+-#  if !SANITIZER_ANDROID
++#  if !SANITIZER_ANDROID && !SANITIZER_WASI
+ // Call cb for each region mapped by map.
+ void ForEachMappedRegion(link_map *map, void (*cb)(const void *, uptr)) {
+   CHECK_NE(map, nullptr);
+@@ -1999,6 +2005,14 @@
+ static bool Aarch64GetESR(ucontext_t *ucontext, u64 *esr) { return false; }
+ #  endif
+ 
++#  if SANITIZER_WASI
++// No signals, so no signal context: a WebAssembly trap is reported by the
++// host, not by a handler.
++SignalContext::WriteFlag SignalContext::GetWriteFlag() const { return Unknown; }
++bool SignalContext::IsTrueFaultingAddress() const { return false; }
++void SignalContext::DumpAllRegisters(void *context) {}
++void SignalContext::InitPcSpBp() { pc = sp = bp = 0; }
++#  else
+ using Context = ucontext_t;
+ 
+ SignalContext::WriteFlag SignalContext::GetWriteFlag() const {
+@@ -2744,6 +2758,7 @@
+ }
+ 
+ void SignalContext::InitPcSpBp() { GetPcSpBp(context, &pc, &sp, &bp); }
++#  endif  // SANITIZER_WASI
+ 
+ void InitializePlatformEarly() { InitTlsSize(); }
+ 
+--- a/lib/sanitizer_common/sanitizer_platform.h
++++ b/lib/sanitizer_common/sanitizer_platform.h
+@@ -14,7 +14,8 @@
+ 
+ #if !defined(__linux__) && !defined(__FreeBSD__) && !defined(__NetBSD__) && \
+     !defined(__APPLE__) && !defined(_WIN32) && !defined(__Fuchsia__) &&     \
+-    !(defined(__sun__) && defined(__svr4__)) && !defined(__EMSCRIPTEN__)
++    !(defined(__sun__) && defined(__svr4__)) && !defined(__EMSCRIPTEN__) && \
++    !defined(__wasi__)
+ #  error "This operating system is not supported"
+ #endif
+ 
+@@ -136,11 +137,18 @@
+ #  define SANITIZER_MUSL 0
+ #endif
+ 
+-#if defined(__EMSCRIPTEN__)
++// WASI (wasm32-wasip1) builds Emscripten's port: the same wasm, without
++// Emscripten's JavaScript runtime, whose few functions the host provides.
++#if defined(__EMSCRIPTEN__) || defined(__wasi__)
+ # define SANITIZER_EMSCRIPTEN 1
+ #else
+ # define SANITIZER_EMSCRIPTEN 0
+ #endif
++#if defined(__wasi__)
++# define SANITIZER_WASI 1
++#else
++# define SANITIZER_WASI 0
++#endif
+ 
+ #define SANITIZER_POSIX                                     \
+   (SANITIZER_FREEBSD || SANITIZER_LINUX || SANITIZER_APPLE || \
+--- a/lib/sanitizer_common/sanitizer_platform_limits_posix.h
++++ b/lib/sanitizer_common/sanitizer_platform_limits_posix.h
+@@ -603,6 +603,9 @@
+   // The size is determined by looking at sizeof of real sigset_t on linux.
+   uptr val[128 / sizeof(uptr)];
+ };
++#elif SANITIZER_WASI
++// WASI has no signals, and so no sigset_t.
++typedef unsigned long __sanitizer_sigset_t;
+ #elif SANITIZER_EMSCRIPTEN
+ typedef sigset_t __sanitizer_sigset_t;
+ #endif
+--- a/lib/sanitizer_common/sanitizer_posix.cpp
++++ b/lib/sanitizer_common/sanitizer_posix.cpp
+@@ -324,6 +324,11 @@
+   return false;
+ }
+ 
++#if SANITIZER_WASI
++uptr SignalContext::GetAddress() const { return 0; }
++bool SignalContext::IsMemoryAccess() const { return false; }
++int SignalContext::GetType() const { return 0; }
++#else
+ uptr SignalContext::GetAddress() const {
+   auto si = static_cast<const siginfo_t *>(siginfo);
+   return (uptr)si->si_addr;
+@@ -337,6 +342,7 @@
+ int SignalContext::GetType() const {
+   return static_cast<const siginfo_t *>(siginfo)->si_signo;
+ }
++#endif
+ 
+ const char *SignalContext::Describe() const {
+   switch (GetType()) {
+--- a/lib/sanitizer_common/sanitizer_posix_libcdep.cpp
++++ b/lib/sanitizer_common/sanitizer_posix_libcdep.cpp
+@@ -33,7 +33,9 @@
+ #include <sys/stat.h>
+ #include <sys/time.h>
+ #include <sys/types.h>
++#if !SANITIZER_WASI
+ #include <sys/wait.h>
++#endif
+ #include <unistd.h>
+ 
+ #if SANITIZER_FREEBSD
+@@ -43,12 +45,18 @@
+ #define MAP_NORESERVE 0
+ #endif
+ 
++#if !SANITIZER_WASI
+ typedef void (*sa_sigaction_t)(int, siginfo_t *, void *);
++#endif
+ 
+ namespace __sanitizer {
+ 
+ u32 GetUid() {
++#if SANITIZER_WASI
++  return 0;
++#else
+   return getuid();
++#endif
+ }
+ 
+ uptr GetThreadSelf() {
+@@ -151,7 +159,7 @@
+ #endif
+ 
+ void Abort() {
+-#if !SANITIZER_GO
++#if !SANITIZER_GO && !SANITIZER_WASI
+   // If we are handling SIGABRT, unhandle it first.
+   // TODO(vitalybuka): Check if handler belongs to sanitizer.
+   if (GetHandleSignalMode(SIGABRT) != kHandleSignalNo) {
+@@ -179,7 +187,13 @@
+   return isatty(fd) != 0;
+ }
+ 
+-#if !SANITIZER_GO
++#if SANITIZER_WASI
++// No signals: a fault is a WebAssembly trap, which the host reports.
++void SetAlternateSignalStack() {}
++void UnsetAlternateSignalStack() {}
++void InstallDeadlySignalHandlers(SignalHandlerType handler) {}
++bool SignalContext::IsStackOverflow() const { return false; }
++#elif !SANITIZER_GO
+ // TODO(glider): different tools may require different altstack size.
+ static uptr GetAltStackSize() {
+   // Note: since GLIBC_2.31, SIGSTKSZ may be a function call, so this may be
+@@ -339,6 +353,13 @@
+ bool TryMemCpy(void *dest, const void *src, uptr n) {
+   if (!n)
+     return true;
++#if SANITIZER_WASI
++  // No pipe to probe with; linear memory is all there is.
++  if (!IsAccessibleMemoryRange((uptr)src, n))
++    return false;
++  internal_memcpy(dest, src, n);
++  return true;
++#else
+   int fds[2];
+   CHECK_EQ(0, pipe(fds));
+ 
+@@ -378,6 +399,7 @@
+   }
+ 
+   return true;
++#endif
+ }
+ 
+ void PlatformPrepareForSandboxing(void *args) {
+--- a/lib/sanitizer_common/sanitizer_stacktrace.cpp
++++ b/lib/sanitizer_common/sanitizer_stacktrace.cpp
+@@ -53,7 +53,7 @@
+ #endif
+ }
+ 
+-#if !defined(__EMSCRIPTEN__)
++#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
+ uptr StackTrace::GetCurrentPc() {
+   return GET_CALLER_PC();
+ }
+@@ -69,7 +69,7 @@
+ }
+ 
+ // Sparc and Emscripten implementions are in their own files.
+-#if !defined(__sparc__) && !defined(__EMSCRIPTEN__)
++#if !defined(__sparc__) && !defined(__EMSCRIPTEN__) && !defined(__wasi__)
+ 
+ // In GCC on ARM bp points to saved lr, not fp, so we should check the next
+ // cell in stack to be a saved frame pointer. GetCanonicFrame returns the
+--- a/lib/sanitizer_common/sanitizer_stacktrace.h
++++ b/lib/sanitizer_common/sanitizer_stacktrace.h
+@@ -103,6 +103,8 @@
+   return pc - 2;
+ #elif SANITIZER_S390 || SANITIZER_I386 || SANITIZER_X32 || SANITIZER_X64
+   return pc - 1;
++#elif SANITIZER_WASI
++  return pc;
+ #else
+   return pc - 4;
+ #endif
+--- a/lib/sanitizer_common/sanitizer_stacktrace_emscripten.cpp
++++ b/lib/sanitizer_common/sanitizer_stacktrace_emscripten.cpp
+@@ -13,7 +13,7 @@
+ // Implementation of fast stack unwinding for Emscripten.
+ //===----------------------------------------------------------------------===//
+ 
+-#ifdef __EMSCRIPTEN__
++#if defined(__EMSCRIPTEN__) || defined(__wasi__)
+ 
+ #include "sanitizer_common.h"
+ #include "sanitizer_stacktrace.h"
+--- a/lib/sanitizer_common/sanitizer_symbolizer_emscripten.cpp
++++ b/lib/sanitizer_common/sanitizer_symbolizer_emscripten.cpp
+@@ -32,6 +32,49 @@
+   }
+ };
+ 
++#if SANITIZER_WASI
++// The host's answers (wasi_emscripten.c): frames 0 (the innermost) to
++// n - 1 (the function that holds the code), each one's function, file,
++// line and column, the strings valid until the next call.
++extern "C" {
++int _wasi_pc_frames(uptr pc);
++const char *_wasi_pc_function(uptr pc, int frame);
++const char *_wasi_pc_file(uptr pc, int frame);
++int _wasi_pc_line(uptr pc, int frame);
++int _wasi_pc_column(uptr pc, int frame);
++}
++
++bool EmscriptenSymbolizerTool::SymbolizePC(uptr addr, SymbolizedStack *frame) {
++  int frames = _wasi_pc_frames(addr);
++  if (frames <= 0)
++    return false;
++  // symbolize_inline_frames=0 is llvm-symbolizer --no-inlines: the
++  // innermost line, named after the function that holds it.
++  bool inlines = common_flags()->symbolize_inline_frames;
++  SymbolizedStack *last = frame;
++  for (int i = 0; i < (inlines ? frames : 1); i++) {
++    SymbolizedStack *cur = i ? SymbolizedStack::New(addr) : frame;
++    if (i) {
++      last->next = cur;
++      last = cur;
++    }
++    if (const char *name = _wasi_pc_function(addr, inlines ? i : frames - 1))
++      cur->info.function = internal_strdup(name);
++    if (const char *file = _wasi_pc_file(addr, i)) {
++      cur->info.file = internal_strdup(file);
++      cur->info.line = _wasi_pc_line(addr, i);
++      cur->info.column = _wasi_pc_column(addr, i);
++    } else {
++      // No line table: the module and the offset in it, as natively.
++      static char module[kMaxPathLength];
++      if (!module[0])
++        ReadBinaryNameCached(module, sizeof(module));
++      cur->info.FillModuleInfo(module, addr, kModuleArchUnknown);
++    }
++  }
++  return true;
++}
++#else
+ bool EmscriptenSymbolizerTool::SymbolizePC(uptr addr, SymbolizedStack *frame) {
+   const char *func_name = emscripten_pc_get_function(addr);
+   if (func_name) {
+@@ -48,6 +91,7 @@
+ 
+   return !!func_name;
+ }
++#endif
+ 
+ static void ChooseSymbolizerTools(IntrusiveList<SymbolizerTool> *list,
+                                   LowLevelAllocator *allocator) {
+--- a/lib/ubsan/ubsan_flags.cpp
++++ b/lib/ubsan/ubsan_flags.cpp
+@@ -57,7 +57,9 @@
+   {
+     CommonFlags cf;
+     cf.CopyFrom(*common_flags());
++#if !SANITIZER_WASI
+     cf.print_summary = false;
++#endif
+ #if !SANITIZER_EMSCRIPTEN
+     // getenv on emscripten uses malloc, which we can't when using some sanitizers.
+     // You can't run external symbolizers anyway.
+--- a/lib/ubsan/ubsan_platform.h
++++ b/lib/ubsan/ubsan_platform.h
+@@ -16,7 +16,7 @@
+ #if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__) ||        \
+     defined(__NetBSD__) || defined(__DragonFly__) ||                           \
+     (defined(__sun__) && defined(__svr4__)) || defined(_WIN32) ||              \
+-    defined(__Fuchsia__) || defined(__EMSCRIPTEN__)
++    defined(__Fuchsia__) || defined(__EMSCRIPTEN__) || defined(__wasi__)
+ #define CAN_SANITIZE_UB 1
+ #else
+ # define CAN_SANITIZE_UB 0

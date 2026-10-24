@@ -72,6 +72,62 @@ export function flagsFor(files, cxx) {
     });
 }
 
+// Sanitizers that are not UndefinedBehaviorSanitizer's checks (README,
+// "Sanitizers"): every other name -fsanitize= takes is one of UBSan's
+// checks or groups ("undefined", "integer", "nullability", "bounds", ...),
+// whose reports come from UBSan's runtime.
+const NOT_UBSAN = new Set(['address', 'leak', 'thread', 'memory', 'hwaddress', 'kernel-address', 'kernel-hwaddress',
+    'kernel-memory', 'dataflow', 'safe-stack', 'shadow-call-stack', 'fuzzer', 'fuzzer-no-link', 'scudo', 'kcfi',
+    'memtag', 'memtag-stack', 'memtag-heap', 'memtag-globals', 'type', 'realtime', 'numerical', 'cfi']);
+
+/**
+ * The sanitizers the project's flags (compile_flags.txt, as flagsFor gives
+ * them) turn on, as clang reads -fsanitize= and -fno-sanitize= lists in
+ * order (`all` included): `{ address, undefined, minimal, runtime, flags }`.
+ * `address`: AddressSanitizer (with LeakSanitizer, as on Linux).
+ * `undefined`: some UBSan check is on. `minimal`:
+ * -fsanitize-minimal-runtime. `runtime`: the runtime the program links,
+ * 'asan' (which holds UBSan's too), 'ubsan', or null when nothing needs one
+ * (no sanitizer, or every UBSan check traps: -fsanitize-trap or
+ * -fsanitize-trap=undefined/all). `flags`: the project's flags that are
+ * about sanitizers, in order, which a link passes on to clang's driver.
+ * Approximate where clang is subtle (-fno-sanitize= of one check inside a
+ * group leaves the group on; -fsanitize-trap= of some checks traps none):
+ * it decides which runtime to fetch, and clang still decides the code.
+ */
+export function sanitizersOf(flags) {
+    const isUbsan = (name) => !NOT_UBSAN.has(name) && !/^cfi/.test(name);
+    let on = [];
+    let trapped = false;
+    let minimal = false;
+    const mine = [];
+    for (const flag of flags) {
+        let m;
+        if ((m = /^-f(no-)?sanitize=(.*)$/.exec(flag))) {
+            mine.push(flag);
+            for (const name of m[2].split(',').filter(Boolean)) {
+                if (!m[1]) on.push(name);
+                else if (name === 'all') on = [];
+                else if (name === 'undefined') on = on.filter((n) => !isUbsan(n));
+                else on = on.filter((n) => n !== name);
+            }
+        } else if ((m = /^-f(no-)?sanitize-trap(?:=(.*))?$/.exec(flag))) {
+            mine.push(flag);
+            const names = (m[2] ?? 'all').split(',');
+            if (names.includes('all') || names.includes('undefined')) trapped = !m[1];
+        } else if (/^-f(no-)?sanitize-minimal-runtime$/.test(flag)) {
+            mine.push(flag);
+            minimal = !flag.startsWith('-fno-');
+        } else if (/^-f(no-)?sanitize-|^-(shared|static)-libsan$/.test(flag)) {
+            mine.push(flag);
+        }
+    }
+    const address = on.includes('address');
+    const undefined_ = on.some(isUbsan);
+    const runtime = address ? 'asan' : undefined_ && !trapped ? 'ubsan' : null;
+    return { address, undefined: undefined_, minimal, runtime, flags: mine };
+}
+
 /**
  * clang's arguments for compiling `source` (a project path) of the project
  * `files` for `target` (a row of src/targets.js), without the action and the
@@ -91,6 +147,12 @@ export function flagsFor(files, cxx) {
  *   same `-O2` default and hardening, then the project's flags as they are
  *   (their target flag names the same triple: that is how the target was
  *   chosen). Exceptions are on by default there.
+ * - With a sanitizer (sanitizersOf), before the project's flags, so that
+ *   its own -g or -fomit-frame-pointer wins: `-gline-tables-only`, so that
+ *   a report names lines (it does not change the code), and on a Linux
+ *   target with AddressSanitizer `-fno-omit-frame-pointer`, which its fast
+ *   unwinder needs for the stacks of malloc and free (as clang's
+ *   AddressSanitizer documentation asks).
  */
 export function compileArgs(target, files, source, { view = false } = {}) {
     const cxx = isCxx(source);
@@ -106,11 +168,16 @@ export function compileArgs(target, files, source, { view = false } = {}) {
         ? ['-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST']
         : [];
     const debug = view ? ['-gline-tables-only', '-fno-discard-value-names'] : [];
-    if (target.runtime !== 'linux') {
+    const linux = target.runtime === 'linux';
+    const sanitize = sanitizersOf(flags);
+    const sanitizing = sanitize.address || sanitize.undefined
+        ? ['-gline-tables-only', ...(linux && sanitize.address ? ['-fno-omit-frame-pointer'] : [])]
+        : [];
+    if (!linux) {
         // A project's -fno-exceptions in compile_flags.txt comes later and wins.
-        return [...WASM_TARGET, ...optimise, ...(cxx ? EXCEPTIONS : []), ...hardening, ...flags, ...debug];
+        return [...WASM_TARGET, ...optimise, ...(cxx ? EXCEPTIONS : []), ...hardening, ...sanitizing, ...flags, ...debug];
     }
-    return [`--target=${target.triple}`, '-resource-dir=/usr/lib/clang/21', ...optimise, ...hardening, ...flags, ...debug];
+    return [`--target=${target.triple}`, '-resource-dir=/usr/lib/clang/21', ...optimise, ...hardening, ...sanitizing, ...flags, ...debug];
 }
 
 /**
@@ -359,17 +426,24 @@ export function createToolchain({ base, fetch: fetchImpl = (url) => fetch(url), 
  * into the linker's file system with lib.tar's). Resolves to
  * `{ code, program }`; on failure the messages (with source names for
  * objects) went to the toolchain's `post` as stderr and `program` is null.
+ * `sanitize` (sanitizersOf): its flags go to the driver, which adds the
+ * runtimes (from the archive targets/<arch>/asan.tar or ubsan.tar, among
+ * `archives`); with AddressSanitizer the program is dynamically linked
+ * against musl (libc.so, in asan.tar), as AddressSanitizer refuses a
+ * static program ("_DYNAMIC" undefined: AsanDoesNotSupportStaticLinkage),
+ * and needs /lib/ld-musl-<arch>.so.1 to run.
  * A separate function, not a toolchain method, so that the default target's
  * runner.js does not carry it (runner-linux.js does).
  */
-export async function linkLinux(toolchain, objects, target, { cxx = true, libs = [], archives = [] } = {}) {
+export async function linkLinux(toolchain, objects, target, { cxx = true, libs = [], archives = [], sanitize = null } = {}) {
     const names = Object.keys(objects);
     const plan = await toolchain.tool(target, cxx ? 'clang++' : 'clang',
         // -no-canonical-prefixes: the driver's InstalledDir, where it finds
         // ld.lld, is then argv[0]'s directory, /usr/bin; canonicalised, it
         // would come from the executable's own path, which a wasm module
         // does not have.
-        [`--target=${target.triple}`, '-resource-dir=/usr/lib/clang/21', '-no-canonical-prefixes', '-static', ...names, ...libs, '-o', 'a.out', '-###'],
+        [`--target=${target.triple}`, '-resource-dir=/usr/lib/clang/21', '-no-canonical-prefixes',
+            ...(sanitize?.address ? [] : ['-static']), ...(sanitize?.flags ?? []), ...names, ...libs, '-o', 'a.out', '-###'],
         objects, [], {
             quiet: true,
             link: true,
