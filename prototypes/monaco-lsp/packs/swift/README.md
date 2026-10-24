@@ -135,17 +135,21 @@ padding `llvm::TrailingObjects` inserts before that element. On a 64-bit
 host the padding happens to be 0. On a 32-bit host it is up to 4 bytes, so
 the instruction's trailing data ran up to 4 bytes past its allocation,
 over the next malloc chunk's header, and a later `free` of that neighbour
-trapped. The
-fix is swift-toolchain-wasm's patch
+trapped. The fix is swift-toolchain-wasm's patch
 `0004-debug-variable-trailing-padding.patch`, which sizes the allocation
-with each trailing object's alignment. It is the same sum on upstream
-`main`, in `getDebugVarTrailingDataSize`. The levels become available once
-a toolchain release with that patch is pinned in `build.sh` and
-`optimization.ts` stops marking them unavailable. `test-run.mjs` has
-the cases: the program above, XCTest's own teardown loop (the first place
-it was seen) and XCTest tests, at both levels. They run with
-`SWIFT_OPTIMIZED=1`, and with `SWIFT_FRONTEND=<path>` to try a compiler
-that is not in the pack yet.
+with each trailing object's alignment. Upstream `main` has the same plain
+sum, in `getDebugVarTrailingDataSize`.
+
+`test-run.mjs` has the cases: the program above, XCTest's own teardown
+loop (where the crash was first seen) and XCTest tests, at both levels.
+They run with `SWIFT_OPTIMIZED=1`, and `SWIFT_FRONTEND=<path>` tries a
+compiler that is not in the pack yet. With the pinned compiler the first
+two fail at both levels. With a build that has the patch
+(swift-toolchain-wasm CI run 40119018177, not released), all of
+`test-run.mjs` passes, these cases included, and XCTest compiles at `-O`
+and `-Osize`. The levels become available once a toolchain release with
+the patch is pinned in `build.sh` and `optimization.ts` stops marking
+them unavailable.
 
 ## Macros
 
