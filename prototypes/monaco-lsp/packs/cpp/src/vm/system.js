@@ -165,7 +165,7 @@ export async function runSystem(ctx) {
     // The base initramfs (init), strace's when tracing, then this run's program:
     // the kernel unpacks them in order.
     const initrd = concat([blob.initrd, ...(options.strace ? [blob['strace.cpio']] : []),
-        runArchive(ctx.program, ctx.argv, ctx.env, options.strace ? [] : null)]);
+        runArchive(ctx.program, ctx.argv, ctx.env, options.strace ? [] : null, ctx.files)]);
     mark('vm-loaded');
 
     return new Promise((resolve) => {

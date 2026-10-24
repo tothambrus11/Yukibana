@@ -173,6 +173,13 @@ export async function runUser(ctx) {
                 FS.mkdir('/yk');
                 FS.writeFile('/yk/prog', ctx.program);
                 FS.chmod('/yk/prog', 0o755);
+                // A dynamically linked program's interpreter: QEMU finds it
+                // under its -L prefix, /.
+                for (const { path, data } of ctx.files) {
+                    FS.mkdirTree('/' + path.replace(/\/[^/]*$/, ''));
+                    FS.writeFile('/' + path, data);
+                    FS.chmod('/' + path, 0o755);
+                }
                 const stdout = ttyOps(TTY, (b) => {
                     if (!firstOut) {
                         firstOut = true;

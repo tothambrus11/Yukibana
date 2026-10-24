@@ -69,7 +69,7 @@ export function vmFailureMessage(started, why) {
  * `post`, `mark(name, extra?)` (ms since `t0`), `fetchBytes(path)` and
  * `fetchResponse(path)` with `loading` progress against SIZES, and the
  * resolved `options`.
- * @typedef {{ arch: string, program: Uint8Array, argv: string[], env: string[],
+ * @typedef {{ arch: string, program: Uint8Array, files: { path: string, data: Uint8Array }[], argv: string[], env: string[],
  *   stdin: SharedArrayBuffer | null, options: { emulation: 'system' | 'user', cpus: number, strace: boolean },
  *   post: (msg: object) => void, base: URL, mark: (name: string, extra?: object) => void,
  *   fetchBytes: (path: string) => Promise<Uint8Array>, fetchResponse: (path: string) => Promise<Response> }} RunContext
@@ -103,7 +103,10 @@ export function vmFailureMessage(started, why) {
  *
  * @param {object} run
  * @param {'x86_64' | 'aarch64' | 'riscv64'} run.arch the guest architecture
- * @param {Uint8Array} run.program a static ELF for that architecture
+ * @param {Uint8Array} run.program an ELF for that architecture: static, or
+ *   dynamically linked with what it needs in `files`
+ * @param {{ path: string, data: Uint8Array }[]} [run.files] more files the
+ *   guest sees, by relative path from / ("lib/ld-musl-x86_64.so.1")
  * @param {string[]} [run.args] argv[1..]; argv[0] is "main"
  * @param {Record<string, string>} [run.env] added to (and overriding) DEFAULT_ENV
  * @param {SharedArrayBuffer | null} [run.stdin] the contract's stdin buffer
@@ -115,7 +118,7 @@ export function vmFailureMessage(started, why) {
  *   marks count from it (default 0, the worker's start)
  * @returns {Promise<number>}
  */
-export async function runLinux({ arch, program, args = [], env = {}, stdin = null, options = {}, post, base, t0 = 0 }) {
+export async function runLinux({ arch, program, files = [], args = [], env = {}, stdin = null, options = {}, post, base, t0 = 0 }) {
     const opts = {
         emulation: options?.emulation === 'user' ? 'user' : 'system',
         cpus: [1, 2, 4].includes(options?.cpus) ? options.cpus : 1,
@@ -177,7 +180,7 @@ export async function runLinux({ arch, program, args = [], env = {}, stdin = nul
     const envList = Object.entries({ ...DEFAULT_ENV, ...env }).map(([k, v]) => `${k}=${v}`);
     for (const e of envList) if (e.includes('\0') || e.startsWith('=')) return fail(`Bad environment entry ${JSON.stringify(e)}.`);
     /** @type {RunContext} */
-    const ctx = { arch, program, argv: ['main', ...args.map(String)], env: envList, stdin, options: opts, post, base: baseUrl, mark, fetchBytes, fetchResponse: fetchCounted };
+    const ctx = { arch, program, files, argv: ['main', ...args.map(String)], env: envList, stdin, options: opts, post, base: baseUrl, mark, fetchBytes, fetchResponse: fetchCounted };
     try {
         return await (opts.emulation === 'user' ? runUser(ctx) : runSystem(ctx));
     } catch (e) {

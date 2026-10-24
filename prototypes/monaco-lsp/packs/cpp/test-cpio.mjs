@@ -42,6 +42,16 @@ test('the environment and strace options are files of their own, and an empty st
     assert.equal(fs.existsSync(path.join(empty, 'yk/env')), false);
 });
 
+test("a dynamically linked program's interpreter goes in with its directories, executable", () => {
+    const loader = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 9]);
+    const a = runArchive(new Uint8Array(1), ['main'], null, null, [{ path: 'lib/ld-musl-x86_64.so.1', data: loader }, { path: 'lib/sub/x', data: new Uint8Array(2) }]);
+    assert.deepEqual(list(a), ['yk', 'yk/prog', 'yk/argv', 'lib', 'lib/ld-musl-x86_64.so.1', 'lib/sub', 'lib/sub/x']);
+    const dir = extract(a);
+    assert.deepEqual(new Uint8Array(fs.readFileSync(path.join(dir, 'lib/ld-musl-x86_64.so.1'))), loader);
+    assert.equal(fs.statSync(path.join(dir, 'lib/ld-musl-x86_64.so.1')).mode & 0o777, 0o755);
+    assert.deepEqual(runArchive(new Uint8Array(1), ['main'], null, null, []), runArchive(new Uint8Array(1), ['main']));
+});
+
 test('the bytes are exactly what GNU cpio writes for the same tree (newc, root, mtime 0)', () => {
     // GNU cpio -o -H newc from a directory with the same files, owner and mtime;
     // only inode and device numbers differ (they come from the host file system),

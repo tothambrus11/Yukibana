@@ -70,16 +70,21 @@ export function cpio(entries) {
  * - `/yk/env`, the environment, "NAME=value" strings NUL-terminated, when
  *   `env` is given (without it init uses its own default environment);
  * - `/yk/strace`, when `strace` is given: strace's own options,
- *   NUL-terminated. An empty array still means "trace", with no options.
+ *   NUL-terminated. An empty array still means "trace", with no options;
+ * - every entry of `files`, `{ path, data }` with a relative path such as
+ *   "lib/ld-musl-x86_64.so.1" (mode 0755, its directories created first):
+ *   what a dynamically linked program needs besides itself, its
+ *   interpreter (the runner's sanitizer builds; README "Sanitizers").
  * Throws if any string contains a NUL (it could not be represented) or argv
  * is empty.
  * @param {Uint8Array} program a static executable for the guest's architecture
  * @param {string[]} argv the program's whole argv, argv[0] included
  * @param {string[] | null} env "NAME=value" strings, or null for init's default
  * @param {string[] | null} strace strace's options, or null for no tracing
+ * @param {{ path: string, data: Uint8Array }[]} files more files for the guest
  * @returns {Uint8Array}
  */
-export function runArchive(program, argv, env = null, strace = null) {
+export function runArchive(program, argv, env = null, strace = null, files = []) {
     if (argv.length === 0) throw new Error('cpio: argv is empty');
     for (const a of [...argv, ...(env ?? []), ...(strace ?? [])]) if (a.includes('\0')) throw new Error('cpio: an argument contains a NUL');
     const z = (list) => enc.encode(list.map((s) => s + '\0').join(''));
@@ -90,6 +95,16 @@ export function runArchive(program, argv, env = null, strace = null) {
     ];
     if (env) entries.push({ name: 'yk/env', mode: 0o100644, data: z(env) });
     if (strace) entries.push({ name: 'yk/strace', mode: 0o100644, data: z(strace) });
+    const dirs = new Set();
+    for (const { path, data } of files) {
+        const parts = path.split('/');
+        for (let i = 1; i < parts.length; i++) {
+            const dir = parts.slice(0, i).join('/');
+            if (!dirs.has(dir)) entries.push({ name: dir, mode: 0o040755 });
+            dirs.add(dir);
+        }
+        entries.push({ name: path, mode: 0o100755, data });
+    }
     return cpio(entries);
 }
 
