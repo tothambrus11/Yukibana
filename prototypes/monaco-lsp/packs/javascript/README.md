@@ -198,6 +198,8 @@ The alternative named in the task, `@typescript/vfs`, was not needed: the
   table.
 * `tools/package-types.mjs`: the declarations of the packages the runner
   ships (fast-check), as TypeScript resolves them (see "Packages").
+* `tools/stryker.mjs` and `src/stryker/index.ts`: StrykerJS's bundle for
+  Mutate; `src/mutate.ts`: the loop around it (see "Mutation testing").
 * `src/node/`: the runner's `node:test` (`test.ts`), `node:assert`
   (`assert.ts`, with `inspect.ts` for its messages), `process` and
   `node:readline` (`process.ts`), and their types for the server
@@ -214,6 +216,10 @@ The alternative named in the task, `@typescript/vfs`, was not needed: the
   located in the `.ts` file); fast-check (fetched only when imported, a
   passing and a failing property with its shrunk counterexample and cause,
   a TypeScript program using it, another bare import still failing);
+  Mutate (the sample's report and table, NoCoverage for `main.js`, the
+  bundle's instrumenter against the npm package's, a survivor, a hit-limit
+  and a wall-clock timeout, a failing dry run, no test files, TypeScript,
+  and Stop ending the test workers);
   `process.argv`/`exit`/`exitCode`/
   `stdout.write` and `node:readline` (`question`, `readline/promises`,
   `for await`, `'line'` events); the environment; and `preview` (the page
@@ -253,9 +259,9 @@ The alternative named in the task, `@typescript/vfs`, was not needed: the
 
 ## Running
 
-`runner.js` (48.2 KiB raw, 20.1 KiB gzip, 17.6 KiB brotli; 14.2 KiB
-brotli before TypeScript, `process` and `readline`, 8.9 KiB before test
-mode) runs the project in its own module worker, as
+`runner.js` (54.6 KiB raw, 22.6 KiB gzip, 19.8 KiB brotli, of which
+2.2 KiB brotli is Mutate's loop; 14.2 KiB brotli before TypeScript,
+`process` and `readline`, 8.9 KiB before test mode) runs the project in its own module worker, as
 `CONTRACT.md` ("Running a program") describes. Every project file is an ES
 module; each becomes a `blob:` URL whose relative imports (static,
 `export ... from`, and `import()` with a literal string) are rewritten to the
@@ -563,23 +569,102 @@ does with no arguments, in the browser:
   supported. A test that never settles needs Stop, unless it has a
   `timeout`.
 
-## Mutation testing: not available
+## Mutation testing
 
-StrykerJS, the mutation testing tool for JavaScript and TypeScript, cannot
-run in the browser, and nothing here imitates it. Checked with
-`@stryker-mutator/core` 10.1.1 (2026-10-24):
+`{ type: 'mutate' }` (the app's **Mutate** button, for JavaScript and
+TypeScript) is mutation testing with **StrykerJS 10.1.1**: Stryker's own
+instrumenter makes the mutants, Stryker's own clear-text reporter prints the
+report and the score, and the loop between them is the one Stryker's core
+runs with its tap runner (`@stryker-mutator/tap-runner`, its runner for
+`node --test`), with a Web Worker where Stryker starts a `node` process
+(`src/mutate.ts`).
 
-* It is a Node program (`engines: node >=22`): it copies the project into a
-  sandbox directory on disk, and runs the tests of each batch of mutants
-  in worker processes it starts with `child_process.fork`
-  (`dist/src/child-proxy/child-process-proxy.js`), killing and restarting
-  them on timeouts (`tree-kill`).
-* Its test runners are plugins for Jest, Mocha, Jasmine, Karma, Vitest and
-  TAP (which spawns `node` per test file), or the `command` runner, which
-  runs a shell command with `execa`. None of them runs `node:test` in a
-  Web Worker, and the runner here has no processes, no file system and no
-  `child_process` to give them.
+**Why this is Stryker and not an imitation of it.** Stryker's instrumenter
+is a library: it compiles every mutant into the code at once, each behind a
+check of `globalThis.__stryker__.activeMutant` ("mutant switching"), and
+counts in `__stryker__.mutantCoverage` which mutants a test reaches. Its
+test runners are what selects a mutant: the mocha runner sets
+`activeMutant` on that global before running the tests again in the same
+process; the tap runner starts `node` for each test file with the id in an
+environment variable that the instrumented code copies into the global, and
+reads the file's coverage back when it ends. Mutate does what the tap runner
+does, with a fresh worker (this runner, given `type: 'mutant'`) in place of
+the process, and sets the global before the project's modules load. Checked
+against the real thing: `test-run.mjs` requires the bundle's instrumented
+code and mutants to equal the npm package's under Node byte for byte, and
+`app/tests/export.mjs` runs the downloaded samples with the real Stryker
+(`npm run mutate`) and gets the same table as Mutate: for the JavaScript
+sample, 7 killed, 2 without coverage, 77.78 %; for the TypeScript sample,
+7 killed, 4 survived, 9 without coverage, 35.00 % (63.64 % of covered code).
 
-What would be left is Stryker's instrumenter (Babel-based, which could run
-in a worker) driven by a new test loop written for this runner: a new tool,
-not Stryker.
+* **What is mutated:** every `.js`, `.mjs`, `.ts` and `.mts` file that
+  `node --test` would not run as a test file (`*.d.ts` aside). Stryker's
+  default `mutate` looks under `src/` and `lib/`, which these flat projects
+  do not have; Download's `stryker.config.json` says the same as Mutate.
+  Every mutator of Stryker's default set, no `// Stryker disable` needed
+  for anything (it is honoured: the instrumenter reads it).
+* **Dry run.** Each test file runs once over the instrumented project, in a
+  fresh worker. A failing test file ends Mutate with exit 1, its report and
+  Stryker's "There were failed tests in the initial test run."; no test
+  files at all is exit 1 with Test's message.
+* **Plan**, as Stryker's MutantTestPlanner makes it: a mutant no test file
+  reaches is **NoCoverage** and is not run; any other runs only the test
+  files that reach it, in a new worker each, until one fails (bail).
+* **Statuses.** A failing test file **kills** the mutant; none failing,
+  it **survived**. A mutant still running after `1.5 × (net time of its
+  test files) + 5000 ms + overhead` (Stryker's `timeoutFactor` and
+  `timeoutMS`; the overhead is the dry run's time outside the tests, worker
+  start-up included) has its worker terminated and is a **Timeout**, as
+  Stryker kills its child process. One that reaches the switch more than
+  100 times as often as the dry run did (Stryker's hit limit, which catches
+  loops without waiting for the timer) is a Timeout too.
+* **Parallel.** Mutants run in as many workers at a time as Stryker starts
+  processes: `navigator.hardwareConcurrency - 1` above 4, else all.
+* **The report** is Stryker's ClearTextReporter with its default options:
+  the tests and how many mutants each killed or covered, each mutant
+  (`[Survived] EqualityOperator`, `file:line:column`, the original lines
+  after `-` and the mutated ones after `+`, which test files ran, or which
+  killed it), "Ran N tests per mutant on average", and the score table
+  (total and covered score, killed, timeout, survived, no coverage,
+  errors), coloured by Stryker's thresholds (80 and 60). Killed and timed
+  out mutants, which Stryker prints only at log level debug, are printed
+  too. Then one line, `Mutation score: 77.78% (0.2 seconds)`. Progress is
+  shown as the phase, `Mutation testing 3/9 (0 survived, 0 timed out)`.
+* **Exit status** 0 when mutation testing ran, whatever the score
+  (Stryker's default, without `thresholds.break`).
+* **Stop** terminates the worker, and with it every test worker it
+  started (`test-run.mjs` checks that they fall silent).
+
+**Download** writes `stryker.config.json` (tap runner, the same files to
+mutate and to test) and an `npm run mutate` script that runs Stryker 10.1.1
+with its tap runner through `npx` (TypeScript too for a TypeScript project,
+whose `tsconfig.json` Stryker rewrites in its sandbox), so the same report
+can be had with Node.
+
+**Size.** `stryker-10.1.1.js` is 2137 KiB raw, 565 KiB gzip, 435 KiB
+brotli, downloaded only when Mutate runs, once per Mutate (it is the
+instrumenter with Babel 8's parser, traverse, generator and its TypeScript
+and React presets; weapon-regex, the regular-expression mutator, is 753 KiB
+of it raw). `runner.js` grew by 6.4 KiB raw (2.2 KiB brotli) for the loop.
+
+**How it is bundled** (`tools/stryker.mjs`, which says the same at more
+length). Nothing in the packages is changed; Node's modules get browser
+stand-ins at bundle time: `path` is path-browserify; `createRequire` from
+`module` returns the Babel presets and plugins themselves where the
+TypeScript parser asks for their paths (Babel takes either); `node:assert`
+is this runner's own; `os.EOL` is `"\n"`; `fs`, `url`, `util` and
+`child_process`, which only modules of Stryker's utility packages that
+Mutate never calls import, throw if called; Stryker's option schema, which
+its module reads from disk on load, is empty (options are validated by
+Stryker's CLI, not here). The reporter is imported from
+`@stryker-mutator/core`'s `dist/` by path, as the package exports only its
+CLI.
+
+**Limits.** No `stryker.config.json` is read in the browser: the options
+are Stryker's defaults (no `thresholds.break`, no `ignoreStatic`, no
+incremental mode, no HTML report). Coverage is per test file, as with the
+tap runner (Stryker's mocha or jest runners know individual tests). Mutants
+that make code fail to type check are not filtered out (Stryker's
+TypeScript checker plugin is not here), as with Stryker without that
+plugin.
+

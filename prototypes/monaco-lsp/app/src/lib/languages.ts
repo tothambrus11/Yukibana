@@ -36,6 +36,13 @@ export interface Language {
 	 */
 	tests?: boolean;
 	/**
+	 * Whether the runner also takes `type: 'mutate'` (packs/CONTRACT.md,
+	 * "Running a program"): mutation testing of the project against its
+	 * tests, with a report and a mutation score, with the same messages as a
+	 * run. Only with `tests`.
+	 */
+	mutates?: boolean;
+	/**
 	 * The directory under `static/packs/` whose server and runner serve this
 	 * language, when it is not `id`: TypeScript and web projects use the
 	 * JavaScript pack's.
@@ -139,6 +146,7 @@ def test_points_are_immutable() -> None:
 		extension: '.js',
 		runs: true,
 		tests: true,
+		mutates: true,
 		sample: {
 			'main.js': `// @ts-check
 import { Point, distance } from './geometry.js';
@@ -233,6 +241,7 @@ describe('distance', () => {
 		extension: '.ts',
 		runs: true,
 		tests: true,
+		mutates: true,
 		sample: {
 			'main.ts': `import { Point, distance, type Shape, area } from './geometry.ts';
 

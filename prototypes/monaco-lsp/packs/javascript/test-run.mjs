@@ -504,6 +504,117 @@ check('preview: in a sandboxed srcdoc iframe under COEP the module runs and its 
 const broken = await page_preview({ 'index.html': '<script type="module" src="main.ts"></script>', 'main.ts': "import './missing.ts';\n" });
 check('preview: a missing import is an error and no page', broken.html === null && /cannot find module 'missing\.ts'/.test(broken.errors.join()), JSON.stringify(broken.errors));
 
+// 9. Mutate (`type: 'mutate'`): mutation testing with StrykerJS's instrumenter
+// and reporter, every test file run in a fresh worker per mutant.
+const mutateRun = async (files, entry = 'main.js', timeoutMs = 120000) => stripped(await page.evaluate(([f, e, t]) => window.runProgram('mutate', f, e, [], t), [files, entry, timeoutMs]));
+const fetchedStryker = () => served.some((p) => /\/stryker-[\d.]+\.js$/.test(p));
+check('mutate: Stryker is not fetched by runs and tests', !fetchedStryker(), JSON.stringify(served.filter((p) => /stryker/.test(p))));
+const m1 = await mutateRun(SAMPLE);
+check(
+	'mutate: the sample is mutation tested, exit 0: geometry.js mutants killed by its test file, with file:line:column, the code and the mutated code',
+	m1.code === 0 && m1.stdout.includes('[Killed] ArithmeticOperator\ngeometry.js:30:21\n-     return Math.hypot(a.x - b.x, a.y - b.y);\n+     return Math.hypot(a.x + b.x, a.y - b.y);\nKilled by: tests/geometry.test.js\n'),
+	`code ${m1.code}\n${block(m1.stdout)}\n${block(m1.stderr)}`,
+);
+check('mutate: main.js, which no test imports, has its mutants reported as NoCoverage', m1.stdout.includes('[NoCoverage] StringLiteral\nmain.js:6:13\n-   console.log(`${a} to ${b}: ${distance(a, b)}`);\n+   console.log(``);\n'), short(m1.stdout, 400));
+check(
+	"mutate: Stryker's score table, in its colours: total and covered score, killed, timeout, survived, no coverage, errors",
+	m1.stdout.includes('File         |  total | covered | # killed | # timeout | # survived | # no cov | # errors |') &&
+		m1.stdout.includes('All files    |  77.78 |  100.00 |        7 |         0 |          0 |        2 |        0 |') &&
+		m1.raw.stdout.includes('All files    |\x1b[33m  77.78 \x1b[39m|\x1b[32m  100.00 \x1b[39m|') &&
+		/Initial test run succeeded\. Ran 1 tests in .* \(net \d+ ms, overhead \d+ ms\)\./.test(m1.stdout),
+	block(m1.stdout.slice(m1.stdout.indexOf('Ran '))),
+);
+check('mutate: Stryker is fetched for Mutate, once', served.filter((p) => /\/stryker-[\d.]+\.js$/.test(p)).length === 1, JSON.stringify(served.filter((p) => /stryker/.test(p))));
+check('mutate: progress is shown as phases, as Stryker shows it', m1.phases.includes('Instrumenting') && m1.phases.includes('Mutation testing 9/9 (0 survived, 0 timed out)'), JSON.stringify(m1.phases));
+
+// What the browser's bundle instruments must be what the npm package
+// instruments under Node, byte for byte (tools/stryker.mjs replaces Node's
+// modules; this is the check that it changed nothing).
+const INSTRUMENT = [
+	{ name: 'geometry.js', mutate: true, content: SAMPLE['geometry.js'] },
+	{ name: 'shapes.ts', mutate: true, content: "export type Shape = { kind: 'circle'; r: number } | { kind: 'square'; side: number };\nexport function area(s: Shape): number {\n  switch (s.kind) {\n    case 'circle': return Math.PI * s.r ** 2;\n    case 'square': return s.side ** 2;\n  }\n}\nexport const names = (xs: string[]) => xs.filter((x) => /^a+b?$/.test(x) && x.length > 1).map((x) => x?.trim() ?? '');\nexport class Box { constructor(readonly w: number) {} get double(): number { return this.w * 2; } }\n" },
+];
+const INSTRUMENT_OPTIONS = { plugins: null, excludedMutations: [], ignorers: [] };
+const LOG = { debug() {}, info() {}, warn() {}, error() {}, trace() {}, isDebugEnabled: () => false, isTraceEnabled: () => false, isInfoEnabled: () => false };
+const { Instrumenter } = await import('@stryker-mutator/instrumenter');
+const inNode = JSON.stringify(await new Instrumenter(LOG).instrument(INSTRUMENT, INSTRUMENT_OPTIONS));
+const strykerFile = served.find((p) => /\/stryker-[\d.]+\.js$/.test(p));
+const inBrowser = await page.evaluate(
+	async ([url, files, options]) => {
+		// The bundle expects the runner's `process` (Babel reads process.env, path-browserify process.cwd()).
+		globalThis.process ??= { env: {}, cwd: () => '/workspace' };
+		const { Instrumenter } = await import(url);
+		const log = { debug() {}, info() {}, warn() {}, error() {}, trace() {}, isDebugEnabled: () => false, isTraceEnabled: () => false, isInfoEnabled: () => false };
+		return JSON.stringify(await new Instrumenter(log).instrument(files, options));
+	},
+	[strykerFile, INSTRUMENT, INSTRUMENT_OPTIONS],
+);
+check("mutate: the bundle's instrumenter gives the npm package's mutants and instrumented code, byte for byte (JavaScript and TypeScript)", inBrowser === inNode, `${JSON.parse(inNode).mutants.length} mutants; ${inBrowser === inNode ? '' : `browser ${short(inBrowser, 300)} node ${short(inNode, 300)}`}`);
+
+const COUNTER = {
+	'counter.js': 'export function sumBelow(n) {\n  let sum = 0;\n  for (let i = 0; i < n; i++) sum += i;\n  return sum;\n}\n\nexport function isAdult(age) {\n  return age >= 18;\n}\n',
+	'tests/counter.test.js': "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { sumBelow, isAdult } from '../counter.js';\n\ntest('sums below 4', () => assert.equal(sumBelow(4), 6));\ntest('30 is adult, 3 is not', () => {\n  assert.equal(isAdult(30), true);\n  assert.equal(isAdult(3), false);\n});\n",
+};
+const m2 = await mutateRun(COUNTER, 'counter.js');
+check(
+	'mutate: a boundary the tests miss survives, listed with the test file that ran',
+	m2.code === 0 && m2.stdout.includes('[Survived] EqualityOperator\ncounter.js:8:10\n-     return age >= 18;\n+     return age > 18;\nTests ran:\n    tests/counter.test.js\n'),
+	block(m2.stdout),
+);
+check(
+	'mutate: i-- in a for loop never ends; the hit limit stops it and it counts as a Timeout',
+	m2.stdout.includes('[Timeout] UpdateOperator\ncounter.js:3:26\n-     for (let i = 0; i < n; i++) sum += i;\n+     for (let i = 0; i < n; i--) sum += i;\n') && / timeout \|[\s\S]*All files[^\n]*\|\s+1 \|\s+1 \|\s+0 \|\s+0 \|\n/.test(m2.stdout),
+	block(m2.stdout.slice(m2.stdout.indexOf('Ran '))),
+);
+const m3 = await mutateRun({ ...COUNTER, 'counter.js': COUNTER['counter.js'].replace('sum += i', 'sum += i + 1') }, 'counter.js');
+check('mutate: a failing test stops it before any mutant runs, exit 1, with the failing report', m3.code === 1 && /There were failed tests in the initial test run\./.test(m3.stdout) && /✖ sums below 4/.test(m3.stdout) && !/\[Killed\]/.test(m3.stdout), block(m3.stdout));
+const m4 = await mutateRun({ 'main.js': 'console.log(1);\n' });
+check('mutate: without test files, exit 1 and the same message as Test', m4.code === 1 && /No test files found/.test(m4.stderr), short(m4.stderr));
+const m5 = await mutateRun(TS_SAMPLE, 'main.ts');
+check('mutate: TypeScript files are mutated as TypeScript, then stripped as Test strips them', m5.code === 0 && /^ geometry\.ts +\|/m.test(m5.stdout) && /\[Killed\] [A-Za-z]+\ngeometry\.ts:\d+:\d+\n/.test(m5.stdout), block(m5.stdout.slice(m5.stdout.indexOf('Ran '))));
+
+const m6 = await mutateRun({
+	'delay.js': 'export function delay(ms) {\n  return new Promise((resolve) => setTimeout(resolve, ms));\n}\n',
+	'tests/delay.test.js': "import test from 'node:test';\nimport { delay } from '../delay.js';\ntest('waits', async () => {\n  await delay(5);\n});\n",
+}, 'delay.js');
+check(
+	'mutate: a mutant whose promise never settles runs past its timeout (1.5 × net + 5000 ms + overhead); its worker is terminated and it counts as a Timeout',
+	m6.code === 0 && m6.stdout.includes('[Timeout] ArrowFunction\ndelay.js:2:22\n-     return new Promise((resolve) => setTimeout(resolve, ms));\n+     return new Promise(() => undefined);\n') && m6.ms > 5000,
+	`${m6.ms} ms\n${block(m6.stdout)}`,
+);
+
+// Stop terminates the worker the app started; the test workers it started
+// end with it. The test file says it is alive on a BroadcastChannel while it
+// runs, from inside the test workers, and must fall silent after Stop.
+const ALIVE = {
+	'tick.js': 'export const tick = (i) => i + 1;\n',
+	'tests/tick.test.js': "import test from 'node:test';\nimport assert from 'node:assert';\nimport { tick } from '../tick.js';\nconst channel = new BroadcastChannel('yukibana-alive');\ntest('ticks', async () => {\n  for (let i = 0; i < 20; i++) {\n    channel.postMessage(i);\n    assert.equal(tick(i), i + 1);\n    await new Promise((r) => setTimeout(r, 50));\n  }\n});\n",
+};
+const heard = await page.evaluate(
+	(f) =>
+		new Promise((done) => {
+			const channel = new BroadcastChannel('yukibana-alive');
+			let messages = 0;
+			channel.onmessage = () => messages++;
+			const w = new Worker('/packs/javascript/runner.js', { type: 'module' });
+			w.onmessage = ({ data: m }) => {
+				if (m.type !== 'phase' || !/^Mutation testing/.test(m.text)) return;
+				// Mutants are running: let them run a little, then Stop.
+				setTimeout(() => {
+					const whileRunning = messages;
+					w.terminate();
+					setTimeout(() => {
+						const afterStop = messages;
+						setTimeout(() => done({ whileRunning, afterStop, later: messages }), 1500);
+					}, 100);
+				}, 400);
+			};
+			w.postMessage({ type: 'mutate', files: f, entry: 'tick.js', stdin: null });
+		}),
+	ALIVE,
+);
+check('mutate: Stop ends the test workers it started too: they fall silent', heard.whileRunning > 0 && heard.later === heard.afterStop, JSON.stringify(heard));
+
 check('no page errors', pageErrors.length === 0, JSON.stringify(pageErrors));
 console.log(failures ? `${failures} check(s) failed` : 'all checks passed');
 await browser.close();

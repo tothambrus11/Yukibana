@@ -47,8 +47,8 @@ const BUILD: Record<LanguageId, BuildFiles> = {
 	cpp: { paths: ['CMakeLists.txt'], generate: (p) => ({ 'CMakeLists.txt': cmakeLists(p.files, p.language.entry) }) },
 	swift: { paths: ['Package.swift'], generate: (p) => ({ 'Package.swift': packageSwift(p.files, p.paths) }) },
 	python: { paths: ['pyproject.toml'], generate: (p) => ({ 'pyproject.toml': pyprojectToml(p.files) }) },
-	javascript: { paths: ['package.json'], generate: (p) => ({ 'package.json': packageJson(p.language.entry, p.files) }) },
-	typescript: { paths: ['package.json'], generate: (p) => ({ 'package.json': typescriptPackageJson(p.language.entry, p.files) }) },
+	javascript: { paths: ['package.json', 'stryker.config.json'], generate: (p) => ({ 'package.json': packageJson(p.language.entry, p.files), 'stryker.config.json': strykerConfig() }) },
+	typescript: { paths: ['package.json', 'stryker.config.json'], generate: (p) => ({ 'package.json': typescriptPackageJson(p.language.entry, p.files), 'stryker.config.json': strykerConfig() }) },
 	web: { paths: ['package.json'], generate: () => ({ 'package.json': vitePackageJson() }) },
 	scala: { paths: ['build.sbt', 'project/build.properties'], generate: (p) => ({ 'build.sbt': buildSbt(p.files), 'project/build.properties': `sbt.version=${SBT_VERSION}\n` }) },
 	php: { paths: ['composer.json', 'phpunit.xml'], generate: (p) => ({ 'composer.json': composerJson(p.language.entry, p.files), 'phpunit.xml': phpunitXml(p.files) }) },
@@ -502,12 +502,48 @@ function shippedPackages(files: Files): Record<string, string> {
 	return uses ? { 'fast-check': `^${FAST_CHECK_VERSION}` } : {};
 }
 
+/** The StrykerJS whose instrumenter and reporter the browser's Mutate runs (packs/javascript/package.json). */
+const STRYKER_VERSION = '10.1.1';
+
+/**
+ * `npm run mutate`: StrykerJS and its tap runner, fetched by npx the first
+ * time rather than installed with the project, as they are large (some 180
+ * packages) and only this script uses them. TypeScript too for a project
+ * with a tsconfig.json, which Stryker's core rewrites in its sandbox.
+ */
+function mutateScript(typescript: boolean): string {
+	const packages = [`@stryker-mutator/core@${STRYKER_VERSION}`, `@stryker-mutator/tap-runner@${STRYKER_VERSION}`, ...(typescript ? [`typescript@${TYPESCRIPT_VERSION}`] : [])];
+	return `npx --yes ${packages.map((p) => `--package ${p}`).join(' ')} stryker run`;
+}
+
+/** File names `node --test` runs (Node 22's defaults), as a minimatch pattern for Stryker. */
+const NODE_TEST_FILES = '{**/@(*.test|*[-_]test|test-*|test).@(js|mjs|ts|mts),**/test/**/*.@(js|mjs|ts|mts)}';
+
+/**
+ * stryker.config.json: StrykerJS configured as the browser's Mutate runs it
+ * (packs/javascript/README.md, "Mutation testing"): the tap runner, which
+ * runs each file `node --test` would find as a process of its own, and every
+ * other JavaScript or TypeScript file mutated (Stryker's default looks in
+ * `src/` and `lib/` only). Each pattern is one, braces and all, so that
+ * Stryker does not warn about a part of it that matches nothing.
+ */
+export function strykerConfig(): string {
+	const json = {
+		$schema: './node_modules/@stryker-mutator/core/schema/stryker-schema.json',
+		testRunner: 'tap',
+		tap: { testFiles: [NODE_TEST_FILES] },
+		mutate: ['**/*.@(js|mjs|ts|mts)', `!{**/*.d.@(ts|mts),${NODE_TEST_FILES.slice(1, -1)}}`],
+		reporters: ['clear-text', 'progress', 'html'],
+	};
+	return JSON.stringify(json, null, 2) + '\n';
+}
+
 /**
  * package.json for Node: ES modules (the browser runs every .js as one),
- * `npm start` runs the entry file and `npm test` is `node --test`, whose
- * file discovery the browser's Test copies. Dependencies only for what the
- * browser ships and the project imports (fast-check, for the tests, so a
- * development dependency).
+ * `npm start` runs the entry file, `npm test` is `node --test`, whose file
+ * discovery the browser's Test copies, and `npm run mutate` is StrykerJS, as
+ * the browser's Mutate. Dependencies only for what the browser ships and the
+ * project imports (fast-check, for the tests, so a development dependency).
  */
 export function packageJson(entry: string, files: Files = {}): string {
 	const dev = shippedPackages(files);
@@ -517,7 +553,7 @@ export function packageJson(entry: string, files: Files = {}): string {
 		private: true,
 		type: 'module',
 		main: entry,
-		scripts: { start: `node ${entry}`, test: 'node --test' },
+		scripts: { start: `node ${entry}`, test: 'node --test', mutate: mutateScript(false) },
 		engines: { node: '>=22' },
 		...(Object.keys(dev).length ? { devDependencies: dev } : {}),
 	};
@@ -541,7 +577,7 @@ export function typescriptPackageJson(entry: string, files: Files = {}): string 
 		private: true,
 		type: 'module',
 		main: entry,
-		scripts: { start: `node ${entry}`, test: 'node --test' },
+		scripts: { start: `node ${entry}`, test: 'node --test', mutate: mutateScript(true) },
 		engines: { node: '>=22.18' },
 		...(Object.keys(dev).length ? { devDependencies: dev } : {}),
 	};
@@ -1002,11 +1038,15 @@ export function haskellCabal(files: Files, entry: string): string {
 
 // ---- Every language: README.md and .gitignore
 
-/** The README's Test section for a Node project: `node --test`, after `npm install` when it uses fast-check. */
+/**
+ * The README's Test section for a Node project: `node --test`, after `npm
+ * install` when it uses fast-check, and mutation testing with StrykerJS.
+ */
 function testSection(files: Files): string {
-	return Object.keys(shippedPackages(files)).length
+	const test = Object.keys(shippedPackages(files)).length
 		? '## Test\n\nThe tests use `node:test` and fast-check (property-based tests):\n\n```sh\nnpm install               # fast-check\nnode --test               # or: npm test\n```'
 		: '## Test\n\nThe tests use `node:test`:\n\n```sh\nnode --test               # or: npm test\n```';
+	return `${test}\n\n## Mutation testing\n\nStrykerJS ${STRYKER_VERSION}, as Mutate runs it in Yukibana, configured in \`stryker.config.json\` (its tap runner runs each test file in a process of its own):\n\n\`\`\`sh\nnpm run mutate            # npx fetches Stryker the first time\n\`\`\`\n\nThe report is printed and written to \`reports/mutation/mutation.html\`.`;
 }
 
 /** How to build, run and test with each language's tools, as Markdown sections. */
@@ -1136,8 +1176,8 @@ const IGNORED: Record<LanguageId, readonly string[]> = {
 	cpp: ['build/', 'cmake-build-*/', 'out/', '.cache/'],
 	swift: ['.build/', '.swiftpm/', 'xcuserdata/', 'DerivedData/'],
 	python: ['__pycache__/', '*.py[cod]', '.venv/', '.pytest_cache/'],
-	javascript: ['node_modules/'],
-	typescript: ['node_modules/'],
+	javascript: ['node_modules/', '.stryker-tmp/', 'reports/'],
+	typescript: ['node_modules/', '.stryker-tmp/', 'reports/'],
 	web: ['node_modules/', 'dist/'],
 	scala: ['target/', 'project/target/', 'project/project/', '.bsp/', '.bloop/', '.metals/', 'metals.sbt'],
 	php: ['vendor/', '.phpunit.cache/', '.phpunit.result.cache'],

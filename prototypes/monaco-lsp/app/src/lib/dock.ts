@@ -133,6 +133,11 @@ class EditorRenderer implements IContentRenderer {
 			run: () => this.workspace.run('test'),
 		});
 		editor.addAction({
+			id: 'yukibana.mutate',
+			label: 'Mutation Test Project',
+			run: () => this.workspace.run('mutate'),
+		});
+		editor.addAction({
 			id: 'yukibana.download',
 			label: 'Download Project for an IDE',
 			run: () => this.workspace.download(),

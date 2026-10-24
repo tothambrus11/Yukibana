@@ -142,6 +142,8 @@ async function javascript(name, files) {
 	if (!npmInstall(name, dir)) return;
 	step(`${name}: npm start prints the distance`, 'npm', ['start', '--silent'], dir, '(0, 0) to (3, 4): 5');
 	step(`${name}: npm test runs node --test`, 'npm', ['test', '--silent'], dir, 'pass 4');
+	// The browser's Mutate prints this very row for the sample (packs/javascript/test-run.mjs).
+	step(`${name}: npm run mutate runs StrykerJS with its tap runner, with the score Mutate gives`, 'npm', ['run', 'mutate', '--silent'], dir, 'All files    |  77.78 |  100.00 |        7 |         0 |          0 |        2 |        0 |');
 }
 
 async function typescript(name, files) {
@@ -153,6 +155,7 @@ async function typescript(name, files) {
 	if (!npmInstall(name, dir)) return;
 	step(`${name}: npm start runs main.ts with Node's type stripping`, 'npm', ['start', '--silent'], dir, '(0, 0) to (3, 4): 5');
 	step(`${name}: npm test runs node --test, which finds tests/*.test.ts`, 'npm', ['test', '--silent'], dir, 'pass 4');
+	step(`${name}: npm run mutate runs StrykerJS over the .ts files`, 'npm', ['run', 'mutate', '--silent'], dir, ' geometry.ts |');
 }
 
 async function web(name, files) {

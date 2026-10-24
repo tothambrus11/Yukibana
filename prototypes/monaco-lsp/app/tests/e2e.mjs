@@ -25,9 +25,9 @@ const build = join(here, '..', 'build');
  */
 const CASES = {
 	python: { output: 'Point(x=0, y=0) to Point(x=3, y=4): 5.0', testOutput: '6 passed', file: 'main.py', error: '\nundefined_name_xyz\n', access: '\nPoint(1, 2).', member: 'norm', definition: 'distance', definitionFile: 'geometry.py', hover: 'Point' },
-	javascript: { output: '(0, 0) to (3, 4): 5', testOutput: 'ℹ pass 4', file: 'main.js', error: '\na.nope();\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'geometry.js', hover: 'Point' },
+	javascript: { output: '(0, 0) to (3, 4): 5', testOutput: 'ℹ pass 4', mutateOutput: 'All files    |  77.78 |  100.00 |', file: 'main.js', error: '\na.nope();\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'geometry.js', hover: 'Point' },
 	// TypeScript and web projects are served by the JavaScript pack (`pack`).
-	typescript: { pack: 'javascript', output: '(0, 0) to (3, 4): 5', testOutput: 'ℹ pass 4', file: 'main.ts', error: '\nconst wrong: number = "no";\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'geometry.ts', hover: 'Point' },
+	typescript: { pack: 'javascript', output: '(0, 0) to (3, 4): 5', testOutput: 'ℹ pass 4', mutateOutput: ' geometry.ts |', file: 'main.ts', error: '\nconst wrong: number = "no";\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'geometry.ts', hover: 'Point' },
 	web: { pack: 'javascript', file: 'main.ts', error: '\nconst wrong: number = "no";\n', access: '\ncounter.', member: 'increment', definition: 'Counter', definitionFile: 'counter.ts', hover: 'Counter' },
 	cpp: { output: '5.000000', testOutput: '[  PASSED  ] 3 tests.', file: 'main.cpp', error: '\nint broken = undeclared_xyz;\n', access: '\nvoid f(Point p) { p.', member: 'norm', definition: 'distance', definitionFile: 'geometry', hover: 'Point' },
 	swift: { output: 'to', testOutput: 'Executed 2 tests, with 0 failures', file: 'main.swift', error: '\nlet x: Int = "no"\n', access: '\nb.', member: 'norm', definition: 'distance', definitionFile: 'Geometry.swift', hover: 'Point' },
@@ -166,6 +166,19 @@ async function run(language, c) {
 		// a copy yields, has no escape sequences left.
 		const colours = await page.locator('.terminal pre span[style*="color"]').count();
 		check(!shown.includes('\x1b') && (language === 'swift' ? colours === 0 : colours > 0), `the test report's colours are rendered, its text is plain (${colours} coloured spans)`);
+	}
+
+	// Mutate (StrykerJS, packs/javascript/README.md "Mutation testing"): the
+	// button is there only for languages whose runner mutation-tests, and
+	// ends with Stryker's score table.
+	const mutateButton = page.locator('header button', { hasText: /^Mutate$/ });
+	check((await mutateButton.count()) === (c.mutateOutput ? 1 : 0), `the Mutate button is ${c.mutateOutput ? 'shown' : 'absent'}`);
+	if (c.mutateOutput && existsSync(join(build, 'packs', c.pack ?? language, 'runner.js'))) {
+		await mutateButton.click();
+		const status = page.locator('.terminal .status');
+		const ended = await status.filter({ hasText: /Exited|Stopped/ }).waitFor({ timeout: 240_000 }).then(() => true, () => false);
+		const shown = (await page.locator('.terminal pre').textContent()) ?? '';
+		check(ended && /code 0/.test((await status.textContent()) ?? '') && shown.includes(c.mutateOutput) && shown.includes('% Mutation score'), `Mutate mutation-tests the sample: "${c.mutateOutput}" (${(await status.textContent())?.trim()}: ${JSON.stringify(shown.slice(-900))})`);
 	}
 
 	if (language === 'javascript') await settings(page, check);

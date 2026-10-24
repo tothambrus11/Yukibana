@@ -94,6 +94,9 @@
 		{#if language.tests}
 			<button class="button" onclick={() => workspace.run('test')} title="Run the project's tests (Ctrl+Shift+Enter)">Test</button>
 		{/if}
+		{#if language.mutates}
+			<button class="button" onclick={() => workspace.run('mutate')} title="Mutation testing: change the code in small ways and check that the tests notice">Mutate</button>
+		{/if}
 	{/if}
 	{#if workspace.language === 'cpp'}
 		<!-- What tests/ includes is the framework; choosing one converts the sample's tests or adds a sample test. -->

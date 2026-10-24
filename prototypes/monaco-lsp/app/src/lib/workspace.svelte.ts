@@ -7,7 +7,7 @@
 import { monaco } from './monaco';
 import { LanguageClient, type ClientState, type LoadingProgress, type LogLevel } from './lsp/client';
 import { isLanguageId, languageOf, LANGUAGES, packOf, type LanguageId } from './languages';
-import { Runner } from './run.svelte';
+import { Runner, type RunMode } from './run.svelte';
 import { Preview } from './preview';
 import { exportProject } from './export';
 import { zip } from './zip';
@@ -138,11 +138,12 @@ export class Workspace {
 	/**
 	 * Runs the project: the language's entry file when the project has one,
 	 * else the file shown; `mode` 'test' runs its tests instead (languages with
-	 * `tests`). Every file goes along, as last edited.
+	 * `tests`), 'mutate' mutation-tests the project against them (languages
+	 * with `mutates`). Every file goes along, as last edited.
 	 */
-	run(mode: 'run' | 'test' = 'run'): void {
+	run(mode: RunMode = 'run'): void {
 		const language = languageOf(this.language);
-		if (mode === 'run' ? !language.runs : !language.tests) return;
+		if (mode === 'run' ? !language.runs : mode === 'test' ? !language.tests : !language.mutates) return;
 		if (mode === 'run' && language.preview) {
 			this.host?.showPreview();
 			this.host?.showTerminal();

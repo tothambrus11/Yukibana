@@ -34,6 +34,12 @@ type FromRunner =
 	| { type: 'stdin' }
 	| { type: 'exit'; code: number };
 
+/**
+ * What a runner is asked to do: run the program, run its tests, or
+ * mutation-test it (languages with `tests` and `mutates`).
+ */
+export type RunMode = 'run' | 'test' | 'mutate';
+
 /** Bytes of the stdin buffer's data area, after its two Int32 words. */
 const STDIN_BYTES = 64 * 1024;
 /** More terminal text than this drops the oldest; a runaway loop must not exhaust memory. */
@@ -65,10 +71,10 @@ export class Runner {
 	/**
 	 * Starts `entry` of `files` with the runner of the pack `language` (its
 	 * directory under `packs/`), stopping any program still running; `mode`
-	 * 'test' runs the project's tests instead. Output from the previous run
-	 * is cleared.
+	 * 'test' runs the project's tests instead, 'mutate' mutation-tests it.
+	 * Output from the previous run is cleared.
 	 */
-	start(language: string, files: Files, entry: string, mode: 'run' | 'test' = 'run'): void {
+	start(language: string, files: Files, entry: string, mode: RunMode = 'run'): void {
 		this.stop(false);
 		this.chunks = [];
 		this.chars = 0;

@@ -48,10 +48,13 @@ tests in `tests/` (`Tests/` for Swift): pytest (with Hypothesis for
 property-based tests), `node:test` (with fast-check), Rust's `#[test]`
 (with quickcheck), GoogleTest,
 doctest or Catch2 (chosen next to Test), XCTest, or JUnit Jupiter (Java, in
-`src/test/java/`); Scala has no Test yet, and Kotlin neither Run nor Test. Download saves the project as
+`src/test/java/`); Scala has no Test yet, and Kotlin neither Run nor Test.
+Mutate, for JavaScript and TypeScript, is mutation testing with StrykerJS
+(its instrumenter and reporter, each test file run once per mutant in a
+worker; packs/javascript/README.md, "Mutation testing"). Download saves the project as
 `<language>-project.zip` for an IDE: its files as they are, at the same
 paths, plus the build files it lacks (CMakeLists.txt, Package.swift,
-pyproject.toml, package.json, build.sbt, pom.xml (Java) or
+pyproject.toml, package.json (with stryker.config.json), build.sbt, pom.xml (Java) or
 build.gradle.kts (Kotlin), set up for the flat layout), a
 README.md with the commands and a .gitignore.
 
@@ -65,7 +68,7 @@ no DOM and no npm packages except fast-check, for property-based tests
 
 | Language | Language server | Runs with | Download to edit | More to run |
 | --- | --- | --- | --- | --- |
-| JavaScript | TypeScript 6.0 language service | the browser, as ES modules | 1.1 MB | none; fast-check 48 KB when imported |
+| JavaScript | TypeScript 6.0 language service | the browser, as ES modules | 1.1 MB | none; fast-check 48 KB when imported; StrykerJS 0.44 MB for Mutate |
 | TypeScript | the JavaScript pack's server, `strict` | the same, types stripped as `node main.ts` does | (JavaScript's) | 3 KB (strip.js; TypeScript is the server's file) |
 | Web (HTML, CSS, TypeScript) | the JavaScript pack's server for TypeScript; Monaco's own HTML and CSS (SCSS, Less) services: completion, hover, validation, formatting, colours | a live-reloading Preview panel (sandboxed iframe) | (JavaScript's), plus the CSS worker 0.2 MB and, once an HTML file is open, the HTML worker 0.15 MB | as TypeScript |
 | Python | basedpyright 1.40 | Pyodide 314.0.7 (Python 3.14) | 1.1 MB | 4.5 MB |
@@ -113,7 +116,7 @@ serves from, and asks the browser for persistent storage first.
 | --- | --- | --- |
 | The app (precached) | 1.2 MB | 4.9 MB |
 | The app's lazy files | 0.5 MB | 2.8 MB |
-| Every pack (Python 5.9, JavaScript 1.1, C++ 19.9, Swift 39.5, Scala 6.0, Rust 32.5, PHP 7.9, Java 4.4, Kotlin 0.3) | 117 MB | 540 MB |
+| Every pack (Python 5.9, JavaScript 1.6, C++ 19.9, Swift 39.5, Scala 6.0, Rust 32.5, PHP 7.9, Java 4.4, Kotlin 0.3) | 117 MB | 540 MB |
 
 A new build installs in the background and the top bar offers "New
 version: reload"; until then the tab keeps the build it runs. Its app cache

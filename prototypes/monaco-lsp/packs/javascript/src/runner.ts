@@ -32,6 +32,12 @@
  * of the project's modules, runs their tests one after another and prints a
  * report like Node's spec reporter; exit 0 only when every test passed.
  *
+ * `type: 'mutate'` runs mutation testing with StrykerJS (src/mutate.ts):
+ * its instrumenter, loaded only then, compiles every mutant into the
+ * project, and each test file runs once per mutant in a fresh worker that
+ * is this runner again, given `type: 'mutant'`: a Test of that one file,
+ * whose report it keeps and answers with, instead of printing it.
+ *
  * `type: 'preview'` is this pack's addition to the contract, for web
  * projects: the worker stays alive and answers each request with the page
  * (`index.html`) as one self-contained document for a sandboxed iframe,
@@ -43,7 +49,9 @@ import type * as TS from 'typescript';
 import { legacy as assertLegacy, setSources, strict as assertStrict } from './node/assert';
 import { createProcess, createReadline, ExitSignal, type Io } from './node/process';
 import * as nodeTest from './node/test';
+import { mutate, NAMESPACE, type MutantResult, type MutantRun } from './mutate';
 import type * as Strip from './strip';
+import type * as Stryker from './stryker/index';
 
 // Injected by build.sh: the TypeScript file next to this script (the one the
 // language server downloads) and its uncompressed size, for the progress bar.
@@ -56,6 +64,9 @@ declare const __TS_SIZE__: number;
  * `packageUrl`.
  */
 declare const __PACKAGES__: Record<string, string>;
+/** Injected by build.sh: StrykerJS's bundle (src/stryker/index.ts) next to this script, and its size. */
+declare const __STRYKER_FILE__: string;
+declare const __STRYKER_SIZE__: number;
 
 type ToApp =
 	| { type: 'loading'; label: string; loaded: number; total: number }
@@ -80,7 +91,7 @@ interface Page {
 }
 
 interface Run {
-	type: 'run' | 'test';
+	type: 'run' | 'test' | 'mutate';
 	files: Record<string, string>;
 	entry: string;
 	stdin: SharedArrayBuffer | null;
@@ -97,24 +108,48 @@ interface Preview {
 	entry: string;
 }
 
-/** Messages after the run has ended are dropped: `process.exit()` stops the program's output there. */
+/**
+ * In a mutant run's worker (`type: 'mutant'`), what the Test of its file
+ * printed, and how long its tests took; null in any other run.
+ */
+let capture: { text: string; net: number } | null = null;
+
+/**
+ * Messages after the run has ended are dropped: `process.exit()` stops the
+ * program's output there. In a mutant run, output is kept and the exit
+ * becomes the result (src/mutate.ts).
+ */
 const send = (message: ToApp) => {
-	if (!exited) postMessage(message);
+	if (exited) return;
+	if (!capture) {
+		postMessage(message);
+		return;
+	}
+	if (message.type === 'stdout' || message.type === 'stderr') capture.text += message.text;
+	else if (message.type === 'exit') {
+		const ns = (globalThis as Record<string, unknown>)[NAMESPACE] as { mutantCoverage?: { static?: Record<string, number> }; hitCount?: number } | undefined;
+		postMessage({ type: 'mutant-result', code: message.code, report: capture.text, net: capture.net, coverage: ns?.mutantCoverage?.static ?? {}, hitCount: ns?.hitCount ?? null } satisfies MutantResult);
+	}
 };
 
 /** A problem in the project itself (a missing or circular import), reported without a stack. */
 class ProjectError extends Error {}
 
-onmessage = (e: MessageEvent<Run | Preview>) => {
+onmessage = (e: MessageEvent<Run | Preview | MutantRun>) => {
 	const m = e.data;
 	// A preview worker serves one request after another until the app terminates it.
 	if (m.type === 'preview') {
 		void preview(m);
 		return;
 	}
-	if (m.type !== 'run' && m.type !== 'test') return;
+	if (m.type === 'mutant') {
+		onmessage = null;
+		void runMutant(m);
+		return;
+	}
+	if (m.type !== 'run' && m.type !== 'test' && m.type !== 'mutate') return;
 	onmessage = null;
-	void (m.type === 'test' ? runTests(m) : run(m));
+	void (m.type === 'test' ? runTests(m) : m.type === 'mutate' ? runMutate(m) : run(m));
 };
 
 /** The real timers, before `trackTimers` wraps them: test timeouts are not the program's timers. */
@@ -179,12 +214,18 @@ function isTestFile(path: string): boolean {
 	return /(^|\/)test\//.test(path) || /^(.+[.\-_]test|test-.*|test)\.m?[jt]s$/.test(name);
 }
 
-async function runTests({ files, stdin, entry, args }: Run): Promise<void> {
+const NO_TEST_FILES = 'No test files found: node --test looks for *.test.js, *-test.js, *_test.js, test-*.js, test.js and test/**/*.js (and the same with .mjs, .ts and .mts).\n';
+
+/**
+ * Test, as `node --test`; with `only`, the Test of those files alone (a
+ * mutant run), whose sources are already JavaScript.
+ */
+async function runTests({ files, stdin, entry, args }: Run, only?: string[]): Promise<void> {
 	installConsole();
 	installProcess(installPrompt(stdin), entry, args ?? []);
-	const tests = Object.keys(files).filter(isTestFile).sort();
+	const tests = only ?? Object.keys(files).filter(isTestFile).sort();
 	if (tests.length === 0) {
-		send({ type: 'stderr', text: 'No test files found: node --test looks for *.test.js, *-test.js, *_test.js, test-*.js, test.js and test/**/*.js (and the same with .mjs, .ts and .mts).\n' });
+		send({ type: 'stderr', text: NO_TEST_FILES });
 		exit(1);
 		return;
 	}
@@ -198,7 +239,7 @@ async function runTests({ files, stdin, entry, args }: Run): Promise<void> {
 	});
 	try {
 		await init();
-		await loadTypeScriptFor(files);
+		if (!only) await loadTypeScriptFor(files);
 	} catch (e) {
 		fail(e);
 		return;
@@ -219,7 +260,70 @@ async function runTests({ files, stdin, entry, args }: Run): Promise<void> {
 		}
 		await nodeTest.finishFile(error);
 	}
+	if (capture) capture.net = performance.now() - started;
 	exit(nodeTest.summary(performance.now() - started));
+}
+
+/** Mutate: mutation testing with StrykerJS (src/mutate.ts). */
+async function runMutate({ files, stdin, entry, args }: Run): Promise<void> {
+	installConsole();
+	installProcess(installPrompt(stdin), entry, args ?? []);
+	addEventListener('unhandledrejection', (e) => fail(e.reason));
+	const testFiles = Object.keys(files).filter(isTestFile).sort();
+	if (testFiles.length === 0) {
+		send({ type: 'stderr', text: NO_TEST_FILES });
+		exit(1);
+		return;
+	}
+	try {
+		await init();
+		await loadTypeScriptFor(files);
+		exit(
+			await mutate({
+				files,
+				testFiles,
+				toJavaScript: (path, source) => toJavaScript(path, source, false),
+				load: loadStryker,
+				workerUrl: import.meta.url,
+				write: (text) => send({ type: 'stdout', text }),
+				phase: (text) => send({ type: 'phase', text }),
+				...realTimers,
+			}),
+		);
+	} catch (e) {
+		fail(e);
+	}
+}
+
+/**
+ * One test file of a mutant run, in a worker of its own (src/mutate.ts):
+ * Stryker's namespace is set before the project's modules load, so their
+ * instrumented code sees the active mutant from its first line, and the
+ * file's Test is kept rather than printed (`capture`).
+ */
+async function runMutant({ files, testFile, activeMutant, hitLimit }: MutantRun): Promise<void> {
+	capture = { text: '', net: 0 };
+	javascriptOnly = true;
+	Object.defineProperty(globalThis, NAMESPACE, {
+		value: { ...(activeMutant !== null ? { activeMutant } : {}), ...(hitLimit !== null ? { hitLimit, hitCount: 0 } : {}) },
+		writable: true,
+		configurable: true,
+	});
+	await runTests({ type: 'test', files, entry: testFile, stdin: null }, [testFile]);
+}
+
+/** Loads StrykerJS's bundle, once, from the file next to this script. */
+async function loadStryker(): Promise<typeof Stryker> {
+	const started = performance.now();
+	const bytes = await download(__STRYKER_FILE__, __STRYKER_SIZE__);
+	const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'text/javascript' }));
+	try {
+		const stryker = (await import(/* @vite-ignore */ url)) as typeof Stryker;
+		send({ type: 'phase', text: `Stryker loaded in ${Math.round(performance.now() - started)} ms` });
+		return stryker;
+	} finally {
+		URL.revokeObjectURL(url);
+	}
 }
 
 /**
@@ -338,11 +442,13 @@ async function loadTypeScriptFor(files: Record<string, string>): Promise<void> {
 }
 
 let stripper: { ts: typeof TS; strip: typeof Strip.blankSourceFile } | null = null;
+/** True in a mutant run, whose project has been made JavaScript already (src/mutate.ts). */
+let javascriptOnly = false;
 
 /** Fetches `file` next to this script, reporting progress as `loading` messages. */
 async function download(file: string, total: number): Promise<Uint8Array> {
 	const response = await fetch(new URL(file, import.meta.url));
-	if (!response.ok || !response.body) throw new ProjectError(`Could not load TypeScript: GET ${file}: HTTP ${response.status}`);
+	if (!response.ok || !response.body) throw new ProjectError(`Could not load ${file}: HTTP ${response.status}`);
 	const reader = response.body.getReader();
 	const chunks: Uint8Array[] = [];
 	let loaded = 0;
@@ -384,7 +490,7 @@ const UNSUPPORTED: Record<string, string> = {
  * its lines may then differ from the source's).
  */
 function toJavaScript(path: string, source: string, lenient: boolean): string {
-	if (!isTypeScript(path)) return source;
+	if (!isTypeScript(path) || javascriptOnly) return source;
 	if (!stripper) throw new Error('TypeScript was not loaded');
 	const { ts, strip } = stripper;
 	const file = ts.createSourceFile(path, source, { languageVersion: ts.ScriptTarget.ESNext, impliedNodeFormat: ts.ModuleKind.ESNext, jsDocParsingMode: ts.JSDocParsingMode.ParseNone }, false, ts.ScriptKind.TS);

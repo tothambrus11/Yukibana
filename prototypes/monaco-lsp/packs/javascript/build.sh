@@ -29,6 +29,11 @@ PACK_VERSION="$(node -p 'require("./package.json").version')"
 FC_VERSION="$(node -p 'require("fast-check/package.json").version')"
 FC_FILE="fast-check-$FC_VERSION.js"
 PACKAGES_FILE="packages-fast-check-$FC_VERSION.json"
+# StrykerJS for Mutate (README "Mutation testing"): its instrumenter, its
+# clear-text reporter and the metrics it reads, one ES module loaded only
+# when the user asks for mutation testing.
+STRYKER_VERSION="$(node -p 'require("@stryker-mutator/instrumenter/package.json").version')"
+STRYKER_FILE="stryker-$STRYKER_VERSION.js"
 
 npx tsc -p tsconfig.json
 
@@ -39,6 +44,7 @@ for f in "$OUT"/*; do
   case "$(basename "$f")" in
     server.js|server.js.*|runner.js|runner.js.*|strip.js|strip.js.*|"$TS_FILE"|"$TS_FILE".*|"$LIBS_FILE"|"$LIBS_FILE".*) ;;
     "$FC_FILE"|"$FC_FILE".*|"$PACKAGES_FILE"|"$PACKAGES_FILE".*|LICENSE-fast-check.txt|LICENSE-pure-rand.txt) ;;
+    "$STRYKER_FILE"|"$STRYKER_FILE".*|LICENSE-stryker.txt|LICENSE-babel.txt) ;;
     *) rm -f "$f" ;;
   esac
 done
@@ -70,6 +76,15 @@ node tools/package-types.mjs "$OUT/$PACKAGES_FILE" fast-check
 cp node_modules/fast-check/LICENSE "$OUT/LICENSE-fast-check.txt"
 cp node_modules/pure-rand/LICENSE "$OUT/LICENSE-pure-rand.txt"
 
+# StrykerJS, bundled by tools/stryker.mjs (which says what it stands in for
+# Node's modules, and why). Rebuilt when the lock file or the bundle's
+# sources change.
+if [[ ! -f "$OUT/$STRYKER_FILE" || "$STAMP" -nt "$OUT/$STRYKER_FILE" || tools/stryker.mjs -nt "$OUT/$STRYKER_FILE" || src/stryker/index.ts -nt "$OUT/$STRYKER_FILE" ]]; then
+  node tools/stryker.mjs "$OUT/$STRYKER_FILE"
+fi
+cp node_modules/@stryker-mutator/instrumenter/LICENSE "$OUT/LICENSE-stryker.txt"
+cp node_modules/@babel/core/LICENSE "$OUT/LICENSE-babel.txt"
+
 size() { node -p "require('fs').statSync(process.argv[1]).size" "$1"; }
 npx esbuild src/server.ts --bundle --minify --format=esm --target=es2022 --log-level=warning \
   --define:__TS_FILE__="\"$TS_FILE\"" --define:__TS_SIZE__="$(size "$OUT/$TS_FILE")" \
@@ -86,6 +101,7 @@ npx esbuild src/server.ts --bundle --minify --format=esm --target=es2022 --log-l
 npx esbuild src/runner.ts --bundle --minify --format=esm --target=es2022 --log-level=warning \
   --define:__TS_FILE__="\"$TS_FILE\"" --define:__TS_SIZE__="$(size "$OUT/$TS_FILE")" \
   --define:__PACKAGES__="{\"fast-check\":\"$FC_FILE\"}" \
+  --define:__STRYKER_FILE__="\"$STRYKER_FILE\"" --define:__STRYKER_SIZE__="$(size "$OUT/$STRYKER_FILE")" \
   --outfile="$OUT/runner.js"
 npx esbuild src/strip.ts --bundle --minify --format=esm --target=es2022 --log-level=warning \
   --alias:typescript=./src/typescript-global.ts --outfile="$OUT/strip.js"

@@ -111,6 +111,16 @@ A runner that can also run the project's tests takes the same message with
 runs them, with the same messages back: the report on stdout, exit 0 only
 when every test passed.
 
+A runner that can also mutation-test the project takes it with
+`type: 'mutate'` (the app offers Mutate for languages with `mutates: true`):
+it changes the code in small ways, one mutant at a time, runs the tests
+against each, and prints the report (which mutants the tests killed, which
+survived, which no test reached, which timed out, with file and line and the
+mutated code) and the mutation score on stdout, with the same messages as a
+run. How it runs each mutant is the pack's business (the JavaScript pack
+starts workers of its own); Stop must end all of it, which terminating the
+runner's worker does for workers it started.
+
 A language may use another language's pack (`pack` in
 `app/src/lib/languages.ts`): TypeScript and web projects use the
 `javascript` pack's server and runner. That runner also takes
