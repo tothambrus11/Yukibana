@@ -232,7 +232,12 @@ check st args = do
   -- first group saw it.
   let modules = nubOn (\(f, _, _, _) -> f) checked
   modifyIORef' (stHie st) (M.union (M.fromList [(f, h) | (f, _, Just h, _) <- modules]))
-  modifyIORef' (stSummaries st) (M.union (M.fromList [(f, ms) | (f, ms, _, _) <- modules]))
+  -- Only a module that parsed (it has a .hie file) replaces its summary:
+  -- completion type checks the summary's text again for what is in scope,
+  -- and the text being typed (`Map.`) seldom parses. Keeping the broken
+  -- one made completion after `Map.` empty whenever the check of the
+  -- half-typed line ran before the completion request.
+  modifyIORef' (stSummaries st) (M.union (M.fromList [(f, ms) | (f, ms, Just _, _) <- modules]))
   diags <- reverse <$> readIORef (stDiags st)
   let tops =
         [ obj
