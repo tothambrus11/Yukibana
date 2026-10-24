@@ -17,6 +17,7 @@ import { LANGUAGES } from '../src/lib/languages.ts';
 import { buildSbt, exportProject, parseCompileFlags } from '../src/lib/export.ts';
 import { zip } from '../src/lib/zip.ts';
 import { chooseTestFramework } from '../src/lib/cpp-tests.ts';
+import { PROPERTIES } from '../../packs/cpp/tests/fixtures/properties.mjs';
 
 const only = process.argv.slice(2);
 const work = mkdtempSync(join(tmpdir(), 'yukibana-export-'));
@@ -125,9 +126,12 @@ const PACK_CACHE = process.env.PACK_CACHE ?? join(homedir(), '.cache', 'yukibana
 /** The C++ sample with its tests in each framework, as the app's framework choice writes them. */
 const CPP_FRAMEWORKS = { gtest: 'GoogleTest', doctest: 'doctest', catch2: 'Catch2' };
 
-async function cpp(name, files, framework = 'gtest') {
+async function cpp(name, files, framework = 'gtest', { count = 3 } = {}) {
 	const label = CPP_FRAMEWORKS[framework];
-	check(exportProject(sample('cpp'), files).files['CMakeLists.txt'].includes(`with ${label} `), `${name}: CMakeLists.txt fetches ${label}, the framework tests/ includes`);
+	const cmake = exportProject(sample('cpp'), files).files['CMakeLists.txt'];
+	check(cmake.includes(`with ${label} `), `${name}: CMakeLists.txt fetches ${label}, the framework tests/ includes`);
+	const rapidcheck = Object.values(files).some((text) => /#include <rapidcheck/.test(text));
+	check(cmake.includes('GIT_REPOSITORY https://github.com/emil-e/rapidcheck.git') === rapidcheck, `${name}: CMakeLists.txt fetches RapidCheck ${rapidcheck ? 'because a test includes it' : 'only when a source includes it'}`);
 	const dir = await download(name, sample('cpp'), files);
 	if (!dir) return;
 	if (!has('cmake') || !(has('c++') || has('g++') || has('clang++'))) return skip(`${name}: cmake or a C++ compiler is missing`);
@@ -137,7 +141,7 @@ async function cpp(name, files, framework = 'gtest') {
 	check(existsSync(join(dir, 'build', 'compile_commands.json')), `${name}: build/compile_commands.json is written for clangd`);
 	step(`${name}: ./build/app prints the distance`, join(dir, 'build', 'app'), [], dir, '5.000000');
 	// Each framework's discovery registers the sample's three tests one by one.
-	step(`${name}: ctest runs the ${label} tests, each on its own`, 'ctest', ['--test-dir', 'build', '--output-on-failure'], dir, '100% tests passed, 0 tests failed out of 3');
+	step(`${name}: ctest runs the ${label} tests, each on its own`, 'ctest', ['--test-dir', 'build', '--output-on-failure'], dir, `100% tests passed, 0 tests failed out of ${count}`);
 }
 
 async function swift(name, files) {
@@ -305,6 +309,12 @@ const cases = {
 		const cppSample = sample('cpp').sample;
 		await cpp('cpp', cppSample);
 		for (const fw of ['doctest', 'catch2']) await cpp(`cpp-${fw}`, { ...cppSample, ...chooseTestFramework(cppSample, fw, cppSample).write }, fw);
+		// RapidCheck properties beside each framework's tests (packs/cpp
+		// README, "Properties"): fetched at the browser's commit, two more tests.
+		for (const fw of ['gtest', 'doctest', 'catch2']) {
+			const base = fw === 'gtest' ? cppSample : { ...cppSample, ...chooseTestFramework(cppSample, fw, cppSample).write };
+			await cpp(`cpp-${fw}-rapidcheck`, { ...base, 'tests/properties_test.cpp': PROPERTIES[fw](false) }, fw, { count: 5 });
+		}
 	},
 	swift: async () => {
 		// As the sample is: tests that use the project without importing it.

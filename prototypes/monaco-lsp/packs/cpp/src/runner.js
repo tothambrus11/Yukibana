@@ -26,6 +26,13 @@
 //   catch2.tar           the same for Catch2 v3 (<catch2/...>)
 //   doctest.tar          the same for doctest (<doctest/...>): its
 //                        implementation and main, prebuilt
+//   rapidcheck.tar       RapidCheck's library, fetched only for a project
+//                        whose compiled files include <rapidcheck.h> or
+//                        <rapidcheck/...>, with any framework or none
+//   targets/<arch>/gtest.tar, rapidcheck.tar
+//                        the same two for a Linux target
+//                        (build-test-frameworks-linux.sh); Catch2 and
+//                        doctest are not built for Linux
 //
 // Each tool call gets a fresh instance of the compiler (compiled once; see
 // toolchain.js): clang and lld keep global state, and a browser cannot fork.
@@ -37,7 +44,7 @@ import { targetOf, unsupportedMessage, DEFAULT_TARGET } from './targets.js';
 
 // A Linux target's files (targets/<arch>/*.tar) report a total of 0
 // (unknown): their sizes would cost the default target's runner.js bytes.
-/* global CC_WASM_SIZE, CC_CROSS_WASM_SIZE, WASI_SYSROOT_SIZE, SYSROOT_SIZE, GTEST_SIZE, CATCH2_SIZE, DOCTEST_SIZE */
+/* global CC_WASM_SIZE, CC_CROSS_WASM_SIZE, WASI_SYSROOT_SIZE, SYSROOT_SIZE, GTEST_SIZE, CATCH2_SIZE, DOCTEST_SIZE, RAPIDCHECK_SIZE */
 const SIZES = {
     'cc.wasm': typeof CC_WASM_SIZE === 'number' ? CC_WASM_SIZE : 0,
     'cc-cross.wasm': typeof CC_CROSS_WASM_SIZE === 'number' ? CC_CROSS_WASM_SIZE : 0,
@@ -46,6 +53,7 @@ const SIZES = {
     'gtest.tar': typeof GTEST_SIZE === 'number' ? GTEST_SIZE : 0,
     'catch2.tar': typeof CATCH2_SIZE === 'number' ? CATCH2_SIZE : 0,
     'doctest.tar': typeof DOCTEST_SIZE === 'number' ? DOCTEST_SIZE : 0,
+    'rapidcheck.tar': typeof RAPIDCHECK_SIZE === 'number' ? RAPIDCHECK_SIZE : 0,
 };
 
 const CXX = /\.(cpp|cc|cxx|c\+\+|C)$/;
@@ -60,14 +68,15 @@ const TESTS = /^tests\//;
  * The test frameworks, told apart by what a file includes, as a real build
  * would need them: `include` matches a file's `#include` lines (comments
  * left out). Each one's libraries are an archive of their own, fetched the
- * first time a project uses it. `main` is linked when no source defines one;
+ * first time a project uses it; `linux`: also built for the Linux targets,
+ * as targets/<arch>/<archive>. `main` is linked when no source defines one;
  * `args` and `env` give the report its colours (the app's terminal renders
  * ANSI; none of the three colours a stream it does not take for a terminal).
  */
 const FRAMEWORKS = {
     gtest: {
         name: 'GoogleTest', header: '<gtest/gtest.h>', include: /^[ \t]*#[ \t]*include[ \t]*[<"]gtest\//m,
-        archive: 'gtest.tar', libs: ['-lgtest'], main: ['-lgtest_main'],
+        archive: 'gtest.tar', libs: ['-lgtest'], main: ['-lgtest_main'], linux: true,
         // As --gtest_color=yes would; the environment also reaches a test
         // file with its own main, whatever it does with argv.
         args: [], env: { GTEST_COLOR: 'yes' },
@@ -86,6 +95,16 @@ const FRAMEWORKS = {
         args: ['--colour-mode', 'ansi'], env: {},
     },
 };
+
+/**
+ * RapidCheck, property-based testing: not a framework of its own but a
+ * library beside one (its rapidcheck/gtest.h and catch.h turn a
+ * property into a test of that framework) or beside a main of the project's
+ * own that calls rc::check. Linked, with its archive fetched, when a
+ * compiled file (or a header in tests/) includes <rapidcheck.h> or
+ * <rapidcheck/...>, as a real build would need it.
+ */
+const RAPIDCHECK = { archive: 'rapidcheck.tar', linux: true, include: /^[ \t]*#[ \t]*include[ \t]*[<"]rapidcheck(?:\.h[>"]|\/)/m, libs: ['-lrapidcheck'] };
 
 const withoutComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
@@ -139,8 +158,9 @@ const toolchain = createToolchain({ base: new URL('./', import.meta.url), post, 
  * type 'test': the project's sources without the program's main (the entry
  * file, and any other file that defines main) plus tests/**, linked with
  * the test framework they include (GoogleTest, doctest or Catch2) and,
- * unless a test file has its own main, that framework's main. On the
- * WebAssembly target only: the frameworks' libraries are built for wasm32.
+ * unless a test file has its own main, that framework's main. On a Linux
+ * target GoogleTest and RapidCheck only: Catch2 and doctest are built for
+ * wasm32 alone, and are refused there by name before anything is fetched.
  *
  * The target is the project's (compile_flags.txt, src/targets.js); a target
  * flag that names no supported target is refused before anything is
@@ -162,8 +182,6 @@ async function build({ type, files, entry, stdin, options }) {
     const target = which.target;
     const linux = target.runtime === 'linux';
     const testing = type === 'test';
-    if (linux && testing)
-        throw new UserError('Tests run on the WebAssembly target only, for now: the test frameworks are built for wasm32 only.\n');
     const all = Object.keys(files)
         .filter((p) => CXX.test(p) || C.test(p))
         .sort();
@@ -185,16 +203,20 @@ async function build({ type, files, entry, stdin, options }) {
     // What the compiled sources include decides the framework, and so do
     // tests/' headers, which only the sources that include them compile.
     const scanned = [...sources, ...(testing ? Object.keys(files).filter((p) => TESTS.test(p) && !sources.includes(p)) : [])];
-    // A Linux target links no framework: their libraries are wasm32 only.
-    const framework = linux ? null : frameworkOf(files, scanned);
+    const framework = frameworkOf(files, scanned);
+    if (linux && framework && !FRAMEWORKS[framework].linux)
+        throw new UserError(`${FRAMEWORKS[framework].name} runs on the WebAssembly target only, for now: on ${target.label} the tests can use GoogleTest (and RapidCheck).\n`);
     const ownMain = sources.some((p) => definesMain(files[p]));
     if (testing && !framework && !ownMain)
         throw new UserError('No test framework: the files in tests/ include none of <gtest/gtest.h>, <doctest/doctest.h> or <catch2/...>, and none defines main.\n');
     const fw = framework ? FRAMEWORKS[framework] : null;
+    const properties = scanned.some((p) => RAPIDCHECK.include.test(withoutComments(files[p] ?? '')));
     const cxxProgram = sources.some((p) => CXX.test(p));
     phase('Loading the compiler');
     // Every download at once: a Linux target's libraries too, for the link.
-    const archives = framework ? [FRAMEWORKS[framework].archive] : [];
+    // A Linux target's framework archives are its own (targets/<arch>/).
+    const archives = [...(framework ? [FRAMEWORKS[framework].archive] : []), ...(properties ? [RAPIDCHECK.archive] : [])]
+        .map((name) => (linux ? `targets/${target.arch}/${name}` : name));
     await Promise.all([toolchain.load(target, { link: linux }), ...archives.map(toolchain.archive)]);
 
     const objects = {};
@@ -214,25 +236,35 @@ async function build({ type, files, entry, stdin, options }) {
             [...compileArgs(target, files, source), '-fno-color-diagnostics', '-c', source, '-o', object],
             files,
             [object],
-            { archives }
+            { archives: linux ? [] : archives }
         );
         if (code !== 0 || !out[object]) return code || 1;
         objects[object] = out[object];
     }
+    // doctest's main is also its implementation, which a project that
+    // implements doctest itself already has.
+    const frameworkMain = fw && !ownMain && !(framework === 'doctest' && sources.some((p) => implementsDoctest(files[p])));
+    // The frameworks colour their reports only on a terminal they recognise;
+    // the app's terminal renders ANSI colours, so they are told to
+    // (FRAMEWORKS). The arguments go to a test program, or to the
+    // framework's own main; nothing else is in the environment.
+    const args = fw && (testing || frameworkMain) ? fw.args : [];
+    const env = fw ? fw.env : {};
     if (linux) {
         // Linking and running for Linux are in runner-linux.js, fetched only
         // for a Linux target, so the default target's runner stays small.
+        // There crt1.o refers to main strongly, so -lgtest_main supplies it
+        // as an ordinary archive member.
         const { runOnLinux } = await import('./runner-linux.js');
-        return runOnLinux({ toolchain, target, objects, cxx: cxxProgram, stdin, options, post, started });
+        const libs = [...(frameworkMain ? fw.main : []), ...(properties ? RAPIDCHECK.libs : []), ...(fw ? fw.libs : [])];
+        return runOnLinux({ toolchain, target, objects, cxx: cxxProgram, libs, archives, args, env, stdin, options, post, started });
     }
 
     phase('Linking');
     const lib = LIB;
     // A framework's main is in an archive, and wasi-libc's __main_void only
     // refers weakly to __main_argc_argv (main(argc, argv)), which does not
-    // pull an archive member: -u does. doctest's is also its implementation,
-    // which a project that implements doctest itself already has.
-    const frameworkMain = fw && !ownMain && !(framework === 'doctest' && sources.some((p) => implementsDoctest(files[p])));
+    // pull an archive member: -u does.
     const { code, out } = await toolchain.tool(
         WASM,
         'wasm-ld',
@@ -241,6 +273,7 @@ async function build({ type, files, entry, stdin, options }) {
             ...Object.keys(objects),
             ...(cxxProgram ? [lib + '/yukibana-uncaught.o'] : []),
             ...(frameworkMain ? ['-u', '__main_argc_argv', ...fw.main] : []),
+            ...(properties ? RAPIDCHECK.libs : []),
             ...(fw ? fw.libs : []),
             // libc-printscan-long-double: without it, printing a long double
             // (printf("%Lf"), or cout, through libc++'s num_put) aborts with
@@ -277,12 +310,8 @@ async function build({ type, files, entry, stdin, options }) {
         fflush(new DataView(memory.buffer).getUint32(stdout.value, true));
     };
     const wasi = createWasi({
-        // The frameworks colour their reports only on a terminal they
-        // recognise; the app's terminal renders ANSI colours, so they are
-        // told to (FRAMEWORKS). The arguments go to a test program, or to
-        // the framework's own main; nothing else is in the environment.
-        args: ['main', ...(fw && (testing || frameworkMain) ? fw.args : [])],
-        env: fw ? fw.env : {},
+        args: ['main', ...args],
+        env,
         stdin,
         write: (fd, text) => post({ type: fd === 1 ? 'stdout' : 'stderr', text }),
         requestInput: () => post({ type: 'stdin' }),

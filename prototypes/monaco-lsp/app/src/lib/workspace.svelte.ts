@@ -195,13 +195,9 @@ export class Workspace {
 			this.write('warning', `There is no ${language.entry} to run.`);
 			return;
 		}
+		// On a Linux target the runner runs GoogleTest tests (and RapidCheck)
+		// under QEMU, and refuses Catch2 and doctest by name (packs/cpp README).
 		const files = this.currentFiles();
-		const linux = this.target?.kind === 'target' && this.target.target.runtime === 'linux';
-		if (mode === 'test' && linux) {
-			// The button is disabled; this is the keyboard shortcut. The runner would refuse too.
-			this.write('warning', 'Tests run on the WebAssembly target only, for now: choose WebAssembly (WASI) as the target to run them.');
-			return;
-		}
 		this.host?.showTerminal();
 		this.runner.start(packOf(language), files, entry, mode, this.language === 'cpp' ? { ...this.runOptions } : undefined);
 	}
@@ -266,7 +262,7 @@ export class Workspace {
 		}
 		this.refreshTarget();
 		const how = target.default ? `no --target line in ${COMPILE_FLAGS}` : `--target=${target.triple} in ${COMPILE_FLAGS}`;
-		this.write('info', `Target: ${target.label} (${how}).${target.runtime === 'linux' ? ' Run compiles for Linux and runs the program under QEMU; tests run on WebAssembly only.' : ''}`);
+		this.write('info', `Target: ${target.label} (${how}).${target.runtime === 'linux' ? ' Run compiles for Linux and runs the program under QEMU, and Test its GoogleTest tests (Catch2 and doctest run on WebAssembly only).' : ''}`);
 		this.scheduleSave();
 	}
 

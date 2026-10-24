@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Builds the two test frameworks the runner offers besides GoogleTest (which
-# build-cxx-runtime.sh builds), for wasm32-wasip1 with the same flags, into
-# $PACK_CACHE/cpp/testfw/ (see README, "Running", Tests):
+# build-cxx-runtime.sh builds), and RapidCheck, the property-based testing
+# library that goes with any of the three, for wasm32-wasip1 with the same
+# flags, into $PACK_CACHE/cpp/testfw/ (see README, "Running", Tests and
+# Properties):
 #
 #   lib/libCatch2.a, libCatch2Main.a   Catch2 3.16.1, static, as its CMake
 #                                      build makes them
@@ -10,19 +12,30 @@
 #                                      doctest is header-only, and this is the
 #                                      one translation unit a project would
 #                                      otherwise compile with every Test
+#   lib/librapidcheck.a                RapidCheck, static, as its CMake
+#                                      build makes it
 #   include/catch2/, include/doctest/  their headers (Catch2's with the
 #                                      catch_user_config.hpp this build
 #                                      generated); build.sh puts them in
 #                                      sysroot.tar.gz, for clangd and runner.js
+#   include/rapidcheck.h, rapidcheck/  RapidCheck's headers with its GoogleTest
+#                                      and Catch2 integrations
+#                                      (rapidcheck/gtest.h, catch.h), likewise
 #
 # pack-runner.sh packs each framework's libraries into an archive of its own
-# (catch2.tar, doctest.tar), fetched by runner.js only for a project whose
-# tests include that framework.
+# (catch2.tar, doctest.tar, rapidcheck.tar), fetched by runner.js only for a
+# project whose tests include that framework (or <rapidcheck...>).
 #
 # Sources are pinned: Catch2 by the commit its v3.16.1 tag names (a shallow
 # clone of the tag, checked against it: GitHub's source archives are not
 # reachable from the build machine, and Catch2 publishes no source tarball of
 # its own), doctest by the SHA-256 of doctest.h at its v2.5.3 commit.
+# RapidCheck has no releases or tags: it is pinned by a commit of its master
+# branch, fetched alone (a shallow fetch of that commit, checked with
+# rev-parse) and checked against the SHA-256 of its tree (every file's
+# SHA-256, sorted by path, hashed: what `rapidcheck_tree_sha256` prints),
+# without its submodules (ext/catch and ext/googletest, used only by its own
+# tests).
 #
 # Compiled with wasi-sdk 30's clang (fetched by build-cxx-runtime.sh, which
 # runs first) and the flags the runner compiles C++ with: WebAssembly
@@ -39,6 +52,10 @@ DOCTEST_VERSION=2.5.3
 DOCTEST_COMMIT=2d0a9359a60c51affe2a9bebb1be1dca47868151
 DOCTEST_H_SHA256=cfd518a3ef90f67e1f3ba514df23fb3627437de1a2feeba78cf5062a40021421
 DOCTEST_LICENSE_SHA256=0fe0b331fa1513dcce8604ff1fa925f32d1cea17d8aeb1c2471fad40d291adc5
+# RapidCheck's master on 2026-10-05 (merge of PR #348). app/src/lib/export.ts
+# fetches the same commit for the Download's CMake build.
+RAPIDCHECK_COMMIT=2c3c4365aca21ef4e612768fdc95b1ce8b39a651
+RAPIDCHECK_TREE_SHA256=176d9a58c1f1a3a4add6a4e932fb98d35168108b7dcbc7fd8959efd378514670
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CACHE="${PACK_CACHE:-$HOME/.cache/yukibana-packs}/cpp"
@@ -59,7 +76,7 @@ fetch() { # url sha256 file
 
 stamp=$(sha256sum "$HERE/build-test-frameworks.sh" | cut -d' ' -f1)
 if [ "$(cat "$OUT/.built" 2>/dev/null)" = "$stamp" ]; then
-  echo "Catch2 and doctest: cached in $OUT"
+  echo "Catch2, doctest and RapidCheck: cached in $OUT"
   exit 0
 fi
 
@@ -67,7 +84,7 @@ fi
 WSDK="$CACHE/wasi/wasi-sdk-$WASI_SDK_VERSION.0-x86_64-linux"
 EHFLAGS="-fwasm-exceptions -mllvm -wasm-use-legacy-eh=false"
 TARGET="--target=wasm32-wasip1 --sysroot=$WSDK/share/wasi-sysroot"
-rm -rf "$OUT" build-catch2 "Catch2-$CATCH2_VERSION" && mkdir -p "$OUT/lib" "$OUT/include/doctest"
+rm -rf "$OUT" build-catch2 "Catch2-$CATCH2_VERSION" build-rapidcheck rapidcheck-src && mkdir -p "$OUT/lib" "$OUT/include/doctest"
 
 step "Catch2 $CATCH2_VERSION"
 git -c advice.detachedHead=false clone -q --depth 1 --branch "v$CATCH2_VERSION" \
@@ -125,6 +142,47 @@ $NICE "$WSDK/bin/clang++" $TARGET $EHFLAGS -std=c++17 -O2 -DNDEBUG -D_LIBCPP_HAR
 rm -f "$OUT/lib/libdoctest_main.a"
 "$WSDK/bin/llvm-ar" rcs "$OUT/lib/libdoctest_main.a" build-doctest/doctest_main.o
 rm -rf build-doctest
+
+step "RapidCheck ${RAPIDCHECK_COMMIT:0:12}"
+rapidcheck_tree_sha256() { # dir
+  (cd "$1" && find . -path ./.git -prune -o -type f -print | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
+}
+git init -q rapidcheck-src
+git -C rapidcheck-src fetch -q --depth 1 https://github.com/emil-e/rapidcheck.git "$RAPIDCHECK_COMMIT"
+git -C rapidcheck-src -c advice.detachedHead=false checkout -q FETCH_HEAD
+got=$(git -C rapidcheck-src rev-parse HEAD)
+[ "$got" = "$RAPIDCHECK_COMMIT" ] || { echo "RapidCheck fetched commit $got, expected $RAPIDCHECK_COMMIT" >&2; exit 1; }
+got=$(rapidcheck_tree_sha256 rapidcheck-src)
+[ "$got" = "$RAPIDCHECK_TREE_SHA256" ] || { echo "RapidCheck's tree hashes to $got, expected $RAPIDCHECK_TREE_SHA256" >&2; exit 1; }
+# Upstream's own CMake build, unpatched: the library is C++11 by its
+# CMakeLists.txt (a project compiled as C++17 or C++20 links it as natively);
+# RTTI on, as by default (rc::detail::demangle names a failing value's
+# type). The integrations are header-only (INTERFACE targets), so their
+# headers are copied as their install rules would; RC_ENABLE_CATCH itself is
+# left off, because it also adds the ext/catch submodule. Not the doctest
+# integration (extras/doctest, rapidcheck/doctest.h): at this commit it does
+# not compile with any compiler, because inside its namespace rc::doctest the
+# name doctest::detail looks for rc::doctest::detail (GCC 13: "'detail' is
+# not a namespace-name"; clang 21: "no namespace named 'detail' in namespace
+# 'rc::doctest'"). With doctest a property is CHECK(rc::check(...)) (README,
+# Properties). Seeding needs nothing WASI lacks:
+# std::random_device is wasi-libc's getentropy (the runner's random_get),
+# and RC_PARAMS is read with getenv.
+$NICE cmake -S rapidcheck-src -B build-rapidcheck -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$WSDK/share/cmake/wasi-sdk-p1.cmake" -DWASI_SDK_PREFIX="$WSDK" \
+  -DCMAKE_SYSROOT="$WSDK/share/wasi-sysroot" -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_FLAGS="$EHFLAGS -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST -ffile-prefix-map=$CACHE/rapidcheck-src/=" \
+  -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG" \
+  -DCMAKE_INSTALL_PREFIX="$CACHE/build-rapidcheck/install" >/dev/null
+$NICE ninja -C build-rapidcheck -j"$JOBS" --quiet rapidcheck
+ninja -C build-rapidcheck install >/dev/null
+"$WSDK/bin/llvm-strip" --strip-debug -o "$OUT/lib/librapidcheck.a" build-rapidcheck/install/lib/librapidcheck.a
+cp -r build-rapidcheck/install/include/rapidcheck.h build-rapidcheck/install/include/rapidcheck "$OUT/include/"
+for extra in gtest catch; do
+  cp "rapidcheck-src/extras/$extra/include/rapidcheck/$extra.h" "$OUT/include/rapidcheck/"
+done
+cp rapidcheck-src/LICENSE.md "$OUT/LICENSE-rapidcheck.txt"
+rm -rf build-rapidcheck rapidcheck-src
 
 echo "$stamp" > "$OUT/.built"
 ls -la "$OUT/lib"

@@ -13,10 +13,14 @@
 // twice: cold (empty browser cache) and warm (cached downloads and compiled
 // wasm), with timings. C++ exceptions, caught and uncaught, and the
 // sample's tests ({ type: 'test' }) in GoogleTest, doctest and Catch2,
-// passing and failing, and tests that mix two frameworks. The default
+// passing and failing, and tests that mix two frameworks. RapidCheck
+// properties through each framework and from a main of their own, a holding
+// and a failing one with its shrunk counterexample. The default
 // target fetches exactly the files it fetched before the Linux targets
-// existed; a target flag that names no target, a Test on a Linux target and
-// a Linux run without the emulator (vm.js) are refused with their messages.
+// existed; a target flag that names no target and
+// a Linux run without the emulator (vm.js) are refused with their messages,
+// and so are Catch2 tests on a Linux target (GoogleTest and RapidCheck run
+// there: test-run-linux.mjs).
 
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
@@ -27,6 +31,8 @@ import { tmpdir } from 'node:os';
 import { chromium } from 'playwright-core';
 // The app's sample tests per framework (imports only types, so Node loads it).
 import { chooseTestFramework } from '../../app/src/lib/cpp-tests.ts';
+// RapidCheck properties of the sample, shared with the app's export test.
+import { PROPERTIES, OWN_MAIN_PROPERTIES } from './tests/fixtures/properties.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const STATIC = resolve(HERE, '../../app/static');
@@ -554,6 +560,50 @@ TEST_CASE("throws something else") {
         JSON.stringify(mixed.stderr.trim())
     );
 
+    // RapidCheck (README, "Properties"): a property that holds and one that
+    // does not, through each framework's integration and through a main of
+    // the project's own. The failing one is shrunk to its smallest
+    // counterexample, which the report prints with the file and line of the
+    // assertion. Only a project that includes RapidCheck fetches its archive
+    // (the framework runs above fetched theirs alone).
+    const FW_NAMES = { gtest: 'GoogleTest', doctest: 'doctest', catch2: 'Catch2' };
+    for (const fw of ['gtest', 'doctest', 'catch2']) {
+        const base = fw === 'gtest' ? SAMPLE : { ...SAMPLE, ...chooseTestFramework(SAMPLE, fw, SAMPLE).write };
+        const ok = await testRun({ ...base, 'tests/properties_test.cpp': PROPERTIES[fw](false) });
+        const archives = Object.keys(ok.loading).filter((k) => k.endsWith('.tar'));
+        const passed = { gtest: /\[  PASSED  \] 5 tests\./, doctest: /test cases: 5 \| 5 passed \| 0 failed/, catch2: /All tests passed \(\d+ assertions in 5 test cases\)/ }[fw];
+        check(
+            `RapidCheck with ${FW_NAMES[fw]}: a property that holds passes, exit 0, rapidcheck.tar fetched`,
+            ok.code === 0 && passed.test(ok.stdout) && archives.includes('rapidcheck.tar'),
+            `code=${ok.code} in ${ok.ms} ms (rapidcheck.tar ${JSON.stringify(ok.loading['rapidcheck.tar'])}; archives: ${archives}); ${timeline(ok)}`
+        );
+        if (ok.code !== 0) console.log(ok.stdout, ok.stderr);
+        const bad = await testRun({ ...base, 'tests/properties_test.cpp': PROPERTIES[fw](true) });
+        // The framework's failure is where its integration fails the test
+        // (rapidcheck/gtest.h, rapidcheck/catch.h) or, with doctest, the
+        // CHECK; RapidCheck's report names the assertion. rc::check prints
+        // the report on stderr, the integrations into the framework's.
+        const where = fw === 'catch2' ? /rapidcheck\/catch\.h:\d+: FAILED:/ : fw === 'doctest' ? /tests\/properties_test\.cpp:\d+: ERROR: CHECK\( holds \) is NOT correct!/ : /rapidcheck\/gtest\.h:\d+: Failure/;
+        const report = bad.stdout + bad.stderr;
+        const shrunk = report.match(/Falsifiable after (\d+) tests? and (\d+) shrinks?\s+std::tuple<int, int>:\s+(\(-?\d+, -?\d+\))/);
+        check(
+            `RapidCheck with ${FW_NAMES[fw]}: a property that fails is shrunk to (1, 1), reported with file and line, exit non-zero`,
+            bad.code !== 0 && bad.code !== null && where.test(bad.stdout) && shrunk?.[3] === '(1, 1)' &&
+                /tests\/properties_test\.cpp:\d+:\s+RC_ASSERT\(p\.norm\(\) == std::floor\(p\.norm\(\)\)\)/.test(report),
+            `code=${bad.code} in ${bad.ms} ms; ${shrunk ? shrunk[0].replace(/\s+/g, ' ') : 'no counterexample'}`
+        );
+        console.log(bad.stdout.trimEnd().replace(/^/gm, '    | '));
+        if (bad.stderr) console.log(bad.stderr.trimEnd().replace(/^/gm, '    ! '));
+    }
+    // rc::check from a program's own main, without a framework: a Run.
+    const own = await run({ ...SAMPLE, 'main.cpp': OWN_MAIN_PROPERTIES });
+    check(
+        'RapidCheck from a main of its own (rc::check), no framework: the holding property passes, the false one is shrunk, exit 1',
+        own.code === 1 && /OK, passed 100 tests/.test(own.stderr) && /Falsifiable after \d+ tests? and \d+ shrinks?\s+std::tuple<int, int>:\s+\(1, 1\)/.test(own.stderr),
+        `code=${own.code} in ${own.ms} ms`
+    );
+    console.log(own.stderr.trimEnd().replace(/^/gm, '    ! '));
+
     const none = await testRun({ 'main.cpp': 'int main() {}\n' });
     check('test mode without tests/: says so, exit 1', none.code === 1 && /No tests to run/.test(none.stderr), JSON.stringify(none.stderr.trim()));
 
@@ -581,11 +631,13 @@ TEST_CASE("throws something else") {
         armv7.code === 1 && /^Unsupported target "armv7-linux-musleabihf" in compile_flags.txt; supported: wasm32-wasip1, x86_64-linux-musl, aarch64-linux-musl, riscv64-linux-musl \(or no --target\)\.\n$/.test(armv7.stderr) && Object.keys(armv7.loading).length === 0,
         JSON.stringify(armv7.stderr)
     );
-    const linuxTests = await testRun({ ...SAMPLE, 'compile_flags.txt': '-target\naarch64-linux-musl\n' });
+    // GoogleTest and RapidCheck run on a Linux target (test-run-linux.mjs);
+    // Catch2 and doctest are built for wasm32 only, and say so.
+    const linuxCatch2 = await testRun({ ...SAMPLE, ...chooseTestFramework(SAMPLE, 'catch2', SAMPLE).write, 'compile_flags.txt': '-target\naarch64-linux-musl\n' });
     check(
-        'Test on a Linux target: refused, naming why (the frameworks are wasm32), exit 1',
-        linuxTests.code === 1 && /^Tests run on the WebAssembly target only, for now: the test frameworks are built for wasm32 only\.\n$/.test(linuxTests.stderr),
-        JSON.stringify(linuxTests.stderr)
+        'Catch2 tests on a Linux target: refused, naming why and what works there, exit 1, nothing downloaded',
+        linuxCatch2.code === 1 && linuxCatch2.stderr === 'Catch2 runs on the WebAssembly target only, for now: on AArch64 Linux the tests can use GoogleTest (and RapidCheck).\n' && Object.keys(linuxCatch2.loading).length === 0,
+        JSON.stringify(linuxCatch2.stderr)
     );
     // A Linux run with the emulator missing (vm.js answered 404): compiled
     // and linked, then the message. Needs cc-cross and targets/x86_64.

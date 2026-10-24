@@ -2,7 +2,7 @@
 # The second half of the runner build (build-runner.sh calls it after the
 # LLVM step; it can also run on its own once cc.wasm exists in the cache):
 # the WASI sysroot, the test frameworks' libraries (gtest.tar, catch2.tar,
-# doctest.tar), runner.js, and the
+# doctest.tar) and RapidCheck's (rapidcheck.tar), runner.js, and the
 # files' .gz/.br siblings, all into ../../app/static/packs/cpp/.
 set -euo pipefail
 
@@ -95,7 +95,7 @@ tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C
   | gzip -9n > "$OUT/wasi-sysroot.tar.gz"
 rm -rf x stage
 
-step "test framework libraries (gtest.tar, catch2.tar, doctest.tar)"
+step "test framework libraries (gtest.tar, catch2.tar, doctest.tar, rapidcheck.tar)"
 # One archive per framework, fetched by runner.js only to build tests (or a
 # program) that include that framework, so a project downloads the one it
 # uses. The headers are in sysroot.tar.gz (build.sh), which both workers
@@ -112,9 +112,13 @@ pack_libs() { # archive dir libs...
 pack_libs gtest.tar "$EH" libgtest.a libgtest_main.a
 pack_libs catch2.tar "$TESTFW" libCatch2.a libCatch2Main.a
 pack_libs doctest.tar "$TESTFW" libdoctest_main.a
+# RapidCheck goes with any of the three (or a main of the project's own), so
+# it is an archive of its own, fetched for a project that includes it.
+pack_libs rapidcheck.tar "$TESTFW" librapidcheck.a
 cp "$EH/LICENSE-googletest.txt" "$OUT/LICENSE-googletest.txt"
 cp "$TESTFW/LICENSE-catch2.txt" "$OUT/LICENSE-catch2.txt"
 cp "$TESTFW/LICENSE-doctest.txt" "$OUT/LICENSE-doctest.txt"
+cp "$TESTFW/LICENSE-rapidcheck.txt" "$OUT/LICENSE-rapidcheck.txt"
 
 step "compilers (from the stamped artifacts)"
 # Only from $CACHE/artifacts, which build-runner.sh and build-cross.sh stamp
@@ -130,6 +134,18 @@ for c in cc cc-cross; do
   fi
 done
 
+step "GoogleTest and RapidCheck for the Linux targets"
+# targets/<arch>/gtest.tar and rapidcheck.tar, compiled with cc-cross itself
+# (build-test-frameworks-linux.sh), so only once it and the targets' headers
+# are here.
+linux_testfw=()
+if [ -f "$OUT/cc-cross.wasm" ] && [ -f "$OUT/targets/x86_64/include.tar" ]; then
+  "$HERE/build-test-frameworks-linux.sh"
+  for f in "$OUT"/targets/*/gtest.tar "$OUT"/targets/*/rapidcheck.tar; do [ -f "$f" ] && linux_testfw+=("$f"); done
+else
+  echo "skipped: no cc-cross.wasm or targets/ (build-cross.sh, build-targets.sh)"
+fi
+
 step "runner.js, explorer.js"
 (cd "$HERE" && [ -d node_modules/esbuild ] || npm ci --no-audit --no-fund >/dev/null)
 size() { stat -c %s "$1" 2>/dev/null || echo 0; }
@@ -139,7 +155,7 @@ target_sizes="{$(cd "$OUT" && for f in targets/*/*.tar; do [ -f "$f" ] && printf
 defines=(--define:CC_WASM_SIZE="$(size "$OUT/cc.wasm")" --define:CC_CROSS_WASM_SIZE="$(size "$OUT/cc-cross.wasm")"
   --define:WASI_SYSROOT_SIZE="$(size "$OUT/wasi-sysroot.tar.gz")" --define:SYSROOT_SIZE="$(size "$OUT/sysroot.tar.gz")"
   --define:GTEST_SIZE="$(size "$OUT/gtest.tar")" --define:CATCH2_SIZE="$(size "$OUT/catch2.tar")"
-  --define:DOCTEST_SIZE="$(size "$OUT/doctest.tar")" --define:DEMANGLE_WASM_SIZE="$(size "$OUT/demangle.wasm")"
+  --define:DOCTEST_SIZE="$(size "$OUT/doctest.tar")" --define:RAPIDCHECK_SIZE="$(size "$OUT/rapidcheck.tar")" --define:DEMANGLE_WASM_SIZE="$(size "$OUT/demangle.wasm")"
   --define:TARGET_SIZES="$target_sizes")
 # runner-linux.js (linking and running for a Linux target) and vm.js (the
 # emulator's bundle, build-vm.sh) are imported by runner.js only for a Linux
@@ -150,7 +166,7 @@ for worker in runner runner-linux explorer; do
     --target=es2022 --external:./runner-linux.js --external:./vm.js --external:./cc.js --external:./cc-cross.js \
     "${defines[@]}" --log-level=warning
 done
-files=("$OUT/runner.js" "$OUT/runner-linux.js" "$OUT/explorer.js" "$OUT/gtest.tar" "$OUT/catch2.tar" "$OUT/doctest.tar")
+files=("$OUT/runner.js" "$OUT/runner-linux.js" "$OUT/explorer.js" "$OUT/gtest.tar" "$OUT/catch2.tar" "$OUT/doctest.tar" "$OUT/rapidcheck.tar" "${linux_testfw[@]}")
 [ -f "$OUT/cc.wasm" ] && files+=("$OUT/cc.js" "$OUT/cc.wasm")
 [ -f "$OUT/cc-cross.wasm" ] && files+=("$OUT/cc-cross.js" "$OUT/cc-cross.wasm")
 # Brotli at quality 11 takes minutes on a compiler: only when the file changed.
@@ -159,4 +175,4 @@ for f in "${files[@]}"; do
   if [ ! -f "$f.br" ] || [ ! -f "$f.gz" ] || [ "$f" -nt "$f.br" ]; then compress+=("$f"); fi
 done
 [ ${#compress[@]} -eq 0 ] || node "$HERE/compress.mjs" "${compress[@]}"
-ls -la "$OUT"/runner.js "$OUT"/runner-linux.js "$OUT"/explorer.js "$OUT"/cc.* "$OUT"/cc-cross.* "$OUT"/wasi-sysroot.tar.gz "$OUT"/{gtest,catch2,doctest}.tar* 2>/dev/null || true
+ls -la "$OUT"/runner.js "$OUT"/runner-linux.js "$OUT"/explorer.js "$OUT"/cc.* "$OUT"/cc-cross.* "$OUT"/wasi-sysroot.tar.gz "$OUT"/{gtest,catch2,doctest,rapidcheck}.tar* 2>/dev/null || true

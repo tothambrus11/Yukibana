@@ -60,7 +60,7 @@
 	const warnings = $derived(workspace.problems.filter((p) => p.marker.severity === monaco.MarkerSeverity.Warning).length);
 	const percent = $derived(workspace.progress && workspace.progress.total > 0 ? Math.min(100, (100 * workspace.progress.loaded) / workspace.progress.total) : null);
 	const language = $derived(languageOf(workspace.language));
-	/** A C++ project on a Linux target: Run options apply, Test does not (yet). */
+	/** A C++ project on a Linux target: Run options apply (to Run and Test). */
 	const linuxTarget = $derived(workspace.target?.kind === 'target' && workspace.target.target.runtime === 'linux');
 	const targetValue = $derived(!workspace.target ? '' : workspace.target.kind === 'unsupported' ? 'other' : workspace.target.target.id);
 	const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
@@ -96,7 +96,7 @@
 			<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7-4.5z" /></svg>Run
 		</button>
 		{#if language.tests}
-			<button class="button test" onclick={() => workspace.run('test')} disabled={linuxTarget} title={linuxTarget ? 'Tests run on the WebAssembly target only, for now' : "Run the project's tests (Ctrl+Shift+Enter)"}>Test</button>
+			<button class="button test" onclick={() => workspace.run('test')} title="Run the project's tests (Ctrl+Shift+Enter)">Test</button>
 		{/if}
 		{#if language.mutates}
 			<button class="button" onclick={() => workspace.run('mutate')} title="Mutation testing: change the code in small ways and check that the tests notice">Mutate</button>

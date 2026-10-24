@@ -38,6 +38,7 @@ import { delimiter, dirname, extname, join, normalize, resolve } from 'node:path
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { TARGETS, DEFAULT_TARGET, targetOf, unsupportedMessage } from './src/targets.js';
 import { compileArgs, createToolchain, linkLinux } from './src/toolchain.js';
+import { PROPERTIES } from './tests/fixtures/properties.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const STATIC = resolve(HERE, '../../app/static');
@@ -51,6 +52,11 @@ const MACHINE = { x86_64: 62, aarch64: 183, riscv64: 243 }; // ELF e_machine
 const missing = ['cc-cross.js', 'cc-cross.wasm', ...LINUX.flatMap((t) => [`targets/${t.arch}/include.tar`, `targets/${t.arch}/lib.tar`])]
     .filter((f) => !existsSync(join(OUT, f)));
 const notBuilt = missing.length ? `not built yet: ${missing.join(', ')}` : false;
+/** Why a target's test frameworks cannot be linked: build-test-frameworks-linux.sh has not run. */
+const frameworksMissing = (target) => {
+    const gone = ['gtest.tar', 'rapidcheck.tar'].map((f) => `targets/${target.arch}/${f}`).filter((f) => !existsSync(join(OUT, f)));
+    return gone.length ? `not built yet: ${gone.join(', ')} (build-test-frameworks-linux.sh)` : false;
+};
 
 const withTarget = (files, target) => ({ ...files, 'compile_flags.txt': `--target=${target.triple}\n${files['compile_flags.txt'] ?? ''}` });
 
@@ -120,8 +126,12 @@ const toolchain = createToolchain({
     }),
 });
 
-/** Compiles every source of `files` for `target` and links them; resolves to the ELF bytes. */
-async function build(target, files) {
+/**
+ * Compiles every source of `files` for `target` and links them, with `libs`
+ * from the toolchain `archives` named (a test framework's); resolves to the
+ * ELF bytes.
+ */
+async function build(target, files, { libs = [], archives = [] } = {}) {
     const objects = {};
     const sources = Object.keys(files).filter((p) => /\.(c|cc|cpp|cxx)$/.test(p));
     for (const source of sources) {
@@ -133,7 +143,7 @@ async function build(target, files) {
     }
     let stderr = '';
     const linked = await linkLinux({ ...toolchain, post: (m) => (stderr += m.text ?? '') }, objects, target,
-        { cxx: sources.some((s) => !/\.c$/.test(s)) });
+        { cxx: sources.some((s) => !/\.c$/.test(s)), libs, archives });
     assert.equal(linked.code, 0, `${target.id} link: ${stderr}`);
     return linked.program;
 }
@@ -219,7 +229,7 @@ process.on('exit', () => rmSync(work, { recursive: true, force: true }));
  * Runs `program` with the oracle. Without one it fails the test, or with
  * ALLOW_SKIP=1 marks it skipped and returns null.
  */
-function run(t, target, program, stdin = '') {
+function run(t, target, program, stdin = '', env = process.env) {
     const via = oracle(target.arch);
     if (!via) {
         const why = `no way to run ${target.arch} programs on this host: put qemu-${target.arch}-static (apt install qemu-user-static) in PATH or QEMU_USER_DIR`;
@@ -231,7 +241,7 @@ function run(t, target, program, stdin = '') {
     writeFileSync(file, program);
     chmodSync(file, 0o755);
     const [cmd, ...args] = [...via, file];
-    const r = spawnSync(cmd, args, { input: stdin, encoding: 'utf8', timeout: 60_000 });
+    const r = spawnSync(cmd, args, { input: stdin, encoding: 'utf8', timeout: 60_000, env });
     rmSync(file);
     return { status: r.status, signal: r.signal, stdout: r.stdout, stderr: r.stderr };
 }
@@ -285,6 +295,23 @@ for (const target of LINUX) {
         if (uncaught) {
             assert.equal(uncaught.signal ?? (uncaught.status === 134 ? 'SIGABRT' : uncaught.status), 'SIGABRT', uncaught.stderr);
             assert.match(uncaught.stderr, /terminating due to uncaught exception of type std::runtime_error: boom/);
+        }
+    });
+
+    test(`${target.label}: GoogleTest and RapidCheck from targets/${target.arch}/ link, a property holds and a false one is shrunk to (1, 1)`, { skip: notBuilt || frameworksMissing(target) }, async (t) => {
+        // As the runner links a Test on a Linux target: the framework's main,
+        // RapidCheck, the framework (build-test-frameworks-linux.sh's archives).
+        const sample = { ...SAMPLE };
+        delete sample['main.cpp'];
+        const linkWith = { libs: ['-lgtest_main', '-lrapidcheck', '-lgtest'], archives: [`targets/${target.arch}/gtest.tar`, `targets/${target.arch}/rapidcheck.tar`] };
+        const env = { ...process.env, GTEST_COLOR: 'no' };
+        const ok = run(t, target, await build(target, withTarget({ ...sample, 'tests/properties_test.cpp': PROPERTIES.gtest(false) }, target), linkWith), '', env);
+        if (ok) assert.ok(ok.status === 0 && /\[  PASSED  \] 2 tests\./.test(ok.stdout), `${ok.status} ${ok.stdout} ${ok.stderr}`);
+        const bad = run(t, target, await build(target, withTarget({ ...sample, 'tests/properties_test.cpp': PROPERTIES.gtest(true) }, target), linkWith), '', env);
+        if (bad) {
+            assert.equal(bad.status, 1, bad.stdout + bad.stderr);
+            assert.match(bad.stdout, /Falsifiable after \d+ tests? and \d+ shrinks?\s+std::tuple<int, int>:\s+\(1, 1\)/);
+            assert.match(bad.stdout, /\[  FAILED  \] GeometryProperties\.NormIsAWholeNumber/);
         }
     });
 

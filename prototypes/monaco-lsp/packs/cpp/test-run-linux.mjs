@@ -21,6 +21,7 @@ import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { PROPERTIES } from './tests/fixtures/properties.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STATIC = path.resolve(HERE, '../../app/static');
@@ -165,7 +166,7 @@ async function newPage(cold) {
     page.on('pageerror', (e) => console.log('[pageerror]', e.message));
     await page.goto(`${origin}/__test.html`);
     await page.evaluate(() => {
-        window.runProject = (files, { inputs = [], stopAfter = null, options } = {}) => new Promise((done) => {
+        window.runProject = (files, { inputs = [], stopAfter = null, options, type = 'run' } = {}) => new Promise((done) => {
             const t0 = performance.now();
             const r = { stdout: '', stderr: '', kernel: '', code: null, phases: [], marks: {}, terminated: false, stdinRequests: [] };
             const sab = new SharedArrayBuffer(8 + 65536);
@@ -194,7 +195,7 @@ async function newPage(cold) {
                     setTimeout(() => { worker.terminate(); finish(); }, 1500);
                 }
             };
-            worker.postMessage({ type: 'run', files, entry: 'main.cpp', stdin: sab, ...(options ? { options } : {}) });
+            worker.postMessage({ type, files, entry: 'main.cpp', stdin: sab, ...(options ? { options } : {}) });
         });
     });
     return page;
@@ -283,6 +284,32 @@ for (const t of LINUX) {
         assert.equal(r.code, 0, why(r));
         assert.equal(r.stdout, `hello from ${arch}\n`);
         checkFetched(r.fetched, arch, { strace: true });
+    });
+
+    test(`${arch}: Test with GoogleTest and RapidCheck: the sample's tests and a property pass; a false property is shrunk to (1, 1), exit 1`, { skip: skip || (!fs.existsSync(path.join(OUT, `targets/${arch}/rapidcheck.tar`)) && 'build-test-frameworks-linux.sh has not run') }, async () => {
+        const plain = (text) => text.replace(/\x1b\[[0-9;:]*[A-Za-z]/g, '');
+        const ok = await run(withTarget({ ...SAMPLE, 'tests/properties_test.cpp': PROPERTIES.gtest(false) }, triple), { type: 'test' });
+        assert.equal(ok.code, 0, why(ok) + ok.stdout);
+        assert.match(plain(ok.stdout), /\[  PASSED  \] 5 tests\./);
+        // GoogleTest's colours reach the guest (GTEST_COLOR=yes in its environment).
+        assert.match(ok.stdout, /\x1b\[0;32m\[  PASSED  \] \x1b\[m5 tests\./);
+        const bad = await runCold(withTarget({ ...SAMPLE, 'tests/properties_test.cpp': PROPERTIES.gtest(true) }, triple), { type: 'test' });
+        assert.equal(bad.code, 1, why(bad) + bad.stdout);
+        const out = plain(bad.stdout);
+        assert.ok(out, `no report: ${why(bad)}`);
+        assert.match(out, /Falsifiable after \d+ tests? and \d+ shrinks?\s+std::tuple<int, int>:\s+\(1, 1\)/);
+        assert.match(out, /tests\/properties_test\.cpp:\d+:\s+RC_ASSERT\(p\.norm\(\) == std::floor\(p\.norm\(\)\)\)/);
+        assert.match(out, /\[  FAILED  \] GeometryProperties\.NormIsAWholeNumber/);
+        checkFetched(bad.fetched, arch);
+        for (const f of [`targets/${arch}/gtest.tar`, `targets/${arch}/rapidcheck.tar`]) assert.ok(bad.fetched.includes(f), `${f} fetched: ${bad.fetched}`);
+        console.log(`# ${arch} GoogleTest + RapidCheck, failing, cold: ${bad.ms} ms; ${out.match(/Falsifiable[^]*?\(1, 1\)/)?.[0].replace(/\s+/g, ' ')}`);
+    });
+
+    test(`${arch}: Test with Catch2 is refused by name (Catch2 is built for WebAssembly only)`, { skip }, async () => {
+        const files = { ...SAMPLE, 'tests/geometry_test.cpp': '#include <catch2/catch_test_macros.hpp>\nTEST_CASE("x") { REQUIRE(true); }\n' };
+        const r = await run(withTarget(files, triple), { type: 'test' });
+        assert.equal(r.code, 1);
+        assert.equal(r.stderr, `Catch2 runs on the WebAssembly target only, for now: on ${t.label} the tests can use GoogleTest (and RapidCheck).\n`);
     });
 
     const userBuilt = fs.existsSync(path.join(OUT, `user/${arch}/qemu-${arch}.wasm`));

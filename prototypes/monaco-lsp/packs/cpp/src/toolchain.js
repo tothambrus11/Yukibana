@@ -213,7 +213,7 @@ export function createToolchain({ base, fetch: fetchImpl = (url) => fetch(url), 
      *
      * - `wasm32-wasip1` (cc): libc++'s headers from sysroot.tar.gz laid under
      *   the WASI sysroot where clang's WASI driver looks for them, clang's own
-     *   headers, the test frameworks' headers, then wasi-sysroot.tar.gz (its
+     *   headers, the test frameworks' and RapidCheck's headers, then wasi-sysroot.tar.gz (its
      *   __config_site replaces the musl one). Not the musl headers: the
      *   target is WASI, not Linux.
      * - Linux (cc-cross): sysroot.tar.gz's /usr/include (musl, libc++ in
@@ -228,7 +228,7 @@ export function createToolchain({ base, fetch: fetchImpl = (url) => fetch(url), 
             for (const [path, bytes] of server) {
                 if (path.startsWith('/usr/include/c++/v1/'))
                     files.push(['/wasi/include/wasm32-wasip1/c++/v1/' + path.slice('/usr/include/c++/v1/'.length), bytes]);
-                else if (/^\/usr\/include\/(gtest|catch2|doctest)\//.test(path)) files.push(['/wasi/include/' + path.slice('/usr/include/'.length), bytes]);
+                else if (/^\/usr\/include\/(gtest\/|catch2\/|doctest\/|rapidcheck\/|rapidcheck\.h$)/.test(path)) files.push(['/wasi/include/' + path.slice('/usr/include/'.length), bytes]);
                 else if (path.startsWith('/usr/lib/clang/')) files.push([path, bytes]);
             }
             files.push(...wasi);
@@ -353,23 +353,27 @@ export function createToolchain({ base, fetch: fetchImpl = (url) => fetch(url), 
  * <objects> -o a.out` prints the ld.lld command line clang's Linux driver
  * builds (crt files, -lc++, compiler-rt, libunwind, libc, from the target's
  * lib.tar), and ld.lld runs with exactly those arguments (a browser cannot
- * spawn it from clang). `cxx`: link as clang++ (libc++). Resolves to
+ * spawn it from clang). `cxx`: link as clang++ (libc++). `libs`: `-l`
+ * flags after the objects (a test framework's, RapidCheck's), whose
+ * libraries are in the `archives` named (toolchain `archive` names, laid
+ * into the linker's file system with lib.tar's). Resolves to
  * `{ code, program }`; on failure the messages (with source names for
  * objects) went to the toolchain's `post` as stderr and `program` is null.
  * A separate function, not a toolchain method, so that the default target's
  * runner.js does not carry it (runner-linux.js does).
  */
-export async function linkLinux(toolchain, objects, target, { cxx = true } = {}) {
+export async function linkLinux(toolchain, objects, target, { cxx = true, libs = [], archives = [] } = {}) {
     const names = Object.keys(objects);
     const plan = await toolchain.tool(target, cxx ? 'clang++' : 'clang',
         // -no-canonical-prefixes: the driver's InstalledDir, where it finds
         // ld.lld, is then argv[0]'s directory, /usr/bin; canonicalised, it
         // would come from the executable's own path, which a wasm module
         // does not have.
-        [`--target=${target.triple}`, '-resource-dir=/usr/lib/clang/21', '-no-canonical-prefixes', '-static', ...names, '-o', 'a.out', '-###'],
+        [`--target=${target.triple}`, '-resource-dir=/usr/lib/clang/21', '-no-canonical-prefixes', '-static', ...names, ...libs, '-o', 'a.out', '-###'],
         objects, [], {
             quiet: true,
             link: true,
+            archives,
             // An installation's /usr/bin, as executables the driver can
             // find: it looks for ld.lld (CLANG_DEFAULT_LINKER=lld) in its
             // InstalledDir, and prints a linker it cannot find as plain "ld".
@@ -388,7 +392,7 @@ export async function linkLinux(toolchain, objects, target, { cxx = true } = {})
         return { code: plan.code || 1, program: null };
     }
     const { code, out } = await toolchain.tool(target, 'ld.lld', splitCommandLine(line).slice(1), objects, ['a.out'],
-        { rewrite: withSourceNames, link: true });
+        { rewrite: withSourceNames, link: true, archives });
     const program = code === 0 ? out['a.out'] ?? null : null;
     return { code: program ? 0 : code || 1, program };
 }

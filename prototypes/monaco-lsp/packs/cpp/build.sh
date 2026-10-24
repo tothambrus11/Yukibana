@@ -6,7 +6,7 @@
 #   clangd.js       Emscripten's glue (an ES module server.js imports)
 #   clangd.wasm     clangd itself, with threads (Web Workers; needs cross-origin isolation)
 #   sysroot.tar.gz  musl and libc++ headers, clang's freestanding headers,
-#                   GoogleTest's, Catch2's and doctest's headers
+#                   GoogleTest's, Catch2's, doctest's and RapidCheck's headers
 #
 # then the Linux targets' compiler and libraries (build-cross.sh,
 # build-targets.sh; README, "Targets") and the demangler (build-demangle.sh;
@@ -19,6 +19,7 @@
 #   gtest.tar            GoogleTest's libraries, fetched by runner.js for tests
 #   catch2.tar           Catch2's libraries, the same for tests that use Catch2
 #   doctest.tar          doctest's implementation and main, for doctest's tests
+#   rapidcheck.tar       RapidCheck's library, for a project that includes it
 #   explorer.js          the compiler output views' worker (LLVM IR, assembly)
 #   cc-cross.js, .wasm   clang 21.1.8 + ld.lld (ELF), x86_64/aarch64/riscv64 Linux
 #   runner-linux.js      linking and running for a Linux target (with vm.js)
@@ -160,7 +161,7 @@ if [ ! -f cxx-headers/include/c++/v1/__config_site ]; then
 fi
 
 # The C++ runtime with exceptions and GoogleTest (build-cxx-runtime.sh), and
-# Catch2 and doctest (build-test-frameworks.sh), here because the sysroot
+# Catch2, doctest and RapidCheck (build-test-frameworks.sh), here because the sysroot
 # below takes the frameworks' headers from them; the libraries go to the
 # runner (pack-runner.sh).
 "$HERE/build-cxx-runtime.sh"
@@ -181,8 +182,10 @@ cp -r cxx-headers/include/c++ "$stage/usr/include/"
 # libc++abi's two public headers join libc++'s.
 cp -r eh/include/gtest "$stage/usr/include/"
 # Catch2 (with the catch_user_config.hpp its wasm build generated) and
-# doctest, likewise: about 180 KB of the archive between them (README).
-cp -r testfw/include/catch2 testfw/include/doctest "$stage/usr/include/"
+# doctest, likewise: about 180 KB of the archive between them; RapidCheck
+# (rapidcheck.h, rapidcheck/ with its gtest.h and catch.h)
+# likewise (README).
+cp -r testfw/include/catch2 testfw/include/doctest testfw/include/rapidcheck testfw/include/rapidcheck.h "$stage/usr/include/"
 cp "$SRC"/libcxxabi/include/{cxxabi.h,__cxxabi_config.h} "$stage/usr/include/c++/v1/"
 hdr="$SRC/clang/lib/Headers"
 cp "$hdr"/{float.h,inttypes.h,iso646.h,limits.h,stdalign.h,stdarg.h,stdatomic.h,stdbool.h,stdckdint.h} \

@@ -14,10 +14,12 @@ freestanding headers (`stddef.h`, `stdarg.h`, `stdint.h`, ... in
 frameworks' headers are there too: GoogleTest **1.18.0** (`/usr/include/gtest`,
 with libc++abi's `cxxabi.h`, which they include), Catch2 **3.16.1**
 (`/usr/include/catch2`, with the `catch_user_config.hpp` of the wasm build)
-and doctest **2.5.3** (`/usr/include/doctest/doctest.h`), so
-`#include <gtest/gtest.h>`, `<catch2/catch_test_macros.hpp>` or
-`<doctest/doctest.h>` in a test resolves in the editor (see "Running",
-Tests).
+and doctest **2.5.3** (`/usr/include/doctest/doctest.h`), and RapidCheck
+(commit `2c3c436`, `/usr/include/rapidcheck.h`, `/usr/include/rapidcheck/`
+with its GoogleTest and Catch2 integrations), so
+`#include <gtest/gtest.h>`, `<catch2/catch_test_macros.hpp>`,
+`<doctest/doctest.h>` or `<rapidcheck/gtest.h>` in a test resolves in the
+editor (see "Running", Tests and Properties).
 
 ## Files (served at `/packs/cpp/`)
 
@@ -26,12 +28,14 @@ Tests).
 | `server.js` | the worker: transport, file mirroring, loader, a Linux target's `bits/` headers on demand (esbuild-bundled and minified, with `targets.js`) | 6.6 KB | 3.1 KB | 2.8 KB |
 | `clangd.js` | Emscripten glue, ES module | 76 KB | 20 KB | 18 KB |
 | `clangd.wasm` | clangd 21.1.8, `-Oz` | 24.0 MB | 8.5 MB | 6.0 MB |
-| `sysroot.tar.gz` | 2139 headers: musl, libc++, clang freestanding, GoogleTest, Catch2, doctest | 2.1 MB (gzip, unpacked in the worker) | | |
+| `sysroot.tar.gz` | 2264 headers: musl, libc++, clang freestanding, GoogleTest, Catch2, doctest, RapidCheck | 2.18 MB (gzip, unpacked in the worker) | | |
 
-First load is about **8.1 MB** with brotli (10.7 MB with gzip); the test
-frameworks' headers are 0.31 MB of it (GoogleTest 0.13 MB, Catch2's 183
+First load is about **8.2 MB** with brotli (10.8 MB with gzip); the test
+frameworks' headers are 0.37 MB of it (GoogleTest 0.13 MB, Catch2's 183
 headers 0.12 MB, doctest's one 0.06 MB; Catch2 and doctest grew the archive
-from 1,938,546 to 2,119,426 bytes). The `LICENSE-*.txt` files are not fetched.
+from 1,938,546 to 2,119,426 bytes; RapidCheck's 135 headers, 275 KB
+unpacked, grew it to 2,177,109, +58 KB). The `LICENSE-*.txt` files are not
+fetched.
 
 `server.js` downloads `clangd.wasm` and `sysroot.tar.gz` in parallel when
 the worker starts, reporting each with `yukibana/loading`, compiles the wasm
@@ -302,6 +306,16 @@ interpreted or simulated, and no server is involved.
   exceptions (`CHECK_THROWS_AS` would not compile); the copy here keeps it
   on when clang announces WebAssembly exception handling
   (`__wasm_exception_handling__`). The headers are in `sysroot.tar.gz`.
+* **RapidCheck** (property-based testing; upstream
+  <https://github.com/emil-e/rapidcheck>), built by the same script with the
+  same compiler and flags, by its own unpatched CMake build (C++11, RTTI).
+  RapidCheck has no releases or tags, so it is pinned by a commit of its
+  master branch, `2c3c4365aca2` (2026-10-05), fetched alone and checked
+  against that commit and against the SHA-256 of its tree (every file's
+  SHA-256, sorted by path), without its submodules (they serve only its own
+  tests). `librapidcheck.a` is `rapidcheck.tar`; the headers, with its
+  GoogleTest and Catch2 integrations (`rapidcheck/gtest.h`,
+  `rapidcheck/catch.h`), are in `sysroot.tar.gz`. See Properties below.
 * **Headers shared with the language server**: libc++'s headers and clang's
   own headers come from `sysroot.tar.gz`, the file `server.js` already
   downloads, so the browser and service worker fetch it once.
@@ -407,13 +421,14 @@ against the directory of `compile_flags.txt`).
 | `gtest.tar` | `libgtest.a`, `libgtest_main.a`; fetched only for GoogleTest tests | 563 KB | 152 KB | 110 KB |
 | `catch2.tar` | `libCatch2.a`, `libCatch2Main.a`; fetched only for Catch2 tests | 1.63 MB | 424 KB | 279 KB |
 | `doctest.tar` | `libdoctest_main.a` (implementation and main); fetched only for doctest tests | 297 KB | 87 KB | 64 KB |
+| `rapidcheck.tar` | `librapidcheck.a`; fetched only for a project that includes RapidCheck | 840 KB | 160 KB | 105 KB |
 
 The first Run downloads **14.4 MB** (with brotli for the files that have
 `.br` siblings; the test below measures exactly this). That drops to
 **12.3 MB** when the language server has already fetched
 `sysroot.tar.gz`. The first Test adds the framework's archive: 110 KB for
-GoogleTest, 64 KB for doctest, 279 KB for Catch2. Later runs download
-nothing. Exceptions cost 41 KB of that (`wasi-sysroot.tar.gz`), the test
+GoogleTest, 64 KB for doctest, 279 KB for Catch2, and RapidCheck 105 KB
+more. Later runs download nothing. Exceptions cost 41 KB of that (`wasi-sysroot.tar.gz`), the test
 frameworks' headers 0.31 MB (`sysroot.tar.gz`).
 
 **Test** (`node test-run.mjs`): headless Chromium 1194, app/static served
@@ -424,11 +439,12 @@ is a disk cache. The machine was shared with other builds.
 
 ```text
 PASS  the page is crossOriginIsolated
-PASS  sample project (cold): prints the distance and the norm, exits 0  "5.000000\n5.000000\n" code=0 in 7301 ms, 14.4 MB transferred; Loading the compiler@27, Compiling geometry.cpp (1/2)@779, Compiling main.cpp (2/2)@2323, Linking@6784, Running@7221
-PASS  sample project (warm): same output from the browser cache  code=0 in 4101 ms, 0 bytes transferred; Loading the compiler@71, Compiling geometry.cpp (1/2)@659, Compiling main.cpp (2/2)@1134, Linking@3448, Running@4020
-PASS  loading messages for each download  wasi-sysroot.tar.gz 987401/987401, sysroot.tar.gz 2119442/2119442, cc.wasm 42410950/42410950
-PASS  C++ (cin): prompt without newline, two lines of stdin, their sum  "first number: second number: sum: 42\n" requests=2 seen-before-input=["first number: ","first number: second number: "] code=0 3440 ms
-PASS  C (scanf): prompt without newline, two lines of stdin, their sum  "first number: second number: sum: 42\n" requests=2 seen-before-input=["first number: ","first number: second number: "] code=0 1492 ms
+PASS  the default target fetches exactly the files it always did  /packs/cpp/cc.js /packs/cpp/cc.wasm /packs/cpp/runner.js /packs/cpp/sysroot.tar.gz /packs/cpp/wasi-sysroot.tar.gz
+PASS  sample project (cold): prints the distance and the norm, exits 0  "5.000000\n5.000000\n" code=0 in 4723 ms, 14.5 MB transferred; Loading the compiler@14, Compiling geometry.cpp (1/2)@431, Compiling main.cpp (2/2)@1501, Linking@4487, Running@4697
+PASS  sample project (warm): same output from the browser cache  code=0 in 2678 ms, 0 bytes transferred; Loading the compiler@21, Compiling geometry.cpp (1/2)@495, Compiling main.cpp (2/2)@825, Linking@2434, Running@2667
+PASS  loading messages for each download  wasi-sysroot.tar.gz 987401/987401, sysroot.tar.gz 2177109/2177109, cc.wasm 42410950/42410950
+PASS  C++ (cin): prompt without newline, two lines of stdin, their sum  "first number: second number: sum: 42\n" requests=2 seen-before-input=["first number: ","first number: second number: "] code=0 2317 ms
+PASS  C (scanf): prompt without newline, two lines of stdin, their sum  "first number: second number: sum: 42\n" requests=2 seen-before-input=["first number: ","first number: second number: "] code=0 890 ms
 PASS  end of file on stdin (Ctrl-D) ends scanf  code=2 "first number: "
 PASS  compile error: clang diagnostics on stderr, non-zero exit  code=1
 PASS  4 MB of locals work; deep recursion ends in a stack-overflow message, exit 134  deepest completed: 4000 calls; "The program crashed: Maximum call stack size exceeded (stack overflow: the browser allows only a few thousand nested calls)"
@@ -437,22 +453,33 @@ PASS  long double prints: C (printf %Lf)  "0.333333\n" code=0 ""
 PASS  vector index out of bounds: the program is stopped, exit 134, nothing after it runs  code=134 "The program crashed: unreachable (abort(), or a failed check: in C++, for example, an index out of range on a vector, string, array or span)"
 PASS  C++ exceptions: thrown and caught (own type, std::stoi, vector::at), destructors run while unwinding  "caught custom\nstoi: invalid_argument\nat: out_of_range\ndestructor ran\nint 42\n" code=0 ""
 PASS  uncaught C++ exception: terminate message with type and what(), exit 134  code=134 "libc++abi: terminating due to uncaught exception of type std::logic_error: boom"
-PASS  sample's GoogleTest tests: all pass, exit 0, main.cpp left out  code=0 in 4873 ms, 110 kB transferred (gtest.tar [563200,563200]); Loading the compiler@28, Compiling geometry.cpp (1/2)@582, Compiling tests/geometry_test.cpp (2/2)@944, Linking@4524, Running the tests@4837
+PASS  sample's GoogleTest tests: all pass, exit 0, main.cpp left out  code=0 in 4149 ms, 110 kB transferred (gtest.tar [563200,563200]); Loading the compiler@24, Compiling geometry.cpp (1/2)@521, Compiling tests/geometry_test.cpp (2/2)@859, Linking@3860, Running the tests@4113
 PASS  GoogleTest's report is in its terminal colours: green [ RUN ]/[ OK ]/[ PASSED ], nothing else escaped  "Running main() from googletest/src/gtest_main.cc\n\u001b[0;32m[==========] \u001b[mRunning 3 tests from 1 test suite.\n\u001b[0;32m[-----"
-PASS  a failing test: reported on stdout with file and line, exit non-zero  code=1 in 8723 ms
-PASS  a failing test is in red  "13 ms total)\n\u001b[0;32m[  PASSED  ] \u001b[m3 tests.\n\u001b[0;31m[  FAILED  ] \u001b[m2 tests, listed below:\n\u001b[0;31m[  FAILED  ] \u001b[mBroken.NormIsWrong\n\u001b[0;31m[  FAILED  ] \u001b[mBroken.ThrowsSomethingElse\n\n 2 FAILED TESTS\n"
-PASS  doctest: the sample's tests pass, exit 0, only doctest.tar fetched  code=0 in 3477 ms (doctest.tar [296960,296960]; archives: doctest.tar); Loading the compiler@17, Compiling geometry.cpp (1/2)@664, Compiling tests/geometry_test.cpp (2/2)@1106, Linking@3238, Running the tests@3448
+PASS  a failing test: reported on stdout with file and line, exit non-zero  code=1 in 7090 ms
+PASS  a failing test is in red  "(6 ms total)\n\u001b[0;32m[  PASSED  ] \u001b[m3 tests.\n\u001b[0;31m[  FAILED  ] \u001b[m2 tests, listed below:\n\u001b[0;31m[  FAILED  ] \u001b[mBroken.NormIsWrong\n\u001b[0;31m[  FAILED  ] \u001b[mBroken.ThrowsSomethingElse\n\n 2 FAILED TESTS\n"
+PASS  doctest: the sample's tests pass, exit 0, only doctest.tar fetched  code=0 in 2980 ms (doctest.tar [296960,296960]; archives: doctest.tar); Loading the compiler@19, Compiling geometry.cpp (1/2)@561, Compiling tests/geometry_test.cpp (2/2)@855, Linking@2803, Running the tests@2968
 PASS  doctest: the report is in colour (--force-colors)  "\u001b[0;36m[doctest] \u001b[0mdoctest version is \"2.5.3\"\n\u001b[0;36m[doctest] \u001b[0mrun with \"--help\" for options\n\u001b[0m\u001b[0m\u001b[0m\u001b[0;33m=="
-PASS  doctest: failing tests are reported with file and line, exit non-zero  code=1 in 5914 ms
-PASS  catch2: the sample's tests pass, exit 0, only catch2.tar fetched  code=0 in 3743 ms (catch2.tar [1628160,1628160]; archives: catch2.tar); Loading the compiler@31, Compiling geometry.cpp (1/2)@666, Compiling tests/geometry_test.cpp (2/2)@1006, Linking@3466, Running the tests@3720
-PASS  catch2: the report is in colour (--colour-mode ansi)  "Randomness seeded to: 773790583\n\u001b[1;31m\u001b[1;33m\u001b[0m\u001b[0m\u001b[1;32m==========================================================="
-PASS  catch2: failing tests are reported with file and line, exit non-zero  code=42 in 5887 ms
+PASS  doctest: failing tests are reported with file and line, exit non-zero  code=1 in 5157 ms
+PASS  catch2: the sample's tests pass, exit 0, only catch2.tar fetched  code=0 in 3226 ms (catch2.tar [1628160,1628160]; archives: catch2.tar); Loading the compiler@16, Compiling geometry.cpp (1/2)@526, Compiling tests/geometry_test.cpp (2/2)@756, Linking@2990, Running the tests@3206
+PASS  catch2: the report is in colour (--colour-mode ansi)  "Randomness seeded to: 1483059422\n\u001b[1;31m\u001b[1;33m\u001b[0m\u001b[0m\u001b[1;32m=========================================================="
+PASS  catch2: failing tests are reported with file and line, exit non-zero  code=42 in 5684 ms
 PASS  doctest with DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN in a test: links once, passes  code=0 ""
 PASS  tests that mix GoogleTest and Catch2: a message naming both files, exit 1, nothing compiled  "The tests mix test frameworks: tests/geometry_test.cpp includes <gtest/...> (GoogleTest), tests/other_test.cpp includes <catch2/...> (Catch2). A test program links one of them; convert or remove the others."
+PASS  RapidCheck with GoogleTest: a property that holds passes, exit 0, rapidcheck.tar fetched  code=0 in 9540 ms (rapidcheck.tar [839680,839680]; archives: gtest.tar,rapidcheck.tar); Loading the compiler@13, Compiling geometry.cpp (1/3)@609, Compiling tests/geometry_test.cpp (2/3)@860, Compiling tests/properties_test.cpp (3/3)@3761, Linking@9318, Running the tests@9495
+PASS  RapidCheck with GoogleTest: a property that fails is shrunk to (1, 1), reported with file and line, exit non-zero  code=1 in 9390 ms; Falsifiable after 7 tests and 3 shrinks std::tuple<int, int>: (1, 1)
+PASS  RapidCheck with doctest: a property that holds passes, exit 0, rapidcheck.tar fetched  code=0 in 8041 ms (rapidcheck.tar [839680,839680]; archives: doctest.tar,rapidcheck.tar); Loading the compiler@14, Compiling geometry.cpp (1/3)@585, Compiling tests/geometry_test.cpp (2/3)@869, Compiling tests/properties_test.cpp (3/3)@2798, Linking@7850, Running the tests@8011
+PASS  RapidCheck with doctest: a property that fails is shrunk to (1, 1), reported with file and line, exit non-zero  code=1 in 7613 ms; Falsifiable after 8 tests and 4 shrinks std::tuple<int, int>: (1, 1)
+PASS  RapidCheck with Catch2: a property that holds passes, exit 0, rapidcheck.tar fetched  code=0 in 8768 ms (rapidcheck.tar [839680,839680]; archives: catch2.tar,rapidcheck.tar); Loading the compiler@14, Compiling geometry.cpp (1/3)@546, Compiling tests/geometry_test.cpp (2/3)@794, Compiling tests/properties_test.cpp (3/3)@3073, Linking@8548, Running the tests@8742
+PASS  RapidCheck with Catch2: a property that fails is shrunk to (1, 1), reported with file and line, exit non-zero  code=42 in 9065 ms; Falsifiable after 6 tests and 3 shrinks std::tuple<int, int>: (1, 1)
+PASS  RapidCheck from a main of its own (rc::check), no framework: the holding property passes, the false one is shrunk, exit 1  code=1 in 6096 ms
 PASS  test mode without tests/: says so, exit 1  "No tests to run: put test files (GoogleTest, doctest or Catch2) in tests/, for example tests/geometry_test.cpp."
-PASS  duplicate main: the link error names main.cpp and lib/other.cpp, non-zero exit  code=1 (wasm-ld: error: duplicate symbol: main / >>> defined in lib/other.cpp / >>> defined in main.cpp, and the same for __original_main and __main_void)
-PASS  compiler cannot be instantiated: error on stderr and an exit message  code=1 "clang could not start: WebAssembly.Memory(): could not allocate memory" 673 ms
-PASS  endless loop: terminated by the page, which stays responsive  stopped after 2249 ms; Loading the compiler@27, Compiling main.cpp (1/1)@511, Linking@936, Running@1236
+PASS  duplicate main: the link error names main.cpp and lib/other.cpp, non-zero exit  code=1
+PASS  compiler cannot be instantiated: error on stderr and an exit message  code=1 "clang could not start: WebAssembly.Memory(): could not allocate memory" 559 ms
+PASS  an unsupported --target: the message lists the supported triples, exit 1, nothing downloaded  "Unsupported target \"armv7-linux-musleabihf\" in compile_flags.txt; supported: wasm32-wasip1, x86_64-linux-musl, aarch64-linux-musl, riscv64-linux-musl (or no --target).\n"
+PASS  Catch2 tests on a Linux target: refused, naming why and what works there, exit 1, nothing downloaded  "Catch2 runs on the WebAssembly target only, for now: on AArch64 Linux the tests can use GoogleTest (and RapidCheck).\n"
+PASS  Linux target without vm.js: compiled for x86_64-linux-musl, linked, then "not installed", exit 1  "Running on x86-64 Linux is not installed (packs/cpp/vm.js)\n" Loading the compiler@8, Compiling geometry.cpp (1/2) for x86_64-linux-musl@591, Compiling main.cpp (2/2) for x86_64-linux-musl@1940, Linking@5026
+PASS  a Linux target fetches cc-cross and its own arch only, never cc.wasm or wasi-sysroot  /packs/cpp/cc-cross.js /packs/cpp/cc-cross.wasm /packs/cpp/runner-linux.js /packs/cpp/targets/x86_64/include.tar /packs/cpp/targets/x86_64/lib.tar /packs/cpp/vm.js
+PASS  endless loop: terminated by the page, which stays responsive  stopped after 1791 ms; Loading the compiler@11, Compiling main.cpp (1/1)@472, Linking@652, Running@780
 all passed
 ```
 
@@ -545,6 +572,77 @@ test cases: 5 | 3 passed | 2 failed
 assertions: 6 | 4 passed | 2 failed
 ```
 
+**Properties** (RapidCheck): a project that includes `<rapidcheck.h>` or
+`<rapidcheck/...>` (in a compiled file, or a header under `tests/`) is linked
+with `librapidcheck.a`, whose `rapidcheck.tar` is then fetched once; a
+project that does not fetches nothing more (tested). RapidCheck is a library
+beside a test framework, not one of its own, so it goes with any of the
+three, and with a plain Run:
+
+* **GoogleTest**: `#include <gtest/gtest.h>`, then `<rapidcheck/gtest.h>`,
+  and `RC_GTEST_PROP(Suite, Name, (int x, int y)) { RC_ASSERT(...); }`
+  (also `RC_GTEST_FIXTURE_PROP`). Each property is one GoogleTest test.
+* **Catch2**: `#include <catch2/catch_test_macros.hpp>`, then
+  `<rapidcheck/catch.h>`, and `rc::prop("name", [](int x) { ... })` inside a
+  `TEST_CASE` (it opens a `SECTION`).
+* **doctest**: `const bool holds = rc::check("name", [](int x) { ... });
+  CHECK(holds);` with `#include <rapidcheck.h>`. RapidCheck's own doctest
+  integration (`rapidcheck/doctest.h`, `rc::doctest::check`) is **not
+  shipped: it does not compile** at this commit with any compiler, because
+  inside its namespace `rc::doctest` the name `doctest::detail` means
+  `rc::doctest::detail` (clang 21: "no namespace named 'detail' in
+  namespace 'rc::doctest'"; GCC 13: "'detail' is not a namespace-name").
+  Fixing it would be a patch to RapidCheck, so it is left out; its report
+  then goes to stderr rather than into doctest's.
+* **No framework**: `rc::check("name", property)` from the program's own
+  `main` returns whether the property held; the report is on stderr.
+
+What works as natively: random generation (`std::random_device`, which is
+WASI's `random_get`), the 100 cases per property, shrinking, the report with
+the counterexample, the file and line of the failed `RC_ASSERT` and its
+expansion, and the `RC_PARAMS="reproduce=..."` line RapidCheck prints for a
+failure. RapidCheck needs no threads, signals, files or clocks; only its
+`std::chrono` generators (`gen/Chrono.h`) generate durations, which need no
+clock either. `RC_PARAMS` itself is an environment variable, and the runner
+gives a program no way to set one, so a seed, `max_success` or a `reproduce`
+string can be used in the Download's build, not in the browser.
+
+A failing property in GoogleTest, shrunk from a random pair to the smallest
+counterexample, as the Test prints it (`test-run.mjs`; colours removed):
+
+```text
+[ RUN      ] GeometryProperties.NormIsAWholeNumber
+/wasi/include/rapidcheck/gtest.h:29: Failure
+Failed
+Falsifiable after 3 tests and 2 shrinks
+
+std::tuple<int, int>:
+(1, 1)
+
+tests/properties_test.cpp:15:
+RC_ASSERT(p.norm() == std::floor(p.norm()))
+
+Expands to:
+1.41421 == 1
+
+
+[  FAILED  ] GeometryProperties.NormIsAWholeNumber (7 ms)
+...
+[  PASSED  ] 4 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] GeometryProperties.NormIsAWholeNumber
+```
+
+and on stderr `Using configuration: seed=...` and `Some of your RapidCheck
+properties had failures. To reproduce these, run with: RC_PARAMS="reproduce=..."`.
+The framework's failure line is where its integration header fails the test
+(`rapidcheck/gtest.h:29`, `rapidcheck/catch.h:52`), under `/wasi/include`
+where the runner's compiler finds the headers (`/usr/include` natively);
+the line that matters, the `RC_ASSERT`, is the project's. Including
+`<rapidcheck.h>` costs compile time: the properties file takes about 3 s to
+compile and the link about 5 s more than the sample's tests alone, in the
+runs below.
+
 **Standard input**: when the program reads and has no input buffered, the
 runner flushes, posts `{ type: 'stdin' }` and blocks in `Atomics.wait`.
 C's stdio (musl-based) does not flush stdout before reading stdin; C++'s
@@ -564,7 +662,10 @@ SharedArrayBuffer (a page that is not isolated), stdin is at end of file.
   shipped) and without what needs `dup`/`dup2` (death tests,
   `EXPECT_DEATH`, and `testing::internal::CaptureStdout`), **doctest**, or
   **Catch2 v3**, one framework per project: tests that include two are
-  refused with a message naming a file of each. No signal handling in
+  refused with a message naming a file of each. Properties are RapidCheck,
+  with GoogleTest's or Catch2's integration or `rc::check`; not with
+  RapidCheck's doctest integration, which does not compile (Properties), and
+  not with `RC_PARAMS` (no environment). No signal handling in
   doctest or Catch2 (WASI has none): a crash in a test ends the whole run
   with the runner's crash message instead of a report naming the test.
   Test files live
@@ -629,8 +730,8 @@ fetches wasi-sdk 30's toolchain and GoogleTest, extracts `libunwind/` from
 the LLVM tarball, and builds libc++, libc++abi, `Unwind-wasm.c`,
 `src/uncaught.cpp` and GoogleTest: about 1.5 minutes at `-j3` on this
 machine, plus the 119 MB download the first time. `build-test-frameworks.sh`
-(called the same way, cached in `$PACK_CACHE/cpp/testfw`) builds Catch2 and
-doctest with that toolchain: about 1.5 minutes at `-j3`.
+(called the same way, cached in `$PACK_CACHE/cpp/testfw`) builds Catch2,
+doctest and RapidCheck with that toolchain: about 1.5 minutes at `-j3`.
 Time on this machine (4 cores shared with another agent's clangd build,
 `-j3`, `nice`): **102 minutes** for the LLVM step, about 3 minutes for the
 rest (mostly brotli on `cc.wasm`). The build tree `build-wasm-cc` is
@@ -720,8 +821,14 @@ line is ours: clang's Linux driver picks them.
 * Alpine's musl headers carry Alpine's patches (`dirent.h`, `elf.h` differ
   from upstream 1.2.5; `libintl.h` is only in ours). The headers used are
   ours, the libraries Alpine's.
-* **Test** is refused on a Linux target: "Tests run on the WebAssembly
-  target only, for now: the test frameworks are built for wasm32 only."
+* **Test** on a Linux target runs **GoogleTest** tests, with **RapidCheck**
+  properties, under QEMU like a Run (Run options apply): the two are built
+  for each Linux target (below), and the full GoogleTest at that, with
+  pthreads, stream redirection and death tests, which Linux has. **Catch2
+  and doctest are not built for Linux** (yet; the same build would do it,
+  with Catch2's hundred translation units): their tests are refused before
+  anything is fetched, "Catch2 runs on the WebAssembly target only, for
+  now: on AArch64 Linux the tests can use GoogleTest (and RapidCheck)."
   (`test-run.mjs`).
 * No 32-bit targets (armv7, i386, riscv32): none was asked for, and each
   costs a backend in `cc-cross.wasm`, a `lib.tar` and the emulator's
@@ -753,6 +860,12 @@ not installed (packs/cpp/vm.js)".
 | `targets/aarch64/lib.tar` | as for x86-64 | 6.46 MB | 1.31 MB | 0.91 MB |
 | `targets/riscv64/include.tar` | musl `bits/` for RISC-V 64 | 82 KB | 12 KB | 8.9 KB |
 | `targets/riscv64/lib.tar` | as for x86-64 | 9.39 MB | 1.81 MB | 1.26 MB |
+| `targets/x86_64/gtest.tar` | `libgtest.a`, `libgtest_main.a` for x86-64 Linux; fetched only for GoogleTest tests | 963 KB | 218 KB | 164 KB |
+| `targets/x86_64/rapidcheck.tar` | `librapidcheck.a` for x86-64 Linux; fetched only for a project that includes RapidCheck | 1.21 MB | 228 KB | 140 KB |
+| `targets/aarch64/gtest.tar` | as for x86-64 | 983 KB | 219 KB | 156 KB |
+| `targets/aarch64/rapidcheck.tar` | as for x86-64 | 1.25 MB | 234 KB | 139 KB |
+| `targets/riscv64/gtest.tar` | as for x86-64 | 2.09 MB | 357 KB | 263 KB |
+| `targets/riscv64/rapidcheck.tar` | as for x86-64 | 1.88 MB | 328 KB | 205 KB |
 
 A first Run on a Linux target downloads `cc-cross.wasm`, `sysroot.tar.gz`
 and the target's two tars, plus the emulator's files:
@@ -763,7 +876,21 @@ headers.
 
 **Build.** `build.sh` runs `build-cross.sh`, `build-targets.sh` and
 `build-demangle.sh` before `build-runner.sh` (whose `pack-runner.sh` copies
-both compilers and bundles the three workers). Both compilers are kept in
+both compilers and bundles the three workers). `pack-runner.sh` also runs
+`build-test-frameworks-linux.sh`, which compiles GoogleTest 1.18.0 and
+RapidCheck (the same pinned sources as the WebAssembly libraries; the pins
+are read from `build-cxx-runtime.sh` and `build-test-frameworks.sh`) for
+each Linux target with **`cc-cross.wasm` itself**, in Node
+(`build-test-libs-linux.mjs`, through `toolchain.js` as the runner drives
+it, with Run's flags), archives them with wasi-sdk's `llvm-ar`, and writes
+`targets/<arch>/gtest.tar` and `rapidcheck.tar` with the libraries in
+`/usr/lib/<multiarch>`, where clang's Linux driver finds `-lgtest` and
+`-lrapidcheck`. 108 compiles, one after another: about 3.5 minutes,
+skipped while its stamp (the two scripts, `cc-cross.wasm`, the three
+`include.tar`) matches. For a Test, `runner-linux.js` links with
+`-lgtest_main -lrapidcheck -lgtest` (as needed) after the objects, through
+the same `clang -###` and `ld.lld` (`linkLinux`'s `libs` and `archives`),
+and the guest gets `GTEST_COLOR=yes` in its environment. Both compilers are kept in
 `$CACHE/artifacts/{cc,cc-cross}` with a `STAMP`, the SHA-256 of the LLVM
 and Emscripten versions, the cmake arguments and the patch
 (`PRINT_STAMP=1 ./build-runner.sh` prints `cc`'s); each LLVM step is skipped
@@ -866,10 +993,36 @@ PASS  session 3: the worker raised no errors  []
 
 PASS  the default target fetches exactly the files it always did  /packs/cpp/cc.js /packs/cpp/cc.wasm /packs/cpp/runner.js /packs/cpp/sysroot.tar.gz /packs/cpp/wasi-sysroot.tar.gz
 PASS  an unsupported --target: the message lists the supported triples, exit 1, nothing downloaded  "Unsupported target \"armv7-linux-musleabihf\" in compile_flags.txt; supported: wasm32-wasip1, x86_64-linux-musl, aarch64-linux-musl, riscv6
-PASS  Test on a Linux target: refused, naming why (the frameworks are wasm32), exit 1  "Tests run on the WebAssembly target only, for now: the test frameworks are built for wasm32 only.\n"
+PASS  Catch2 tests on a Linux target: refused, naming why and what works there, exit 1, nothing downloaded  "Catch2 runs on the WebAssembly target only, for now: on AArch64 Linux the tests can use GoogleTest (and RapidCheck).\n"
 PASS  Linux target without vm.js: compiled for x86_64-linux-musl, linked, then "not installed", exit 1  "Running on x86-64 Linux is not installed (packs/cpp/vm.js)\n" Loading the compiler@6, Compiling geometry.cpp (1/2) for x86_64-linux-mus
 PASS  a Linux target fetches cc-cross and its own arch only, never cc.wasm or wasi-sysroot  /packs/cpp/cc-cross.js /packs/cpp/cc-cross.wasm /packs/cpp/runner-linux.js /packs/cpp/targets/x86_64/include.tar /packs/cpp/targets/x86_64/lib.tar /
 ```
+
+**Tests on a Linux target** (`test-targets.mjs`, which links GoogleTest
+and RapidCheck from `targets/<arch>/` and runs the program natively on
+x86-64, and `test-run-linux.mjs`, which runs a Test through `runner.js` under
+QEMU-Wasm in Chromium on all three targets):
+
+```text
+ok 1 - x86-64 Linux: GoogleTest and RapidCheck from targets/x86_64/ link, a property holds and a false one is shrunk to (1, 1)
+ok 2 - AArch64 Linux: ... # SKIP no way to run aarch64 programs on this host (no qemu-user-static here)
+ok 3 - RISC-V 64 Linux: ... # SKIP the same
+
+# x86_64 GoogleTest + RapidCheck, failing, cold: 28556 ms; Falsifiable after 4 tests and 2 shrinks std::tuple<int, int>: (1, 1)
+ok 8 - x86_64: Test with GoogleTest and RapidCheck: the sample's tests and a property pass; a false property is shrunk to (1, 1), exit 1
+ok 9 - x86_64: Test with Catch2 is refused by name (Catch2 is built for WebAssembly only)
+ok 8 - aarch64: Test with GoogleTest and RapidCheck: the sample's tests and a property pass; a false property is shrunk to (1, 1), exit 1
+ok 9 - aarch64: Test with Catch2 is refused by name (Catch2 is built for WebAssembly only)
+# riscv64 GoogleTest + RapidCheck, failing, cold: 18947 ms; Falsifiable after 4 tests and 2 shrinks std::tuple<int, int>: (1, 1)
+ok 8 - riscv64: Test with GoogleTest and RapidCheck: the sample's tests and a property pass; a false property is shrunk to (1, 1), exit 1
+ok 9 - riscv64: Test with Catch2 is refused by name (Catch2 is built for WebAssembly only)
+```
+
+The rest of `test-run-linux.mjs` passed on all three targets in the same
+runs. Once, in a run of both aarch64 and riscv64 one after the other, the
+riscv64 failing-property case exited 1 with no output on stdout; it did
+not happen again in two more runs (the test now prints stderr and the
+guest's kernel log if it does).
 
 ## Compiler output views
 

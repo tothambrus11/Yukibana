@@ -307,7 +307,7 @@ int main() {
 		await picker.selectOption(id);
 		const text = (await modelText(page, 'compile_flags.txt')) ?? '';
 		check(text === `--target=${triple}\n${flags}`, `choosing ${arch} puts --target=${triple} first in compile_flags.txt (${JSON.stringify(text)})`);
-		check(await testButton.isDisabled(), `on ${arch}, Test is disabled ("${await testButton.getAttribute('title')}")`);
+		check(!(await testButton.isDisabled()), `on ${arch}, Test is enabled`);
 
 		// clangd parses for the target: its macro is defined (the #warning proves the file was parsed), the wrong-target #error is not hit.
 		await openFile(page, 'main.cpp');
@@ -328,6 +328,12 @@ int main() {
 		await page.locator('header button.run').click();
 		const r = await ended(page);
 		check(r.done && /code 0/.test(r.status) && r.shown.includes('5.000000'), `Run on ${arch} (QEMU, system mode) prints 5.000000 (${r.status}: ${JSON.stringify(r.shown.slice(-300))})`);
+		if (arch === 'x86_64') {
+			// The sample's GoogleTest tests, built for Linux (targets/x86_64/gtest.tar) and run under QEMU.
+			await testButton.click();
+			const tested = await ended(page, 600_000);
+			check(tested.done && /code 0/.test(tested.status) && tested.shown.includes('[  PASSED  ] 3 tests.'), `Test on ${arch} runs the sample's GoogleTest tests under QEMU (${tested.status}: ${JSON.stringify(tested.shown.slice(-200))})`);
+		}
 
 		const threads = arch === 'x86_64' ? 4 : 1;
 		await page.locator('header .run-options button.toggle').click();

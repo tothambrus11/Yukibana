@@ -111,6 +111,17 @@ const CATCH2_VERSION = '3.16.1';
 const CATCH2_COMMIT = '08092139210881f01a34e60c5f2fd6afa0ea4024';
 const DOCTEST_VERSION = '2.5.3';
 const DOCTEST_COMMIT = '2d0a9359a60c51affe2a9bebb1be1dca47868151';
+/**
+ * RapidCheck as the browser runs it (packs/cpp/build-test-frameworks.sh): a
+ * commit of its master branch, since RapidCheck has no releases or tags.
+ */
+const RAPIDCHECK_COMMIT = '2c3c4365aca21ef4e612768fdc95b1ce8b39a651';
+const RAPIDCHECK_DATE = '2026-10-05';
+
+/** Whether a source includes RapidCheck (<rapidcheck.h> or <rapidcheck/...>), the runner's test for linking it. */
+function includesRapidCheck(text: string): boolean {
+	return /^[ \t]*#[ \t]*include[ \t]*[<"]rapidcheck(?:\.h[>"]|\/)/m.test(withoutComments(text));
+}
 
 
 /**
@@ -239,7 +250,9 @@ function linuxTarget(files: Files): CppTarget | null {
  * second one, `app_tests`, from those plus the program's sources without its
  * main, linked with the test framework tests/ includes (GoogleTest, doctest
  * or Catch2, fetched with FetchContent; its main unless a test defines one)
- * and registered with CTest test by test. compile_flags.txt's standard,
+ * and registered with CTest test by test. RapidCheck, when a source
+ * includes it, is fetched the same way, pinned to the browser's commit, and
+ * linked to whichever of the two needs it. compile_flags.txt's standard,
  * include directories, definitions and options apply to both, not to the
  * framework itself, so a `-Werror` there does not fail on the framework's code. The options are left
  * out for MSVC, which does not take GCC-style flags. compile_commands.json is
@@ -259,6 +272,12 @@ export function cmakeLists(files: Files, entry: string): string {
 	const cxx = tests.length > 0 || !sources.some((p) => C.test(p)) || sources.some((p) => CXX.test(p));
 	const languages = [...(cxx ? ['CXX'] : []), ...(sources.some((p) => C.test(p)) ? ['C'] : [])];
 	const list = (paths: string[]) => paths.map((p) => `\n    ${cmakeQuote(p)}`).join('');
+	// RapidCheck, where the browser links it: for the program when one of its
+	// sources includes it, for the tests when they or the program's sources
+	// under test do.
+	const rcProgram = program.some((p) => includesRapidCheck(files[p] ?? ''));
+	const rcTests = tests.length > 0 && [...tests, ...underTest].some((p) => includesRapidCheck(files[p] ?? ''));
+	const testFramework = tests.length ? testFrameworkOf(files) : null;
 
 	const lines: string[] = [
 		'# Builds the project where it is, with the layout it had in Yukibana Light:',
@@ -286,17 +305,33 @@ export function cmakeLists(files: Files, entry: string): string {
 	if (flags.options.length) lines.push('if(NOT MSVC)', `    target_compile_options(project_flags INTERFACE ${flags.options.map(cmakeArg).join(' ')})`, 'endif()');
 	lines.push('');
 
+	if (rcProgram || rcTests) {
+		lines.push(
+			`# RapidCheck, property-based testing, at the commit the browser runs (its master`,
+			`# on ${RAPIDCHECK_DATE}; RapidCheck has no releases). Downloaded once, when the build is`,
+			'# configured, without its submodules, which only its own tests use.',
+			'include(FetchContent)',
+			'FetchContent_Declare(rapidcheck',
+			'    GIT_REPOSITORY https://github.com/emil-e/rapidcheck.git',
+			`    GIT_TAG ${RAPIDCHECK_COMMIT}`,
+			'    GIT_SUBMODULES ""',
+			')',
+			...(rcTests && testFramework === 'gtest' ? ['# rapidcheck_gtest: RC_GTEST_PROP (rapidcheck/gtest.h).', 'set(RC_ENABLE_GTEST ON CACHE BOOL "" FORCE)'] : []),
+			'FetchContent_MakeAvailable(rapidcheck)',
+			'',
+		);
+	}
 	if (program.length) {
 		// No main anywhere: a library, which builds, rather than an executable that cannot link.
 		lines.push(
 			'# The program: every source outside tests/.',
 			hasMain ? `add_executable(app${list(program)}\n)` : `add_library(app STATIC${list(program)}\n)`,
-			'target_link_libraries(app PRIVATE project_flags)',
+			`target_link_libraries(app PRIVATE project_flags${rcProgram ? ' rapidcheck' : ''})`,
 			'',
 		);
 	}
 	if (tests.length) {
-		const framework = testFrameworkOf(files);
+		const framework = testFramework ?? 'gtest';
 		const testSources = list([...underTest, ...tests]);
 		if (framework === 'gtest') {
 			lines.push(
@@ -314,7 +349,7 @@ export function cmakeLists(files: Files, entry: string): string {
 				'',
 				'enable_testing()',
 				`add_executable(app_tests${testSources}\n)`,
-				`target_link_libraries(app_tests PRIVATE project_flags ${ownMain ? 'GTest::gtest' : 'GTest::gtest_main'})`,
+				`target_link_libraries(app_tests PRIVATE project_flags ${ownMain ? 'GTest::gtest' : 'GTest::gtest_main'}${rcTests ? ' rapidcheck_gtest' : ''})`,
 				'include(GoogleTest)',
 				'gtest_discover_tests(app_tests)',
 				'',
@@ -336,7 +371,7 @@ export function cmakeLists(files: Files, entry: string): string {
 				'',
 				'enable_testing()',
 				`add_executable(app_tests${testSources}\n)`,
-				`target_link_libraries(app_tests PRIVATE project_flags ${ownDoctest ? 'doctest::doctest' : 'doctest::doctest_with_main'})`,
+				`target_link_libraries(app_tests PRIVATE project_flags ${ownDoctest ? 'doctest::doctest' : 'doctest::doctest_with_main'}${rcTests ? ' rapidcheck' : ''})`,
 				'include(${doctest_SOURCE_DIR}/scripts/cmake/doctest.cmake)',
 				'doctest_discover_tests(app_tests)',
 				'',
@@ -354,7 +389,10 @@ export function cmakeLists(files: Files, entry: string): string {
 				'',
 				'enable_testing()',
 				`add_executable(app_tests${testSources}\n)`,
-				`target_link_libraries(app_tests PRIVATE project_flags ${ownMain ? 'Catch2::Catch2' : 'Catch2::Catch2WithMain'})`,
+				`target_link_libraries(app_tests PRIVATE project_flags ${ownMain ? 'Catch2::Catch2' : 'Catch2::Catch2WithMain'}${rcTests ? ' rapidcheck' : ''})`,
+				// RC_ENABLE_CATCH would also add RapidCheck's ext/catch submodule
+				// (Catch 2); rapidcheck/catch.h is one header, used as it is.
+				...(rcTests ? ['target_include_directories(app_tests PRIVATE ${rapidcheck_SOURCE_DIR}/extras/catch/include)'] : []),
 				'list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)',
 				'include(Catch)',
 				'catch_discover_tests(app_tests)',
