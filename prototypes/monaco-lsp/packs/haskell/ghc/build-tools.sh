@@ -47,11 +47,17 @@ wasm32-wasi-cabal update
 mkdir -p "$OUT" "$STORE"
 BIN=$(mktemp -d)
 WORK=$(mktemp -d)
+# Each is built from its source as a local package: their executables ask
+# for GHC's threaded RTS (-threaded), which WebAssembly has not, so the flag
+# is taken out of the .cabal file first.
 build() { # package version exe [cabal flags]
     log "$1 $2"
     (
         cd "$WORK"
-        wasm32-wasi-cabal --store-dir="$STORE" install "$1-$2" "${@:4}" \
+        wasm32-wasi-cabal get "$1-$2" >/dev/null
+        cd "$1-$2"
+        sed -i 's/-threaded//g' "$1.cabal"
+        wasm32-wasi-cabal --store-dir="$STORE" install "exe:$3" "${@:4}" \
             --installdir="$BIN" --install-method=copy --overwrite-policy=always \
             --disable-profiling --disable-documentation \
             --with-alex="$(command -v alex)" --with-happy="$(command -v happy)" \
@@ -62,17 +68,15 @@ build() { # package version exe [cabal flags]
 }
 build ormolu "$ORMOLU" ormolu
 # -gpl: hlint without hscolour (GPL), as its own release builds are.
-build hlint "$HLINT" hlint --constraint='hlint -gpl'
+build hlint "$HLINT" hlint --flags=-gpl
 
 # hlint's data files (hlint.yaml and the hints it includes), from the
 # package's source: hlint --datadir=/hlint finds them there.
 rm -rf "$OUT/hlint"
-(cd "$WORK" && wasm32-wasi-cabal get "hlint-$HLINT" >/dev/null)
-cp -r "$WORK/hlint-$HLINT"*/data "$OUT/hlint"
-(cd "$WORK" && wasm32-wasi-cabal get "ormolu-$ORMOLU" >/dev/null)
+cp -r "$WORK/hlint-$HLINT/data" "$OUT/hlint"
 {
     printf '==== ormolu %s\n\n' "$ORMOLU"; cat "$WORK/ormolu-$ORMOLU"/LICENSE*
-    printf '\n\n==== hlint %s\n\n' "$HLINT"; cat "$WORK/hlint-$HLINT"*/LICENSE*
+    printf '\n\n==== hlint %s\n\n' "$HLINT"; cat "$WORK/hlint-$HLINT"/LICENSE*
     printf '\n\nBoth link ghc-lib-parser (GHC'"'"'s parser, BSD-3-Clause) and other Hackage\npackages under BSD-style licences; their licences are in the source\ndistributions on hackage.haskell.org.\n'
 } > "$OUT/LICENSE-tools.txt"
 cat > "$OUT/tools.json" <<EOF

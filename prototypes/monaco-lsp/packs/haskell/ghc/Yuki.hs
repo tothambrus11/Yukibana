@@ -28,10 +28,12 @@ import Control.Monad (forM, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Coerce (coerce)
 import Data.IORef
-import Data.List (intercalate, nub, sortOn)
+import Data.Either (partitionEithers)
+import Data.List (intercalate, nub, sortOn, stripPrefix)
 import qualified Data.Map.Strict as M
 import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe)
 import qualified Data.Set as S
+import System.Environment (setEnv)
 import System.Exit (ExitCode (..))
 import System.IO
 import System.IO.Unsafe (unsafePerformIO)
@@ -508,16 +510,19 @@ scope st f line col = do
 
 -- | @run flags... == entry args...@: loads the entry file and what it
 -- imports into GHC's bytecode interpreter and runs its @main@, as
--- @runghc@ does, with the program's arguments. GHC's errors go to stderr
+-- @runghc@ does, with the program's arguments. A flag @env:NAME=VALUE@ is
+-- not GHC's: it sets an environment variable for the program. GHC's errors go to stderr
 -- as ghc prints them. Answers {"exit": code}: 1 when it did not compile,
 -- the code @main@ exited with (0 when it returned), or 1 after printing an
 -- uncaught exception as a compiled program does.
 run :: State -> [String] -> IO JsonDoc
 run st args = do
-  let (flags, rest) = break (== "==") args
+  let (allFlags, rest) = break (== "==") args
+      (envs, flags) = partitionEithers [maybe (Right a) Left (stripPrefix "env:" a) | a <- allFlags]
       (entry, progArgs) = case drop 1 rest of
         (e : as) -> (e, as)
         [] -> ("Main.hs", [])
+  mapM_ (\e -> let (k, v) = break (== '=') e in setEnv k (drop 1 v)) envs
   ok <- inGhc st $ do
     logger <- getLogger
     (df, _, _) <- parseDynamicFlags logger (stFlags st) (map noLoc flags)

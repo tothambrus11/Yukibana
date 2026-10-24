@@ -25,13 +25,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Cache GHC's wasm toolchain and the tools' package store
-        uses: actions/cache@v4
+      # Restored and saved apart, the store kept even when the build fails:
+      # ghc-lib-parser is most of the build, and a failure after it is the
+      # usual one.
+      - name: Restore GHC's wasm toolchain and the tools' package store
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.ghc-wasm
             /tmp/yk/tools-store
-          key: ghc-wasm-tools-${{ hashFiles('prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh') }}
+          key: ghc-wasm-tools-${{ github.run_id }}
           restore-keys: ghc-wasm-tools-
 
       - name: Install alex and happy
@@ -39,6 +42,15 @@ jobs:
 
       - name: Build
         run: prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh "$RUNNER_TEMP/tools"
+
+      - name: Save GHC's wasm toolchain and the tools' package store
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.ghc-wasm
+            /tmp/yk/tools-store
+          key: ghc-wasm-tools-${{ github.run_id }}
 
       - uses: actions/upload-artifact@v4
         if: always()
