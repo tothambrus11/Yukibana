@@ -16,6 +16,7 @@ import type { Files, Language, LanguageId } from './languages';
 // With its extension: tests/export.mjs runs this file under Node's type stripping.
 import { detectTestFramework, withoutComments, TEST_FRAMEWORKS, type TestFramework } from './cpp-tests.ts';
 import { targetOf, type CppTarget } from './cpp-targets.ts';
+import { CPP_LEVELS, defaultLevel, SWIFT_LEVELS } from './optimization.ts';
 
 /** What a download contains. */
 export interface ExportedProject {
@@ -36,6 +37,12 @@ interface Project {
 	 * (Package.swift's `exclude`).
 	 */
 	paths: readonly string[];
+	/**
+	 * The level chosen for a language whose level no project file holds
+	 * (optimization.ts: Swift), as its flag; null for the default. A C or
+	 * C++ project's is in its compile_flags.txt.
+	 */
+	optimization: string | null;
 }
 
 /** A language's build files: the paths it can generate, and their contents. */
@@ -44,9 +51,12 @@ interface BuildFiles {
 	generate(project: Project): Files;
 }
 
+/** The C++ runner's level for a project without a -O line (optimization.ts, packs/cpp/src/toolchain.js). */
+const CPP_DEFAULT_LEVEL = defaultLevel(CPP_LEVELS).flag;
+
 const BUILD: Record<LanguageId, BuildFiles> = {
 	cpp: { paths: ['CMakeLists.txt'], generate: (p) => ({ 'CMakeLists.txt': cmakeLists(p.files, p.language.entry) }) },
-	swift: { paths: ['Package.swift'], generate: (p) => ({ 'Package.swift': packageSwift(p.files, p.paths) }) },
+	swift: { paths: ['Package.swift'], generate: (p) => ({ 'Package.swift': packageSwift(p.files, p.paths, p.optimization) }) },
 	python: { paths: ['pyproject.toml'], generate: (p) => ({ 'pyproject.toml': pyprojectToml(p.files) }) },
 	javascript: { paths: ['package.json', 'stryker.config.json'], generate: (p) => ({ 'package.json': packageJson(p.language.entry, p.files), 'stryker.config.json': strykerConfig() }) },
 	typescript: { paths: ['package.json', 'stryker.config.json'], generate: (p) => ({ 'package.json': typescriptPackageJson(p.language.entry, p.files), 'stryker.config.json': strykerConfig() }) },
@@ -72,12 +82,12 @@ const BUILD: Record<LanguageId, BuildFiles> = {
  * have. A README in any case or with any extension (readme.txt, README)
  * counts as having one.
  */
-export function exportProject(language: Language, files: Files): ExportedProject {
+export function exportProject(language: Language, files: Files, optimization: string | null = null): ExportedProject {
 	const build = BUILD[language.id];
 	const absent = (path: string) => !(path in files);
 	const hasReadme = Object.keys(files).some((p) => /^readme(\.[^/]*)?$/i.test(p));
 	const generated = [...build.paths.filter(absent), ...(hasReadme ? [] : ['README.md']), ...['.gitignore'].filter(absent)].sort();
-	const project: Project = { language, files, paths: [...Object.keys(files), ...generated].sort() };
+	const project: Project = { language, files, paths: [...Object.keys(files), ...generated].sort(), optimization };
 	const candidates: Files = {
 		...build.generate(project),
 		'README.md': readme(language, files, generated),
@@ -304,6 +314,11 @@ export function cmakeLists(files: Files, entry: string): string {
 	if (flags.includes.length) lines.push(`target_include_directories(project_flags INTERFACE ${flags.includes.map(cmakeDir).join(' ')})`);
 	if (flags.definitions.length) lines.push(`target_compile_definitions(project_flags INTERFACE ${flags.definitions.map(cmakeArg).join(' ')})`);
 	if (flags.options.length) lines.push('if(NOT MSVC)', `    target_compile_options(project_flags INTERFACE ${flags.options.map(cmakeArg).join(' ')})`, 'endif()');
+	// The level is one of the options when compile_flags.txt has a -O line
+	// (optimization.ts); otherwise Run's default, which the build then uses
+	// too. Either comes after the build type's flags, so it is what applies.
+	if (!flags.options.some((o) => o.startsWith('-O')))
+		lines.push(`# The optimisation level Run uses when compile_flags.txt has no -O line, whatever the build type.`, 'if(NOT MSVC)', `    target_compile_options(project_flags INTERFACE ${CPP_DEFAULT_LEVEL})`, 'endif()');
 	lines.push('');
 
 	if (rcProgram || rcTests) {
@@ -454,7 +469,7 @@ export function swiftModuleName(files: Files): string {
  * here. libm linked on Linux: `squareRoot()` and friends inline to `sqrt`,
  * which the Swift 6.4 toolchain's link line does not otherwise satisfy there.
  */
-export function packageSwift(files: Files, paths: readonly string[]): string {
+export function packageSwift(files: Files, paths: readonly string[], optimization: string | null = null): string {
 	const module = swiftModuleName(files);
 	const swift = Object.keys(files).filter((p) => p.endsWith('.swift')).sort();
 	const sources = swift.filter((p) => !p.startsWith(SWIFT_TESTS));
@@ -470,6 +485,10 @@ export function packageSwift(files: Files, paths: readonly string[]): string {
 	const testExclude = paths.filter((p) => p.startsWith(SWIFT_TESTS) && !p.endsWith('.swift') && !hidden(p)).map((p) => p.slice(SWIFT_TESTS.length));
 	const needsImport = tests.some((p) => !testableImports(files[p] ?? '').includes(module));
 	const strings = (list: readonly string[], indent: string) => `[${list.map((s) => `\n${indent}    ${JSON.stringify(s)},`).join('')}\n${indent}]`;
+	// A level other than the default goes to every configuration, as in the
+	// browser; SwiftPM's own -Onone (debug) or -O (release) comes first.
+	const level = SWIFT_LEVELS.find((l) => l.flag === optimization && !l.default)?.flag ?? null;
+	const levelSetting = level ? [`            // The optimisation level chosen in the browser (${level}), in debug builds too.`, `            swiftSettings: [.unsafeFlags([${JSON.stringify(level)}])],`] : [];
 
 	const targets = [
 		[
@@ -479,28 +498,31 @@ export function packageSwift(files: Files, paths: readonly string[]): string {
 			'            path: ".",',
 			...(exclude.size ? [`            exclude: ${strings([...exclude].sort(), '            ')},`] : []),
 			`            sources: ${strings(sources, '            ')},`,
+			...levelSetting,
 			'            linkerSettings: [.linkedLibrary("m", .when(platforms: [.linux]))]',
 			'        ),',
 		].join('\n'),
 	];
 	if (tests.length) {
+		const testFlags = [...(level ? [level] : []), ...(needsImport ? ['-Xfrontend', '-testable-import-module', '-Xfrontend', module] : [])];
 		targets.push(
 			[
 				'        // The tests in Tests/, with XCTest.',
 				'        .testTarget(',
 				`            name: ${JSON.stringify(module + 'Tests')},`,
 				`            dependencies: [${JSON.stringify(module)}],`,
-				`            path: ${JSON.stringify(SWIFT_TESTS.slice(0, -1))}${testExclude.length || needsImport ? ',' : ''}`,
-				...(testExclude.length ? [`            exclude: ${strings(testExclude, '            ')}${needsImport ? ',' : ''}`] : []),
+				`            path: ${JSON.stringify(SWIFT_TESTS.slice(0, -1))}${testExclude.length || testFlags.length ? ',' : ''}`,
+				...(testExclude.length ? [`            exclude: ${strings(testExclude, '            ')}${testFlags.length ? ',' : ''}`] : []),
 				...(needsImport
 					? [
 							`            // The tests use the program's declarations without \`@testable import ${module}\`,`,
 							'            // as they can in the browser, where they are compiled into the same module.',
 							'            // This adds that import to every test file; with the import written in the',
 							'            // tests, this setting can go.',
-							`            swiftSettings: [.unsafeFlags(["-Xfrontend", "-testable-import-module", "-Xfrontend", ${JSON.stringify(module)}])]`,
 						]
 					: []),
+				...(level ? [`            // The optimisation level chosen in the browser (${level}), as for the program.`] : []),
+				...(testFlags.length ? [`            swiftSettings: [.unsafeFlags([${testFlags.map((f) => JSON.stringify(f)).join(', ')}])]`] : []),
 				'        ),',
 			].join('\n'),
 		);

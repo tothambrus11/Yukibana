@@ -117,6 +117,15 @@ test('a Linux target compiles with its triple, the same optimisation and hardeni
     assert.ok(!compileArgs(x86, { 'compile_flags.txt': '-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_NONE\n' }, 'a.cpp').includes('-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST'));
 });
 
+test("the project's -O line replaces the default -O2, on every target, so Run and the views compile at the chosen level", () => {
+    for (const target of TARGETS) {
+        const files = { 'compile_flags.txt': `${target.default ? '' : `--target=${target.triple}\n`}-std=c++20\n-O0\n` };
+        const args = compileArgs(target, files, 'main.cpp');
+        assert.deepEqual(args.filter((a) => a.startsWith('-O')), ['-O0'], target.id);
+        assert.deepEqual(compileArgs(target, files, 'main.cpp', { view: true }).filter((a) => a.startsWith('-O')), ['-O0'], target.id);
+    }
+});
+
 // 3. Compile, link and run, per Linux target.
 
 const toolchain = createToolchain({
@@ -462,6 +471,21 @@ test('the explorer shows IR and assembly for every target, demangled, and only a
             assert.ok(asm.lines.some((m) => m && m.file === 'main.cpp' && m.line === 8), target.id);
             if (target.default) assert.match(asm.text, /end_function/);
             else assert.ok(!requested.includes(`/packs/cpp/targets/${target.arch}/lib.tar`), `${target.id}: compiling only, no libraries`);
+        }
+        // The level of compile_flags.txt reaches the views: unoptimised code
+        // keeps its locals in memory and is longer, at every target.
+        for (const target of TARGETS) {
+            const base = target.default ? SAMPLE : withTarget(SAMPLE, target);
+            const at = async (level) => page.evaluate((r) => window.emit(r), { id: ++id, emit: 'asm', files: { ...base, 'compile_flags.txt': `${base['compile_flags.txt']}${level}\n` }, path: 'geometry.cpp', options: {} });
+            const [o0, o2] = [await at('-O0'), await at('-O2')];
+            assert.ok(o0.ok && o2.ok, o0.error ?? o2.error);
+            assert.ok(o0.flags.includes('-O0') && !o0.flags.includes('-O2') && o2.flags.includes('-O2'), `${target.id}: ${o0.flags.join(' ')}`);
+            const count = (r) => r.text.split('\n').filter((l) => /^\s+\S/.test(l)).length;
+            assert.ok(count(o0) > count(o2), `${target.id}: -O0 has ${count(o0)} instructions, -O2 ${count(o2)}`);
+            for (const level of ['-O1', '-O3', '-Os', '-Oz']) {
+                const r = await at(level);
+                assert.ok(r.ok && r.flags.includes(level), `${target.id} ${level}: ${r.error}`);
+            }
         }
         // Errors come back as results, with project paths.
         const broken = await page.evaluate((r) => window.emit(r), { id: ++id, emit: 'asm', files: { ...SAMPLE, 'main.cpp': 'int main() { return x; }\n' }, path: 'main.cpp', options: {} });

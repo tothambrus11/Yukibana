@@ -202,6 +202,8 @@ async function run(language, c) {
 		if (existsSync(join(build, 'packs', 'cpp', 'cc-cross.wasm')) && existsSync(join(build, 'packs', 'cpp', 'vm.js'))) await cppTargets(page, check, requests);
 		else console.log('skip cpp: targets, Linux runs and compiler output views (packs/cpp has no cc-cross.wasm or vm.js)');
 	}
+	// After cppTargets, which checks that nothing before it fetched the views.
+	if (language === 'cpp' && existsSync(join(build, 'packs', 'cpp', 'explorer.js'))) await cppOptimization(page, check);
 
 	check(errors.length === 0, `no page errors${errors.length ? ': ' + errors.join('; ') : ''}`);
 	await page.close();
@@ -317,6 +319,44 @@ async function viewShows(page, kind, predicate, timeout) {
 	return { ok: false, text, seconds: (Date.now() - t0) / 1000 };
 }
 
+
+/**
+ * The C++ optimisation level (optimization.ts): the picker starts at -O2 with
+ * no -O line in compile_flags.txt; choosing -O0 appends one, the assembly
+ * view follows (its toolbar names the flag, and unoptimised code is longer),
+ * Run still prints the sample's output, and choosing -O2 again removes the
+ * line. Ends on the sample, its views closed by Reset project.
+ */
+async function cppOptimization(page, check) {
+	const picker = page.locator('header .optimization select');
+	const flags = await modelText(page, 'compile_flags.txt');
+	check((await picker.inputValue()) === '-O2' && !/^-O/m.test(flags ?? ''), `the sample is at -O2, the default, with no -O line (${await picker.inputValue()})`);
+	await openFile(page, 'geometry.cpp');
+	await page.locator('header button.view', { hasText: /^Asm$/ }).click();
+	const o2 = await viewShows(page, 'asm', (t) => t.includes('distance'), 240_000);
+	const shownFlags = () => page.locator('[data-view="asm"] .yk-view-flags').getAttribute('title').catch(() => '');
+	check(o2.ok && / -O2( |$)/.test((await shownFlags()) ?? ''), `the assembly view compiles at -O2 (${await shownFlags()})`);
+	const instructions = (t) => t.split('\n').filter((l) => /^\s+\S/.test(l)).length;
+
+	await picker.selectOption('-O0');
+	const text = (await modelText(page, 'compile_flags.txt')) ?? '';
+	check(text === `${flags}-O0\n` && (await picker.inputValue()) === '-O0', `choosing -O0 appends -O0 to compile_flags.txt (${JSON.stringify(text)})`);
+	const o0 = await viewShows(page, 'asm', (t) => t !== o2.text && t.includes('distance'), 60_000);
+	check(o0.ok && / -O0( |$)/.test((await shownFlags()) ?? '') && instructions(o0.text) > instructions(o2.text), `the assembly follows: -O0 in its toolbar, ${instructions(o0.text)} instructions against -O2's ${instructions(o2.text)} (${o0.seconds.toFixed(1)} s)`);
+	await page.locator('header button.run').click();
+	const ran = await ended(page);
+	check(ran.done && ran.shown.includes('5.000000') && /Exited with code 0 /.test(ran.status), `Run at -O0 prints the sample's output (${ran.status})`);
+
+	await picker.selectOption('-O2');
+	check((await modelText(page, 'compile_flags.txt')) === flags, 'choosing -O2, the default, removes the -O line again');
+	await setText(page, 'compile_flags.txt', `${flags}-Og\n`);
+	await page.waitForTimeout(300);
+	check((await picker.inputValue()) === 'other' && (await picker.locator('option[value="other"]').textContent()) === '-Og', `a hand-written -Og is shown as it is (${await picker.inputValue()})`);
+	page.once('dialog', (d) => void d.accept());
+	await page.locator('header button', { hasText: 'Reset project' }).click();
+	const reset = await page.waitForFunction(() => globalThis.monaco.editor.getModels().find((m) => m.uri.path === '/workspace/compile_flags.txt')?.getValue().startsWith('-std='), null, { timeout: 15_000 }).then(() => true, () => false);
+	check(reset && (await picker.inputValue()) === '-O2', `Reset project puts the sample back at -O2 (${await picker.inputValue()})`);
+}
 
 /**
  * C++ cross-compilation targets (cpp-targets.ts), Linux runs under QEMU and

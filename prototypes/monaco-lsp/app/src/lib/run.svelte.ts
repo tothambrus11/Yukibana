@@ -113,9 +113,10 @@ export class Runner {
 	 * 'test' runs the project's tests instead, 'mutate' mutation-tests it.
 	 * Output from the previous run is cleared. `options` go to the runner as
 	 * they are (packs/CONTRACT.md: how a C++ program built for Linux is
-	 * emulated; a runner that has no use for them ignores them).
+	 * emulated, or the optimisation level a Swift program is compiled at; a
+	 * runner that has no use for them ignores them).
 	 */
-	start(language: string, files: Files, entry: string, mode: RunMode = 'run', options?: RunOptions): void {
+	start(language: string, files: Files, entry: string, mode: RunMode = 'run', options?: RunOptions | { optimization: string }): void {
 		this.stop(false);
 		this.chunks = [];
 		this.chars = 0;

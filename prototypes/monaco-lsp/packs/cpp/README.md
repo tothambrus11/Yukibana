@@ -367,7 +367,8 @@ interpreted or simulated, and no server is involved.
 
 **Compiling**: `compile_flags.txt` applies, one flag per line, as in clangd.
 A `-std=` for the other language is dropped, so `-std=c++20` does not break
-a `.c` file. The defaults are `-O2` (unless the project gives a `-O`) and,
+a `.c` file. The defaults are `-O2` (unless the project gives a `-O`,
+"Optimization" below) and,
 for C++, `-fwasm-exceptions -mllvm -wasm-use-legacy-eh=false` (exceptions,
 below; a `-fno-exceptions` in `compile_flags.txt` comes later and wins).
 Diagnostics go to stderr exactly as clang prints them
@@ -1053,6 +1054,35 @@ runs. Once, in a run of both aarch64 and riscv64 one after the other, the
 riscv64 failing-property case exited 1 with no output on stdout; it did
 not happen again in two more runs (the test now prints stderr and the
 guest's kernel log if it does).
+
+## Optimization
+
+The level is the `-O` line of `compile_flags.txt`, like the target
+(`--target=`, "Targets"): clangd, Run, Test and the LLVM IR and assembly
+views all read that file, so they agree by construction, and a hand-written
+line is honoured. `compileArgs` (`src/toolchain.js`) adds `-O2` only when
+the project has no line starting with `-O`; with one, the project's flags
+come later and the last `-O` wins, as in clang. The app's **Optimization**
+picker (next to Target; `app/src/lib/optimization.ts`) offers `-O0`, `-O1`,
+`-O2` (the default, which writes no line), `-O3`, `-Os` and `-Oz`, and
+rewrites only that line (appended last, so the `--target=` line stays
+first); another spelling clang takes (`-Og`, `-Ofast`) shows as itself and
+applies. Download's CMakeLists.txt passes the line on as a compile option,
+or `-O2` when there is none, after the build type's flags, so a CMake build
+uses the browser's level whatever `CMAKE_BUILD_TYPE` says.
+
+Why this language has levels: the IR and assembly views are where they
+are seen, and that is what the views are for (at `-O0` every local lives
+in memory; at `-O2` the sample's `distance` is a few instructions), and Run
+changes too (speed, size, and how undefined behaviour shows). Diagnostics
+and hover come from clangd, which reads the same file but runs no
+optimiser, and clang's warnings do not depend on the level (unlike GCC's),
+so they stay as they are. Tested: `test-targets.mjs`
+checks that the `-O` line replaces `-O2` in the arguments of every target,
+and in Chromium that the explorer's assembly at `-O0` is longer than at
+`-O2` on every target and that every offered level compiles; `test-run.mjs`
+runs the sample at each level and exceptions at `-O0`; the app's e2e test
+chooses `-O0` in the picker and checks the file, the view and Run.
 
 ## Compiler output views
 

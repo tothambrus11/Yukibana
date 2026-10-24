@@ -13,6 +13,7 @@ import { exportProject } from './export';
 import { zip } from './zip';
 import { chooseTestFramework, detectTestFramework, TESTS_DIR, type TestFramework } from './cpp-tests';
 import { DEFAULT_RUN_OPTIONS, targetById, targetOf, withTarget, type CppTargetId, type RunOptions, type TargetChoice } from './cpp-targets';
+import { cppLevelOf, defaultLevel, levelsOf, withCppLevel, type LevelChoice } from './optimization';
 import type { Explorer } from './explorer.svelte';
 import { baseName, loadLanguage, loadProject, parentOf, pathOf, pathProblem, ROOT_URI, sampleProject, saveLanguage, saveProject, type Project } from './project';
 
@@ -92,6 +93,12 @@ export class Workspace {
 	 */
 	runOptions = $state<RunOptions>({ ...DEFAULT_RUN_OPTIONS });
 	/**
+	 * The project's optimisation level (optimization.ts): a C or C++
+	 * project's as its compile_flags.txt says, another's as chosen and saved
+	 * with the project; null for a language without levels.
+	 */
+	optimization = $state<LevelChoice | null>(null);
+	/**
 	 * The program run from this project, if any, and the terminal's
 	 * contents. The guest kernel's log and the run's timings go to the
 	 * Output panel.
@@ -118,6 +125,8 @@ export class Workspace {
 	private host: EditorHost | null = null;
 	/** Whether the user chose run options for this project: only then are they saved with it. */
 	private runOptionsChosen = false;
+	/** The level chosen for a language whose level no project file holds (Swift), saved with the project; null: the default. */
+	private chosenLevel: string | null = null;
 	/** Bumped by every language switch, so a switch overtaken by a later one is skipped. */
 	private generation = 0;
 	/**
@@ -199,7 +208,9 @@ export class Workspace {
 		// under QEMU, and refuses Catch2 and doctest by name (packs/cpp README).
 		const files = this.currentFiles();
 		this.host?.showTerminal();
-		this.runner.start(packOf(language), files, entry, mode, this.language === 'cpp' ? { ...this.runOptions } : undefined);
+		// A C++ runner reads its level from compile_flags.txt; Swift's is sent.
+		const level = this.language !== 'cpp' && this.optimization ? (this.optimization.kind === 'other' ? null : this.optimization.level.flag) : null;
+		this.runner.start(packOf(language), files, entry, mode, this.language === 'cpp' ? { ...this.runOptions } : level ? { optimization: level } : undefined);
 	}
 
 	/**
@@ -266,6 +277,40 @@ export class Workspace {
 		this.scheduleSave();
 	}
 
+	/**
+	 * Puts the project on the optimisation level `flag` (optimization.ts).
+	 * For C and C++ compile_flags.txt's `-O` line is rewritten (or the file
+	 * created) as one edit, which Undo takes back, so clangd, Run and the
+	 * views follow the file; for Swift the level is saved with the project
+	 * and goes with Run and Test. The output panel says what changed.
+	 */
+	chooseOptimization(flag: string): void {
+		const levels = levelsOf(this.language);
+		const level = levels?.find((l) => l.flag === flag);
+		if (!levels || !level) return;
+		if (this.language === 'cpp') {
+			const model = this.models.get(COMPILE_FLAGS);
+			const before = model?.getValue();
+			const after = withCppLevel(before, flag);
+			if (model && after !== before) {
+				model.pushStackElement();
+				model.pushEditOperations([], [{ range: model.getFullModelRange(), text: after }], () => null);
+				model.pushStackElement();
+			} else if (!model && after) {
+				this.addModel(COMPILE_FLAGS, after, true);
+				this.files = [...this.models.keys()].sort();
+				this.explorer?.edited();
+			}
+			const how = level.default ? `no -O line in ${COMPILE_FLAGS}: Run and the views add ${flag}` : `${flag} in ${COMPILE_FLAGS}`;
+			this.write('info', `Optimization: ${flag} (${how}).`);
+		} else {
+			this.chosenLevel = level.default ? null : flag;
+			this.write('info', `Optimization: ${flag}, for Run and Test${level.default ? ' (the default)' : ''}.`);
+		}
+		this.refreshOptimization();
+		this.scheduleSave();
+	}
+
 	/** Changes how Run runs a program built for a Linux target; saved with the project. */
 	setRunOptions(options: Partial<RunOptions>): void {
 		this.runOptions = { ...this.runOptions, ...options };
@@ -282,7 +327,7 @@ export class Workspace {
 	async download(): Promise<void> {
 		const language = languageOf(this.language);
 		const files = this.currentFiles();
-		const exported = exportProject(language, files);
+		const exported = exportProject(language, files, this.language === 'cpp' ? null : this.chosenLevel);
 		const paths = Object.keys(exported.files).sort();
 		const empty = this.allFolders().filter((f) => !paths.some((p) => p.startsWith(f + '/')) && !this.folders.some((g) => g.startsWith(f + '/')));
 		const name = `${language.id}-project`;
@@ -449,6 +494,7 @@ export class Workspace {
 		this.folders = [...project.folders].sort();
 		this.runOptions = { ...(project.runOptions ?? DEFAULT_RUN_OPTIONS) };
 		this.runOptionsChosen = project.runOptions !== undefined;
+		this.chosenLevel = project.optimization ?? null;
 		this.host?.closeAll();
 		const entry = languageOf(this.language).entry;
 		const open = project.open.length ? project.open : this.models.has(entry) ? [entry] : this.files.slice(0, 1);
@@ -457,6 +503,7 @@ export class Workspace {
 		if (active) this.host?.open(active);
 		this.refreshTestFramework();
 		this.refreshTarget();
+		this.refreshOptimization();
 	}
 
 	private addModel(path: string, text: string, created: boolean): void {
@@ -593,6 +640,16 @@ export class Workspace {
 		this.target = this.language === 'cpp' ? targetOf(this.models.get(COMPILE_FLAGS)?.getValue()) : null;
 	}
 
+	private refreshOptimization(): void {
+		const levels = levelsOf(this.language);
+		if (!levels) this.optimization = null;
+		else if (this.language === 'cpp') this.optimization = cppLevelOf(this.models.get(COMPILE_FLAGS)?.getValue());
+		else {
+			const level = levels.find((l) => l.flag === this.chosenLevel);
+			this.optimization = level ? { kind: 'level', level } : { kind: 'default', level: defaultLevel(levels) };
+		}
+	}
+
 	/**
 	 * Saves shortly. `edited` is the file whose text changed, if that is all
 	 * that did: the test framework is then looked at again only when it is
@@ -601,7 +658,10 @@ export class Workspace {
 	 */
 	private scheduleSave(edited?: string): void {
 		if (edited === undefined || edited.startsWith(TESTS_DIR)) this.refreshTestFramework();
-		if (edited === undefined || edited === COMPILE_FLAGS) this.refreshTarget();
+		if (edited === undefined || edited === COMPILE_FLAGS) {
+			this.refreshTarget();
+			this.refreshOptimization();
+		}
 		clearTimeout(this.saveTimer);
 		this.saveTimer = setTimeout(() => this.saveNow(), SAVE_DELAY_MS);
 	}
@@ -609,7 +669,7 @@ export class Workspace {
 	private saveNow(): void {
 		clearTimeout(this.saveTimer);
 		const files = this.currentFiles();
-		const project = { files, folders: this.folders, open: this.open.filter((p) => p in files), active: this.active, ...(this.runOptionsChosen ? { runOptions: { ...this.runOptions } } : {}) };
+		const project = { files, folders: this.folders, open: this.open.filter((p) => p in files), active: this.active, ...(this.runOptionsChosen ? { runOptions: { ...this.runOptions } } : {}), ...(this.chosenLevel ? { optimization: this.chosenLevel } : {}) };
 		saveProject(this.language, project, (m) => this.write('error', m));
 	}
 }

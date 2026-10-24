@@ -5,6 +5,7 @@
  */
 import { isLanguageId, languageOf, type Files, type LanguageId } from './languages';
 import { runOptionsOf, type RunOptions } from './cpp-targets';
+import { savedLevelOf } from './optimization';
 
 /** What is saved for one language. Paths are relative, `/`-separated, without `.` or `..`. */
 export interface Project {
@@ -21,6 +22,12 @@ export interface Project {
 	 * Other languages and the WebAssembly target ignore it.
 	 */
 	runOptions?: RunOptions;
+	/**
+	 * The optimisation level chosen for a language whose level no project
+	 * file holds (optimization.ts: Swift), as its flag: absent until the user
+	 * chooses one. A C or C++ project's level is its compile_flags.txt's.
+	 */
+	optimization?: string;
 }
 
 /** Every project file lives under this folder, as the servers see it. */
@@ -71,7 +78,7 @@ export function loadProject(language: LanguageId, report: (message: string) => v
 	}
 	if (raw === null) return sampleProject(language);
 	try {
-		return parseProject(JSON.parse(raw) as unknown);
+		return parseProject(JSON.parse(raw) as unknown, language);
 	} catch (e) {
 		report(`the saved ${language} project is unreadable and was replaced by the sample: ${e instanceof Error ? e.message : String(e)}`);
 		return sampleProject(language);
@@ -107,10 +114,11 @@ export function saveLanguage(language: LanguageId): void {
 
 /**
  * Checks the shape of a stored project; throws naming what is wrong. Only
- * the files are worth refusing a project over: a bad folder, tab or run
- * option is dropped (the run options to their defaults), never thrown.
+ * the files are worth refusing a project over: a bad folder, tab, run
+ * option or optimisation level is dropped (the run options to their
+ * defaults, the level to the language's default), never thrown.
  */
-function parseProject(value: unknown): Project {
+function parseProject(value: unknown, language: LanguageId): Project {
 	if (typeof value !== 'object' || value === null) throw new Error('not an object');
 	const v = value as Record<string, unknown>;
 	const files = v['files'];
@@ -130,6 +138,8 @@ function parseProject(value: unknown): Project {
 		active,
 		// Invalid values become the defaults: run options are not worth losing a project over.
 		...(v['runOptions'] !== undefined ? { runOptions: runOptionsOf(v['runOptions']) } : {}),
+		// A level this language does not have is the default's: dropped.
+		...(savedLevelOf(language, v['optimization']) !== null ? { optimization: v['optimization'] as string } : {}),
 	};
 }
 

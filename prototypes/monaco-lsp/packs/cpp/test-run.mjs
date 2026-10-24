@@ -378,6 +378,13 @@ try {
         warm.code === 0 && warm.stdout === '5.000000\n5.000000\n',
         `code=${warm.code} in ${warm.ms} ms, ${bytesSent} bytes transferred; ${timeline(warm)}`
     );
+    // 2. The sample at every optimisation level the app offers (the -O line
+    //    of compile_flags.txt, app/src/lib/optimization.ts), and exceptions
+    //    unoptimised: the same output at each.
+    for (const level of ['-O0', '-O1', '-O3', '-Os', '-Oz']) {
+        const r = await run({ ...SAMPLE, 'compile_flags.txt': `${SAMPLE['compile_flags.txt']}${level}\n` });
+        check(`sample project at ${level}: same output, exit 0`, r.code === 0 && r.stdout === '5.000000\n5.000000\n', `${JSON.stringify(r.stdout)} code=${r.code} ${JSON.stringify(r.stderr.trim())}`);
+    }
     const loads = Object.entries(cold.loading).map(([k, [l, t]]) => `${k} ${l}/${t}`);
     check('loading messages for each download', loads.length === 3 && Object.values(cold.loading).every(([l, t]) => l === t && l > 0), loads.join(', '));
 
@@ -438,6 +445,8 @@ try {
         caught.code === 0 && caught.stdout === 'caught custom\nstoi: invalid_argument\nat: out_of_range\ndestructor ran\nint 42\n',
         `${JSON.stringify(caught.stdout)} code=${caught.code} ${JSON.stringify(caught.stderr.trim())}`
     );
+    const caughtO0 = await run({ ...EXCEPTIONS, 'compile_flags.txt': '-std=c++20\n-O0\n' });
+    check('C++ exceptions at -O0: the same', caughtO0.code === 0 && caughtO0.stdout === caught.stdout, `${JSON.stringify(caughtO0.stdout)} code=${caughtO0.code} ${JSON.stringify(caughtO0.stderr.trim())}`);
     const thrown = await run(UNCAUGHT);
     check(
         'uncaught C++ exception: terminate message with type and what(), exit 134',

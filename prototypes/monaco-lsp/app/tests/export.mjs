@@ -91,6 +91,22 @@ for (const language of LANGUAGES) {
 	check(!/COMPILER_TARGET|armv7/.test(unknown), 'cpp: a target the browser does not know is left out of CMakeLists.txt, note and all');
 }
 
+// ---- Optimisation levels: Download builds at the level Run uses
+
+{
+	const cpp = sample('cpp');
+	const levels = (cmake) => [...cmake.matchAll(/target_compile_options\(project_flags INTERFACE ([^)]*)\)/g)].flatMap((m) => m[1].split(' ')).filter((o) => o.startsWith('-O'));
+	const plain = exportProject(cpp, cpp.sample).files['CMakeLists.txt'];
+	check(levels(plain).join(' ') === '-O2', `cpp: without a -O line, CMake builds at -O2, Run's default (${levels(plain)})`);
+	const chosen = exportProject(cpp, { ...cpp.sample, 'compile_flags.txt': `${cpp.sample['compile_flags.txt']}-O0\n` }).files['CMakeLists.txt'];
+	check(levels(chosen).join(' ') === '-O0', `cpp: the -O line of compile_flags.txt is CMake's level, and the only one (${levels(chosen)})`);
+	const swift = sample('swift');
+	const settings = (pkg) => [...pkg.matchAll(/unsafeFlags\(\[([^\]]*)\]\)/g)].map((m) => m[1]);
+	check(settings(exportProject(swift, swift.sample).files['Package.swift']).every((f) => !/"-O/.test(f)), 'swift: at the default level (-Onone), Package.swift sets none');
+	const osize = settings(exportProject(swift, swift.sample, '-Osize').files['Package.swift']);
+	check(osize.length === 2 && osize.every((f) => f.startsWith('"-Osize"')), `swift: a chosen level goes to the program and to the tests (${osize.join(' | ')})`);
+}
+
 // ---- The zip, unpacked by Python's zipfile
 
 const unpack = `

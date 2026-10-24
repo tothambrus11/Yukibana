@@ -15,6 +15,7 @@
 	import { projectLanguageOf } from '../lib/project';
 	import { TEST_FRAMEWORKS, type TestFramework } from '../lib/cpp-tests';
 	import { TARGETS, type CppTargetId } from '../lib/cpp-targets';
+	import { levelsOf } from '../lib/optimization';
 
 	const workspace = new Workspace();
 	let dockElement: HTMLElement;
@@ -63,6 +64,9 @@
 	/** A C++ project on a Linux target: Run options apply (to Run and Test). */
 	const linuxTarget = $derived(workspace.target?.kind === 'target' && workspace.target.target.runtime === 'linux');
 	const targetValue = $derived(!workspace.target ? '' : workspace.target.kind === 'unsupported' ? 'other' : workspace.target.target.id);
+	/** The optimisation levels of the project's language, null for one without them (optimization.ts). */
+	const levels = $derived(workspace.optimization ? levelsOf(workspace.language) : null);
+	const levelValue = $derived(!workspace.optimization ? '' : workspace.optimization.kind === 'other' ? 'other' : workspace.optimization.level.flag);
 	const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
 
 	function reset() {
@@ -147,6 +151,32 @@
 				<span class="run-options"><RunOptions {workspace} /></span>
 			{/await}
 		{/if}
+	{/if}
+	{#if levels && workspace.optimization}
+		<!-- C and C++: compile_flags.txt's -O line (optimization.ts), shown as it is when hand-edited; Swift: saved with the project. -->
+		<label
+			class="select optimization"
+			title={workspace.language === 'cpp'
+				? 'Optimization: the level Run, Test and the IR and assembly views compile at. Choosing one rewrites the -O line of compile_flags.txt'
+				: 'Optimization: the level Run and Test compile at, saved with the project and written into Package.swift by Download'}
+		>
+			<span class="sr-only">Optimization</span>
+			<select
+				value={levelValue}
+				onchange={(e) => {
+					if (e.currentTarget.value !== 'other') workspace.chooseOptimization(e.currentTarget.value);
+					e.currentTarget.value = levelValue;
+				}}
+			>
+				{#each levels as l (l.flag)}
+					<option value={l.flag} disabled={!!l.unavailable} title={l.unavailable ?? ''}>{l.label}{l.default ? ' (default)' : ''}{l.unavailable ? ' (not available yet)' : ''}</option>
+				{/each}
+				{#if workspace.optimization.kind === 'other'}
+					<option value="other" disabled>{workspace.optimization.flag}</option>
+				{/if}
+			</select>
+			<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>
+		</label>
 	{/if}
 	{#if language.explores?.includes('llvm-ir')}
 		<button class="button view" onclick={() => void workspace.showView('llvm-ir')} title="Show the LLVM IR of the active C or C++ file">IR</button>
@@ -430,6 +460,7 @@
 		.button:not(.run, .update),
 		.framework,
 		.target,
+		.optimization,
 		.run-options {
 			display: none;
 		}
