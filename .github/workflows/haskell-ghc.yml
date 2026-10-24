@@ -46,4 +46,6 @@ jobs:
         with:
           name: haskell-ghc-rootfs
           path: ${{ runner.temp }}/out
-          retention-days: 30
+          # The pack's build.sh pins a run's artifact, so it is kept as long
+          # as GitHub allows.
+          retention-days: 90
