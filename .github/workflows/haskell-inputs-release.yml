@@ -13,6 +13,11 @@
 # draft, which nobody else sees and build.sh cannot download from yet;
 # publishing it is one click on its page. A release of that name that
 # exists already is left alone, and the run fails saying so.
+#
+# Pushing the tag that build.sh's INPUTS_RELEASE names, on the commit whose
+# build.sh holds the pins, publishes the release (not a draft). This is the
+# way in while the workflow exists only on a branch, where "Run workflow"
+# cannot see it (GitHub dispatches only workflows on the default branch).
 name: Haskell pack inputs release
 
 on:
@@ -22,6 +27,9 @@ on:
         description: Make the release a draft (publish it from its page afterwards)
         type: boolean
         default: true
+  push:
+    tags:
+      - haskell-inputs-*
 
 permissions:
   contents: write # the release
@@ -49,6 +57,11 @@ jobs:
             # INPUTS_RELEASE is written in terms of the two runs.
             echo "tag=$(ROOTFS_RUN=$rootfs TOOLS_RUN=$tools bash -c "$(grep '^INPUTS_RELEASE=' build.sh); echo \"\$INPUTS_RELEASE\"")"
           } >> "$GITHUB_OUTPUT"
+          tag=$(sed -n 's/^tag=//p' "$GITHUB_OUTPUT")
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "$tag" ]; then
+            echo "::error::tag $GITHUB_REF_NAME is not the release build.sh pins ($tag)" >&2
+            exit 1
+          fi
 
       - name: Is there a release already?
         env:
