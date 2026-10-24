@@ -27,8 +27,7 @@
 # SWIFT_TOOLCHAIN_DIR=<dir> takes swift-toolchain-wasm's files from <dir>
 # (an unpacked CI artifact, or out/ of a local build) instead of a release,
 # unverified: any of swift-frontend-lsp.wasm, wasm-ld.wasm and
-# swift-sysroot-core.tar found there wins. While a pin below says PENDING,
-# that file can only come from there.
+# swift-sysroot-core.tar found there wins.
 #
 # Idempotent. Caches in $PACK_CACHE/swift (default ~/.cache/yukibana-packs):
 # the official Swift toolchain (x86_64 Ubuntu 24.04 build, ~3.5 GB
@@ -53,18 +52,14 @@ SDK_ID="swift-$SWIFT_VERSION-RELEASE_wasm"
 # assets are downloaded (a quarter of the size) and both their checksum and
 # that of the decompressed file are verified.
 #
-# PENDING: swift-frontend-lsp.wasm is not released yet. It comes from
-# build-toolchain.yml with release_tag=swift-6.3.3-wasm-2 and
-# publish_release=true; until then build with SWIFT_TOOLCHAIN_DIR pointing at
-# that workflow's artifact (README "Building"), and once it is published
-# replace both PENDING values with the release's checksums
-# (sha256sum swift-frontend-lsp.wasm.gz, and of the file unpacked).
+# swift-frontend-lsp.wasm (the compiler and sourcekitd in one module) is
+# from swift-6.3.3-wasm-2, published 2026-10-24 by build-toolchain.yml.
 # wasm-ld.wasm and swift-sysroot-core.tar stay pinned to swift-6.3.3-wasm,
 # whose 6.3.3 they are.
 TC_DOWNLOADS=https://github.com/tothambrus11/swift-toolchain-wasm/releases/download
 TC_ARTIFACTS=(
   # name                    release              sha256 of name.gz                                                  sha256 of name
-  "swift-frontend-lsp.wasm  swift-6.3.3-wasm-2   PENDING                                                            PENDING"
+  "swift-frontend-lsp.wasm  swift-6.3.3-wasm-2   9bd08138bf297ac3166cfd68ebc06115c7bd9f224b38cbe0d60e98fb11c8506a 5ee2ffef267b0221f3fe97b6c3094053fcd3a55892fe591cb8272a685e7ff4fb"
   "wasm-ld.wasm             swift-6.3.3-wasm     773a938c2b7a39de30780e3bd57b109b55e8b6da394c4c4dc8933f331ab5fcb1 00a8d674564664c694dbdc958b915744862a7751a9b1ed48fd68ac2b3c41ec12"
   "swift-sysroot-core.tar   swift-6.3.3-wasm     92be8bfe12128b07bce73c0afa540aa8247ff93c2d35508af6646cd29f5d981a 4b112ec0660e84accb13467d04959035388a064aec053dbe998cef9c63eb9314"
 )

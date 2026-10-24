@@ -816,23 +816,21 @@ downloads, checksum-verifies (SHA-256 pinned in the script) and caches in
   `swift-sysroot-core.tar`, as `.gz` release assets whose SHA-256, and that
   of each decompressed file, the script pins. A tag can be rebuilt in place
   upstream, so a changed asset fails the build loudly instead of changing
-  the bytes. `wasm-ld.wasm` and the sysroot come from release
+  the bytes. `swift-frontend-lsp.wasm` comes from release
+  `swift-6.3.3-wasm-2`, `wasm-ld.wasm` and the sysroot from
   `swift-6.3.3-wasm`.
 
-**`swift-frontend-lsp.wasm` is not released yet** (its pin in `build.sh`
-says `PENDING`). Until it is, build with the artifact of swift-toolchain-wasm's
-`build-toolchain.yml` (the `swift-toolchain-wasm-6.3.3` artifact of a run on
-a branch that has Stage 36's combined link), unpacked somewhere:
+To try an unreleased toolchain, unpack the `swift-toolchain-wasm-6.3.3`
+artifact of a `build-toolchain.yml` run somewhere and build with
 
 ```sh
 SWIFT_TOOLCHAIN_DIR=/path/to/unpacked/artifact ./build.sh
 ```
 
 Any of the three files found there is used instead of the release, without
-a checksum. To release it: run `build-toolchain.yml` with
-`publish_release=true` and `release_tag=swift-6.3.3-wasm-2` (a new tag, so
-the assets pinned above stay as they are), then put the release name and
-the two SHA-256 values of `swift-frontend-lsp.wasm` in `TC_ARTIFACTS`.
+a checksum. A new release gets a new tag (`release_tag`), so the assets
+pinned here stay as they are; then put its name and the two SHA-256 values
+in `TC_ARTIFACTS`.
 
 Then `npm ci` (binaryen 132.0.0 for swift-ls.wasm's `wasm-opt`, esbuild,
 playwright-core, `@bjorn3/browser_wasi_shim` 0.4.2), `swift build` of
