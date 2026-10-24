@@ -44,7 +44,8 @@ to go back and forward), references, rename (F2), quick fixes, signature help,
 formatting and semantic highlighting, as far as each language server offers
 them. Run (Ctrl+Enter) compiles and runs the project in a worker, with a
 terminal that can read input. Test (Ctrl+Shift+Enter) runs the project's
-tests in `tests/` (`Tests/` for Swift): pytest, `node:test`, GoogleTest,
+tests in `tests/` (`Tests/` for Swift): pytest (with Hypothesis for
+property-based tests), `node:test`, GoogleTest,
 doctest or Catch2 (chosen next to Test), XCTest, or JUnit Jupiter (Java, in
 `src/test/java/`); Scala has no Test yet, and Kotlin neither Run nor Test. Download saves the project as
 `<language>-project.zip` for an IDE: its files as they are, at the same
@@ -140,7 +141,10 @@ after weeks without a visit, persistent storage or not.
   out-of-bounds accesses are not.
 * **Scala**: not Metals, which cannot run in a browser. The LSP layer is
   ours; what it answers comes from the compiler.
-* **Python**: the standard library only; no packages from PyPI.
+* **Python**: the standard library only, plus pytest and Hypothesis
+  (property-based tests, fetched only for a project that imports it); no
+  other packages from PyPI. No mutation testing: mutmut and Cosmic Ray need
+  processes (packs/python/README.md).
 * **PHP**: the real Phpactor, run by PHP in the browser, with its own
   checks (unknown classes and methods, types) plus PHP's parser for syntax
   errors; no `php -l` compile errors, no PHPStan or Psalm, no formatting.

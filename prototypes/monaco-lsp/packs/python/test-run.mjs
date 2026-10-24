@@ -436,6 +436,50 @@ check(
     short(t6.stdout.slice(t6.stdout.indexOf('Captured')), 120),
 );
 
+// Property-based tests with Hypothesis: the bundle is fetched only for a
+// project that imports hypothesis; a passing property, and a failing one
+// whose counterexample Hypothesis shrinks to the smallest (0, 0).
+const PROPERTIES = `import math
+
+from hypothesis import given
+from hypothesis import strategies as st
+
+from geometry import Point, distance
+
+coords = st.floats(min_value=-1e6, max_value=1e6, allow_nan=False)
+
+
+@given(coords, coords, coords, coords)
+def test_distance_is_symmetric(ax: float, ay: float, bx: float, by: float) -> None:
+    a, b = Point(ax, ay), Point(bx, by)
+    assert distance(a, b) == distance(b, a)
+
+
+@given(st.integers(), st.integers())
+def test_norm_is_positive(x: int, y: int) -> None:
+    assert Point(x, y).norm() > 0
+`;
+const ph = await test({ ...SAMPLE, 'tests/test_geometry.py': TESTS, 'tests/test_properties.py': PROPERTIES });
+check(
+    'test: Hypothesis runs under pytest: a passing property passes, a failing one fails with its shrunk counterexample',
+    ph.code === 1 &&
+        /1 failed, 7 passed/.test(ph.stdout) &&
+        /FAILED tests\/test_properties\.py::test_norm_is_positive/.test(ph.stdout) &&
+        /Failing test case: test_norm_is_positive\(\s*E?\s*x=0,\s*E?\s*y=0,\s*E?\s*\)/.test(ph.stdout) &&
+        /plugins: hypothesis-6\.170\.9/.test(ph.stdout),
+    `${timing(ph)} phases: ${ph.phases.join(', ')}; loading: ${JSON.stringify(ph.loading['hypothesis-6.170.9.zip'])}\n${ph.stdout.trimEnd().replace(/^/gm, '      | ')}`,
+);
+check(
+    'test: Hypothesis is fetched only for a project that imports it',
+    t1.loading['hypothesis-6.170.9.zip'] === undefined && cold.loading['hypothesis-6.170.9.zip'] === undefined && ph.loading['hypothesis-6.170.9.zip']?.loaded > 0,
+);
+const pr = await run(
+    { ...SAMPLE, 'main.py': 'from hypothesis import given, strategies as st\n\n\n@given(st.lists(st.integers()))\ndef check_sorted_is_idempotent(xs):\n    assert sorted(sorted(xs)) == sorted(xs)\n\n\ncheck_sorted_is_idempotent()\nprint("ok")\n' },
+    'main.py',
+    [],
+);
+check('run: a program can use Hypothesis too (no pytest needed)', pr.code === 0 && pr.stdout === 'ok\n' && pr.loading['pytest-9.0.2.zip'] === undefined, `${timing(pr)} stdout=${short(pr.stdout)} stderr=${short(pr.stderr, 400)}`);
+
 check('no page errors', pageErrors.length === 0, JSON.stringify(pageErrors));
 console.log(failures ? `${failures} check(s) failed` : 'all checks passed');
 await browser.close();

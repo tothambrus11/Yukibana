@@ -1,0 +1,9 @@
+# The Hypothesis bundle (see make-pytest-zip.py, which merges it as it does
+# pytest's): Hypothesis and its one dependency on Python 3.14, as published on
+# PyPI, pinned by sha256. Hypothesis has a compiled part (`hypothesis._native`,
+# Rust through PyO3, imported unconditionally) and publishes a wheel for
+# Pyodide's platform, PEP 783's pyemscripten_2026_0 (Pyodide 314's ABI,
+# `abi_version` in its lock file): that wheel is used as it is.
+# file sha256 url
+hypothesis-6.170.9-cp314-cp314-pyemscripten_2026_0_wasm32.whl e6cf7f4463c9025ec65478ab406b5cffd44dec24833b2c145175e9b599280c5d https://files.pythonhosted.org/packages/c0/9d/d0de89c6ebbea141c9671cf552ddffc4aba24112e79285caad70278ef2fc/hypothesis-6.170.9-cp314-cp314-pyemscripten_2026_0_wasm32.whl
+sortedcontainers-2.4.0-py2.py3-none-any.whl a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0 https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3bffeb12413f947f9388e4cac22c4621ce/sortedcontainers-2.4.0-py2.py3-none-any.whl

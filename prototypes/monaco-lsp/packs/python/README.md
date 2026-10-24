@@ -19,13 +19,13 @@ maintained by the project that also maintains the checker.
 | file | raw | gzip | brotli | what |
 |---|---|---|---|---|
 | `server.js` | 2.28 MB | 559 KB | 437 KB | the server, minified ES module |
-| `typeshed-stdlib.tar.gz` | 4.4 MB tar | 704 KB | (is gzip) | typeshed stdlib stubs + docstrings, and pytest's stubs (below) |
-| `LICENSE-*.txt` | 15 KB | | | basedpyright (MIT), typeshed (Apache-2.0), pytest (MIT); the runner's are listed under Running |
+| `typeshed-stdlib.tar.gz` | 4.9 MB tar | 803 KB | (is gzip) | typeshed stdlib stubs + docstrings, and pytest's and Hypothesis's stubs (below) |
+| `LICENSE-*.txt` | 32 KB | | | basedpyright (MIT), typeshed (Apache-2.0), pytest (MIT), Hypothesis (MPL-2.0); the runner's are listed under Running |
 
-A first load transfers about **1.14 MB** where the host serves `server.js.br`,
-**1.26 MB** where it serves `.gz`, and 3.0 MB from a host that serves raw
+A first load transfers about **1.24 MB** where the host serves `server.js.br`,
+**1.36 MB** where it serves `.gz`, and 3.1 MB from a host that serves raw
 files only (the stubs archive is gzip either way). pytest's stubs are 96 KB
-of that (gzip). For comparison, the npm
+of that (gzip), Hypothesis's 99 KB. For comparison, the npm
 package `browser-basedpyright@1.40.2` is one 18 MB `pyright.worker.js` (3.2 MB
 gzipped), because it inlines all of typeshed, third-party stubs included.
 
@@ -79,6 +79,18 @@ upstream's own rspack, ts-loader (type-checked) and polyfills.
   `import pytest` as missing, also in a plain Run, where pytest is not
   installed (`import pytest` then fails at run time with
   `ModuleNotFoundError`).
+* **Hypothesis is known the same way.** `build.sh` makes stubs of the
+  `hypothesis` package from the wheel the runner installs
+  (`scripts/hypothesis-wheels.txt`), with stubgen's `--no-import`:
+  Hypothesis is annotated inline, so reading its sources gives its types
+  (`st.integers()` is `SearchStrategy[int]`, `st.builds(Point, ...)`
+  `SearchStrategy[Point]`) and docstrings, and its compiled part,
+  `hypothesis._native` (built for Pyodide, not for the build machine), has
+  nothing typed to add. Left out: `hypothesis/extra/`, its integrations with
+  numpy, pandas, Django, lark, pytz, dateutil, redis, black and click, none
+  of which a project here can import. 82 stub files, 99 KB gzip in the
+  archive, which every Python session downloads (the archive is one file;
+  the runtime half is lazy, see Property-based testing).
 * **English messages only.** pyright bundles 15 message catalogues (~1.4 MB
   raw). The build swaps the 14 non-English ones for `{}`; pyright already
   falls back to English for a key a catalogue lacks.
@@ -143,7 +155,7 @@ the checkout and the node_modules of `pyright-internal` and
 `browser-pyright`). Dependencies come from upstream's frozen lockfile. The
 stubs archive is byte-for-byte reproducible.
 
-## Test output (2026-10-23, Chromium 141 headless)
+## Test output (2026-10-23, Chromium 141 headless; the Hypothesis checks 2026-10-24)
 
 ```text
 PASS  initialize answers after the stubs download, with progress notifications  (262 ms, 8 progress messages, last {"label":"typeshed-stdlib.tar.gz","loaded":703881,"total":703881}, server basedpyright 1.40.2)
@@ -159,6 +171,11 @@ PASS  a non-Python project file is not analysed as Python
 PASS  a pytest test file in tests/ has no diagnostics at all: pytest and the project module both resolve  []
 PASS  hover on `pytest.approx` shows its signature and pytest's docstring  "```python\n(function) def approx(\n    expected: Unknown,\n    rel: Unknown | None = None,\n    abs: Unknown | None = None,\n    nan_ok: bool = False\n) -> ApproxBase"
 PASS  `with pytest.raises(E) as info` types `info` as ExceptionInfo[E]  "```python\n(variable) info: ExceptionInfo[ZeroDivisionError]\n```"
+PASS  a Hypothesis test file has no diagnostics: hypothesis and hypothesis.strategies resolve  []
+PASS  hover on `st.integers` shows its signature and Hypothesis's docstring  "```python\n(function) def integers(\n    min_value: int | None = None,\n    max_value: int | None = None\n) -> SearchStrategy[int]\n```\n---\nReturns a strategy which generates integers.\n\nIf min\\_value is no"
+PASS  `st.integers()` is typed SearchStrategy[int]  "```python\n(variable) nums: SearchStrategy[int]\n```"
+PASS  `st.builds(Point, ...)` is typed SearchStrategy[Point]  "```python\n(variable) points: SearchStrategy[Point]\n```"
+PASS  completion after `st.` offers the strategies  ["__name__","__loader__","__package__","__spec__","__path__","__file__","__cached__","__annotations__","__dict__","__builtins__","__doc__","SearchStrategy"]
 PASS  shutdown answers
 PASS  the worker reported no errors  []
 all checks passed
@@ -193,7 +210,7 @@ downloads the npm tarball, checks it against the registry's sha512 integrity
 
 | file | raw | gzip | brotli | what |
 |---|---|---|---|---|
-| `runner.js` | 13.5 KB | 5.0 KB | 4.4 KB | the worker (hand-written, not minified) |
+| `runner.js` | 15.6 KB | 5.8 KB | 5.1 KB | the worker (hand-written, not minified) |
 | `pyodide.mjs` | 17.9 KB | 7.2 KB | 6.4 KB | Pyodide's loader |
 | `pyodide.asm.mjs` | 1.25 MB | 261 KB | 207 KB | the Emscripten JS glue |
 | `pyodide.asm.wasm` | 9.60 MB | 3.59 MB | 2.74 MB | CPython 3.14.2 |
@@ -203,6 +220,7 @@ downloads the npm tarball, checks it against the registry's sha512 integrity
 | **total** (one Run, licences excluded) | **20.5 MB** | **6.08 MB** | **4.55 MB** | |
 | `pytest-9.0.2.zip` | 2.18 MB | 541 KB | 413 KB | pytest and its dependencies, fetched by Test only (see Testing) |
 | **total** (one Test) | **22.7 MB** | **6.62 MB** | **4.96 MB** | |
+| `hypothesis-6.170.9.zip` | 2.17 MB | 580 KB | 442 KB | Hypothesis and sortedcontainers, fetched only for a project that imports hypothesis (see Property-based testing) |
 
 The language server and the runner share no files: basedpyright is
 TypeScript and never needs an interpreter, so pressing Run downloads ~4.5 MB
@@ -315,12 +333,80 @@ directory:
   needed, and it would be with unittest's (its discovery imports
   `tests.test_x` as a package module).
 
+## Property-based testing
+
+**Hypothesis 6.170.9** (MPL-2.0), the real one, for a project that imports
+it, in Test (with pytest, whose Hypothesis plugin it registers) and in Run
+alike: `@given(st.integers(), st.lists(st.floats()))`, `st.builds`,
+`@composite`, `assume`, `@example`, `settings`, stateful tests. The sample's
+`test_distance_is_symmetric` is a property over two `st.builds(Point, ...)`.
+
+* **What is downloaded.** `hypothesis-6.170.9.zip`, made by
+  `build-runner.sh` like the pytest bundle from two PyPI wheels pinned by
+  sha256 in `scripts/hypothesis-wheels.txt`: Hypothesis's own wheel for
+  Pyodide's platform, `cp314-cp314-pyemscripten_2026_0_wasm32` (PEP 783;
+  Pyodide 314's `abi_version` is `2026_0`), and sortedcontainers 2.4.0
+  (Apache-2.0), its one dependency. Hypothesis has a compiled part,
+  `hypothesis._native` (Rust through PyO3, imported unconditionally), and
+  upstream builds it for Pyodide itself: nothing is rebuilt or patched here,
+  and Pyodide loads the 126 KB extension module from site-packages when
+  `hypothesis` imports it. Licences travel inside the zip (each wheel's
+  `dist-info`, with Hypothesis's SBOM of the Rust crates in its native part)
+  and as `LICENSE-hypothesis.txt`.
+* **When.** The runner fetches the zip, while Pyodide loads, only when a
+  `.py` file of the project imports hypothesis at the start of a line
+  (`import hypothesis`, `from hypothesis import given`, `from
+  hypothesis.strategies import ...`; `IMPORTS_HYPOTHESIS` in `runner.js`). A
+  project that does not pays nothing. An import the pattern cannot see
+  (`importlib.import_module("hypothesis")`, or one in a string passed to
+  `exec`) fails with `ModuleNotFoundError`, as for any package that is not
+  installed.
+* **Report.** pytest's, with Hypothesis's additions: `plugins:
+  hypothesis-6.170.9` in the header, and for a failing property the
+  shrunk counterexample under the assertion, as `Failing test case:
+  test_norm_is_positive(x=0, y=0)` (the test below). Hypothesis's example
+  database is written to `/workspace/.hypothesis/` and vanishes with the
+  worker, so a failure is not replayed first on the next Test; the shrunk
+  example is found again by the search.
+* **Cost.** 442 KB (brotli) the first time; importing Hypothesis adds about
+  1.5-2 s to a Test (the sample: 5.6 s without, 7.8 s with, in the test
+  below under load). Its default `deadline` of 200 ms per example applies:
+  WebAssembly CPython is slower than a native one, so a heavy property may
+  need `@settings(deadline=None)`, as on a slow CI machine.
+* **Download** adds `hypothesis>=6.170` to the dev dependencies in
+  `pyproject.toml` and to the README's `pip install` when the project
+  imports it.
+
+## Mutation testing: not available
+
+No mutation testing tool for Python can run in this runtime without being
+rewritten, and none is faked:
+
+* **mutmut 3.8** forks a process per mutant (`set_start_method("fork")`,
+  `run_in_fork_with_result`, a `multiprocessing.Pool`), runs `git` through
+  `subprocess`, and needs libcst (a Rust parser) and setproctitle (C), for
+  which PyPI has no Pyodide wheel. In this runtime `os.fork()` raises
+  `OSError: [Errno 52] Function not implemented`,
+  `multiprocessing.Pool(1)` raises `ModuleNotFoundError: No module named
+  '_multiprocessing'`, and `subprocess.run` raises `OSError: [Errno 138]
+  emscripten does not support processes.` (checked with this pack's
+  Pyodide, 2026-10-24).
+* **Cosmic Ray 8.7** runs each mutant in a worker started with
+  `subprocess` (or over HTTP with aiohttp): the same wall.
+* **MutPy** runs in-process, but supports Python 3.3-3.7 and is
+  last released in 2019; its operators build `ast.Num`/`ast.Str` nodes, which
+  Python 3.14 has removed.
+
+A tool that mutated the AST and re-ran pytest in the same interpreter would
+be a new tool, not one of these.
+
 ## Limits
 
 * **`crossOriginIsolated` is needed for stdin.** Without it the app passes
   `stdin: null` and every read is end of file (`input()` raises `EOFError`).
   Everything else works without isolation.
-* **Standard library only.** No numpy etc.: not shipped, and the runner
+* **Standard library only**, plus pytest in Test and Hypothesis for a
+  project that imports it. No numpy etc.: not shipped, and the runner
   cannot download packages (no lock entries, no network to a CDN).
 * **No threads, no subprocesses.** CPython is built for Emscripten without
   pthreads: `threading.Thread(...).start()` raises
@@ -368,7 +454,7 @@ upstream tags and checked against pinned hashes. Not shipped: the notices of
 the C libraries CPython links in (zlib, bzip2, libffi, expat, mpdecimal,
 HACL\*, ...), which CPython lists in `Doc/license.rst`, not in `LICENSE`.
 
-## Test output (2026-10-23, Chromium headless, load average ~4-5 on 4 cores)
+## Test output (2026-10-23, Chromium headless, load average ~4-5 on 4 cores; the Hypothesis checks 2026-10-24)
 
 "cold" is a fresh browser profile (all 20.5 MB downloaded raw from a local
 server, wasm compiled); "warm" is a new worker on the same page with every
@@ -437,6 +523,46 @@ PASS  test: a collection error (an import that fails) exits non-zero and names t
 PASS  test: unittest.TestCase classes are collected too (no tests/__init__.py needed); a failure exits 1  "short test summary info ============================\nFAILED tests/test_unit.py::PointTest::test_wrong - AssertionError: 1.41421356...\n========================= 1 failed, 1 passed in 0.04s ============..."
 PASS  test: a project without tests exits 5 ("no tests ran"), not 0  code=5
 PASS  test: output is captured per test (capsys works) and shown for a failing test  "Captured stdout call -----------------------------\ncaptured line\n=========================== short test summary info ===..."
+PASS  test: Hypothesis runs under pytest: a passing property passes, a failing one fails with its shrunk counterexample  (7802 ms total, Running at - ms) phases: Loading Python@48ms, Loading Python and pytest and Hypothesis@53ms, Testing@3377ms; loading: {"loaded":2167507,"total":2167507}
+      | ============================= test session starts ==============================
+      | platform emscripten -- Python 3.14.2, pytest-9.0.2, pluggy-1.6.0
+      | rootdir: /workspace
+      | plugins: hypothesis-6.170.9
+      | collected 8 items
+      | 
+      | tests/test_geometry.py ......                                            [ 75%]
+      | tests/test_properties.py .F                                              [100%]
+      | 
+      | =================================== FAILURES ===================================
+      | ____________________________ test_norm_is_positive _____________________________
+      | 
+      |     @given(st.integers(), st.integers())
+      | >   def test_norm_is_positive(x: int, y: int) -> None:
+      |                    ^^^
+      | 
+      | tests/test_properties.py:18: 
+      | _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+      | 
+      | x = 0, y = 0
+      | 
+      |     @given(st.integers(), st.integers())
+      |     def test_norm_is_positive(x: int, y: int) -> None:
+      | >       assert Point(x, y).norm() > 0
+      | E       assert 0.0 > 0
+      | E        +  where 0.0 = norm()
+      | E        +    where norm = Point(x=0, y=0).norm
+      | E        +      where Point(x=0, y=0) = Point(0, 0)
+      | E       Failing test case: test_norm_is_positive(
+      | E           x=0,
+      | E           y=0,
+      | E       )
+      | 
+      | tests/test_properties.py:19: AssertionError
+      | =========================== short test summary info ============================
+      | FAILED tests/test_properties.py::test_norm_is_positive - assert 0.0 > 0
+      | ========================= 1 failed, 7 passed in 2.10s ==========================
+PASS  test: Hypothesis is fetched only for a project that imports it
+PASS  run: a program can use Hypothesis too (no pytest needed)  (4980 ms total, Running at 3013 ms) stdout="ok\n" stderr=""
 PASS  no page errors  []
 all checks passed
 ```

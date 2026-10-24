@@ -2,8 +2,8 @@
 # Builds the Python runner (packs/CONTRACT.md, "Running a program") into
 # ../../app/static/packs/python/: runner.js plus the Pyodide core, taken from
 # the npm package `pyodide` at a pinned version whose tarball is checked
-# against the registry's sha512 integrity, and the pytest bundle that test
-# mode fetches. Nothing is compiled: Pyodide's release is CPython already
+# against the registry's sha512 integrity, the pytest bundle that test
+# mode fetches and the Hypothesis bundle a project importing it fetches. Nothing is compiled: Pyodide's release is CPython already
 # built for wasm32-emscripten, pytest is pure Python. Called by build.sh; can
 # be run on its own. Idempotent; caches the downloads in $PACK_CACHE/python.
 set -euo pipefail
@@ -61,21 +61,31 @@ mapfile -t wheels < <("$HERE/scripts/fetch-wheels.sh" "$CACHE/wheels")
 rm -f "$OUT"/pytest-*.zip "$OUT"/pytest-*.zip.{gz,br}
 python3 -I "$HERE/scripts/make-pytest-zip.py" "$OUT/$PYTEST_ZIP" "${wheels[@]}"
 
+# 3b. The Hypothesis bundle, made the same way from
+#     scripts/hypothesis-wheels.txt (Hypothesis's own wheel for Pyodide's
+#     platform, and sortedcontainers). The runner fetches it only for a
+#     project that imports hypothesis, in Run and in Test alike.
+HYPOTHESIS_ZIP="hypothesis-$(sed -n 's/^hypothesis-\([0-9.]*\)-cp.*/\1/p' "$HERE/scripts/hypothesis-wheels.txt").zip"
+mapfile -t hwheels < <("$HERE/scripts/fetch-wheels.sh" "$CACHE/wheels" "$HERE/scripts/hypothesis-wheels.txt")
+rm -f "$OUT"/hypothesis-*.zip "$OUT"/hypothesis-*.zip.{gz,br}
+python3 -I "$HERE/scripts/make-pytest-zip.py" "$OUT/$HYPOTHESIS_ZIP" "${hwheels[@]}"
+
 # 4. runner.js, with the lock file's `info` and the bundle's name inlined.
 info="$(node -e "process.stdout.write(JSON.stringify(require('$TMP/package/pyodide-lock.json').info))")"
 node -e '
 const fs = require("fs");
-const [src, out, info, pytestZip] = process.argv.slice(1);
+const [src, out, info, pytestZip, hypothesisZip] = process.argv.slice(1);
 let text = fs.readFileSync(src, "utf8");
 for (const [marker, value] of [
     ["/* LOCK_INFO */ { info: {}, packages: {} }", `{ info: ${info}, packages: {} }`],
     ["/* PYTEST_ZIP */ \"pytest.zip\"", JSON.stringify(pytestZip)],
+    ["/* HYPOTHESIS_ZIP */ \"hypothesis.zip\"", JSON.stringify(hypothesisZip)],
 ]) {
     if (!text.includes(marker)) throw new Error(`marker ${marker} missing in ${src}`);
     text = text.replace(marker, value);
 }
 fs.writeFileSync(out, text);
-' "$HERE/runner/runner.js" "$OUT/runner.js" "$info" "$PYTEST_ZIP"
+' "$HERE/runner/runner.js" "$OUT/runner.js" "$info" "$PYTEST_ZIP" "$HYPOTHESIS_ZIP"
 
 # 5. Licences (cached, so a build with a warm cache makes no request) and
 #    precompressed siblings.
@@ -92,4 +102,4 @@ licence() { # name url sha256
 }
 licence LICENSE-pyodide.txt "https://raw.githubusercontent.com/pyodide/pyodide/$PYODIDE_VERSION/LICENSE" "$PYODIDE_LICENSE_SHA256"
 licence LICENSE-cpython.txt "https://raw.githubusercontent.com/python/cpython/$CPYTHON_TAG/LICENSE" "$CPYTHON_LICENSE_SHA256"
-nice -n 10 node "$HERE/scripts/compress.mjs" "$OUT/runner.js" "$OUT/pyodide.mjs" "$OUT/pyodide.asm.mjs" "$OUT/pyodide.asm.wasm" "$OUT/python_stdlib.zip" "$OUT/$PYTEST_ZIP"
+nice -n 10 node "$HERE/scripts/compress.mjs" "$OUT/runner.js" "$OUT/pyodide.mjs" "$OUT/pyodide.asm.mjs" "$OUT/pyodide.asm.wasm" "$OUT/python_stdlib.zip" "$OUT/$PYTEST_ZIP" "$OUT/$HYPOTHESIS_ZIP"

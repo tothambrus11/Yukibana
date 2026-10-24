@@ -10,7 +10,8 @@
 //   out: loading / phase / stdout / stderr / stdin / exit (exit is last)
 //
 // `test` runs pytest over the project instead of the entry, with pytest
-// fetched only then (PYTEST_ZIP).
+// fetched only then (PYTEST_ZIP). A project that imports hypothesis gets
+// Hypothesis (HYPOTHESIS_ZIP), in Run and in Test alike, fetched only then.
 
 import { loadPyodide, version } from './pyodide.mjs';
 
@@ -24,6 +25,25 @@ const LOCK = /* LOCK_INFO */ { info: {}, packages: {} };
 // imports, as one stored zip of their wheels' files (scripts/make-pytest-zip.py),
 // named by pytest's version; the build writes the name in.
 const PYTEST_ZIP = /* PYTEST_ZIP */ "pytest.zip";
+
+// Hypothesis (its wheel for Pyodide's platform, with its compiled
+// `hypothesis._native`) and sortedcontainers, made the same way, named by
+// Hypothesis's version (scripts/hypothesis-wheels.txt); the build writes the
+// name in.
+const HYPOTHESIS_ZIP = /* HYPOTHESIS_ZIP */ "hypothesis.zip";
+
+// A project uses Hypothesis when one of its Python files imports it at the
+// start of a line (`import hypothesis`, `from hypothesis import given`,
+// `from hypothesis.strategies import ...`, indented or not). A mention in a
+// comment or string does not count; an import built at run time
+// (importlib.import_module("hypothesis")) is not seen, and fails as for any
+// package that is not installed.
+const IMPORTS_HYPOTHESIS = /^[ \t]*(?:from[ \t]+hypothesis(?:[ \t.]|$)|import[ \t]+(?:[\w.]+[ \t]*(?:as[ \t]+\w+)?[ \t]*,[ \t]*)*hypothesis\b)/m;
+
+/** Whether any `.py` file of `files` imports hypothesis (IMPORTS_HYPOTHESIS). */
+function usesHypothesis(files) {
+    return Object.entries(files).some(([path, text]) => path.endsWith('.py') && IMPORTS_HYPOTHESIS.test(text));
+}
 
 const BASE = new URL('./', import.meta.url).href;
 const WORKDIR = '/workspace';
@@ -273,20 +293,24 @@ function writeFiles(pyodide, files) {
 }
 
 /**
- * Fetches the pytest bundle, reporting it as a `loading` message (the fetch
- * wrapper above is gone by now), while Pyodide itself loads.
+ * Fetches a bundle of wheels (PYTEST_ZIP, HYPOTHESIS_ZIP), reporting it as a
+ * `loading` message (the fetch wrapper above is gone by now), while Pyodide
+ * itself loads.
  */
-async function fetchPytest() {
-    const url = new URL(PYTEST_ZIP, BASE);
+async function fetchBundle(name) {
+    const url = new URL(name, BASE);
     const res = await realFetch.call(globalThis, url);
     if (!res.ok || !res.body) throw new Error(`could not fetch ${url}: HTTP ${res.status}`);
     const total = res.headers.get('content-encoding') ? 0 : Number(res.headers.get('content-length') ?? 0);
-    countBytes(res.clone().body, PYTEST_ZIP, total);
+    countBytes(res.clone().body, name, total);
     return res.arrayBuffer();
 }
 
-/** Unpacks the pytest bundle into site-packages; returns that directory. */
-function installPytest(pyodide, bytes) {
+/**
+ * Unpacks a bundle into site-packages (purelib and platlib are one
+ * directory in Pyodide); returns that directory.
+ */
+function installBundle(pyodide, bytes) {
     const site = pyodide.runPython('import sysconfig; sysconfig.get_paths()["purelib"]');
     pyodide.unpackArchive(bytes, 'zip', { extractDir: site });
     return site;
@@ -297,17 +321,27 @@ self.onmessage = async ({ data: msg }) => {
     if ((msg?.type !== 'run' && msg?.type !== 'test') || started) return;
     started = true;
     const testing = msg.type === 'test';
+    const hypothesis = usesHypothesis(msg.files ?? {});
     let code = 1;
     try {
-        if (testing) post({ type: 'phase', text: 'Loading Python and pytest' });
-        const [pyodide, pytestZip] = await Promise.all([ready, testing ? fetchPytest() : null]);
+        if (testing || hypothesis) {
+            const names = [testing && 'pytest', hypothesis && 'Hypothesis'].filter(Boolean).join(' and ');
+            post({ type: 'phase', text: `Loading Python and ${names}` });
+        }
+        const [pyodide, pytestZip, hypothesisZip] = await Promise.all([
+            ready,
+            testing ? fetchBundle(PYTEST_ZIP) : null,
+            hypothesis ? fetchBundle(HYPOTHESIS_ZIP) : null,
+        ]);
         pyodide.setStdout(writer('stdout', !testing));
         pyodide.setStderr(writer('stderr', !testing));
         pyodide.setStdin(reader(msg.stdin ?? null));
         writeFiles(pyodide, msg.files ?? {});
         pyodide.runPython(DRIVER);
+        // Run puts site-packages on sys.path itself, as Pyodide starts with it.
+        if (hypothesisZip) installBundle(pyodide, hypothesisZip);
         if (testing) {
-            const site = installPytest(pyodide, pytestZip);
+            const site = installBundle(pyodide, pytestZip);
             post({ type: 'phase', text: 'Testing' });
             const test = pyodide.globals.get('_yukibana_test');
             code = test(WORKDIR, site);

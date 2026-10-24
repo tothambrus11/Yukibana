@@ -71,8 +71,30 @@ if [ ! -f "$STUBS_PYTEST/.done" ]; then
     touch "$STUBS_PYTEST/.done"
 fi
 
-# 5. Stdlib stubs archive (with pytest's), fetched by the worker at startup.
-python3 -I "$HERE/scripts/make-stubs-tar.py" "$SRC/docstubs" "$OUT/typeshed-stdlib.tar.gz" "$STUBS_PYTEST"
+# 4b. Stubs of Hypothesis, from the wheel the runner installs
+#     (scripts/hypothesis-wheels.txt). Hypothesis is annotated inline, so
+#     stubgen reads its sources without importing them (--no-import): its
+#     compiled part is built for Pyodide, not for this machine, and nothing
+#     typed comes from it. Not kept: hypothesis/extra/, the integrations with
+#     numpy, pandas, Django, lark, pytz, dateutil, redis, black and click,
+#     none of which a project here can import.
+STUBS_HYPOTHESIS="$CACHE/hypothesis-stubs-mypy$MYPY_VERSION-$(sha256sum "$HERE/scripts/hypothesis-wheels.txt" | cut -c1-12)"
+if [ ! -f "$STUBS_HYPOTHESIS/.done" ]; then
+    rm -rf "$STUBS_HYPOTHESIS" "$STUBS_HYPOTHESIS.src"
+    mkdir -p "$STUBS_HYPOTHESIS.src"
+    "$HERE/scripts/fetch-wheels.sh" "$CACHE/wheels" "$HERE/scripts/hypothesis-wheels.txt" | grep '/hypothesis-' | while read -r w; do unzip -qo "$w" -d "$STUBS_HYPOTHESIS.src"; done
+    rm -rf "$STUBS_HYPOTHESIS.src/hypothesis/extra"
+    PYTHONHASHSEED=0 UV_CACHE_DIR="$CACHE/uv-cache" $NICE uv run --quiet --no-project --python "$DOCSTUBS_PYTHON" --with "mypy==$MYPY_VERSION" \
+        stubgen --include-docstrings --quiet --no-import -o "$STUBS_HYPOTHESIS" "$STUBS_HYPOTHESIS.src/hypothesis"
+    [ -f "$STUBS_HYPOTHESIS/hypothesis/strategies/__init__.pyi" ] || { echo "Hypothesis stub generation failed" >&2; exit 1; }
+    cp "$STUBS_HYPOTHESIS.src"/hypothesis-*.dist-info/licenses/LICENSE.txt "$STUBS_HYPOTHESIS/LICENSE"
+    rm -rf "$STUBS_HYPOTHESIS.src"
+    touch "$STUBS_HYPOTHESIS/.done"
+fi
+
+# 5. Stdlib stubs archive (with pytest's and Hypothesis's), fetched by the
+#    worker at startup.
+python3 -I "$HERE/scripts/make-stubs-tar.py" "$SRC/docstubs" "$OUT/typeshed-stdlib.tar.gz" "$STUBS_PYTEST" "$STUBS_HYPOTHESIS"
 
 # 6. The worker bundle: our entry and config dropped next to upstream's
 #    browser-pyright sources (upstream files are not modified), built with
@@ -87,6 +109,7 @@ rm -f "$OUT/server.js" "$OUT/server.js.gz" "$OUT/server.js.br"
 cp "$SRC/LICENSE.txt" "$OUT/LICENSE-basedpyright.txt"
 cp "$SRC/packages/pyright-internal/typeshed-fallback/LICENSE" "$OUT/LICENSE-typeshed.txt"
 cp "$STUBS_PYTEST/LICENSE" "$OUT/LICENSE-pytest.txt"
+cp "$STUBS_HYPOTHESIS/LICENSE" "$OUT/LICENSE-hypothesis.txt"
 node "$HERE/scripts/compress.mjs" "$OUT/server.js"
 
 # 8. The runner (Pyodide), a separate download the language server does not

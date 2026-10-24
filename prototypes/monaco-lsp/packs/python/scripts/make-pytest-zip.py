@@ -3,6 +3,14 @@ site-packages when the app asks for tests (runner.js, `type: 'test'`).
 
 Usage: python3 -I make-pytest-zip.py <out.zip> <wheel>...
 
+build-runner.sh also makes the Hypothesis bundle with it (Hypothesis's wheel
+for Pyodide and sortedcontainers), which the runner fetches only for a
+project that imports hypothesis. That wheel is not pure Python (it carries
+`hypothesis/_native.cpython-314-wasm32-emscripten.so`, `Root-Is-Purelib:
+false`), but in Pyodide purelib and platlib are one directory, so unpacking
+it there is still installing it; Pyodide loads the extension from the file
+system when `hypothesis` imports it.
+
 A wheel is a zip whose members are already laid out as they are installed
 (`pytest/`, `_pytest/`, `pytest-9.0.2.dist-info/`), so installing a pure
 Python wheel is unpacking it; the zip is the union of the wheels' members.

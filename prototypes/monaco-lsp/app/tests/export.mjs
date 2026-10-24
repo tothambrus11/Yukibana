@@ -160,8 +160,8 @@ async function python(name, files) {
 	const venv = join(work, 'venv');
 	if (!existsSync(venv)) {
 		const r = run('python3', ['-m', 'venv', venv], work);
-		const pip = r.status === 0 && run(join(venv, 'bin', 'python'), ['-m', 'pip', 'install', '--quiet', 'pytest>=9'], work);
-		if (!pip || pip.status !== 0) return skip(`${name}: could not install pytest into a venv: ${tail((pip || r).output)}`);
+		const pip = r.status === 0 && run(join(venv, 'bin', 'python'), ['-m', 'pip', 'install', '--quiet', 'pytest>=9', 'hypothesis>=6.170'], work);
+		if (!pip || pip.status !== 0) return skip(`${name}: could not install pytest and Hypothesis into a venv: ${tail((pip || r).output)}`);
 	}
 	const py = join(venv, 'bin', 'python');
 	step(`${name}: python main.py prints the distance`, py, ['main.py'], dir, 'to Point(x=3, y=4): 5.0');

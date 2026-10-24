@@ -445,8 +445,19 @@ export function packageSwift(files: Files, paths: readonly string[]): string {
 // ---- Python: pyproject.toml
 
 /**
+ * Whether a Python project imports Hypothesis: the same test as the
+ * runner's (packs/python/runner/runner.js, IMPORTS_HYPOTHESIS), which then
+ * installs it.
+ */
+export function usesHypothesis(files: Files): boolean {
+	const imports = /^[ \t]*(?:from[ \t]+hypothesis(?:[ \t.]|$)|import[ \t]+(?:[\w.]+[ \t]*(?:as[ \t]+\w+)?[ \t]*,[ \t]*)*hypothesis\b)/m;
+	return Object.entries(files).some(([path, text]) => path.endsWith('.py') && imports.test(text));
+}
+
+/**
  * pyproject.toml with pytest as a development dependency (the version the
- * browser runs, or later) and pytest told where the browser's run looks:
+ * browser runs, or later; Hypothesis too when the project imports it) and
+ * pytest told where the browser's run looks:
  * the project folder on the import path, so a test in tests/ can say `from
  * geometry import Point`, and tests/ as where tests are when there is one.
  * No build system: the project is a folder of modules, not a package to
@@ -462,7 +473,7 @@ export function pyprojectToml(files: Files): string {
 		'dependencies = []',
 		'',
 		'[dependency-groups]',
-		'dev = ["pytest>=9"]',
+		usesHypothesis(files) ? 'dev = ["pytest>=9", "hypothesis>=6.170"]' : 'dev = ["pytest>=9"]',
 		'',
 		'[tool.pytest.ini_options]',
 		...(hasTestsFolder ? ['testpaths = ["tests"]'] : []),
@@ -870,10 +881,11 @@ function instructions(language: Language, files: Files): string[] {
 		}
 		case 'python': {
 			const tests = paths.some((p) => p.endsWith('.py') && /(^|\/)(test_[^/]*|[^/]*_test)\.py$/.test(p));
+			const hypothesis = usesHypothesis(files);
 			return [
 				`## Run\n\nWith Python 3.12 or later:\n\n\`\`\`sh\npython ${language.entry}\n\`\`\``,
 				...(tests
-					? ['## Test\n\nThe tests use pytest:\n\n```sh\npython -m venv .venv\n. .venv/bin/activate        # .venv\\Scripts\\activate on Windows\npython -m pip install pytest\npython -m pytest\n```\n\nOr, with uv: `uv run pytest`.']
+					? [`## Test\n\nThe tests use pytest${hypothesis ? ' and Hypothesis' : ''}:\n\n\`\`\`sh\npython -m venv .venv\n. .venv/bin/activate        # .venv\\Scripts\\activate on Windows\npython -m pip install pytest${hypothesis ? ' hypothesis' : ''}\npython -m pytest\n\`\`\`\n\nOr, with uv: \`uv run pytest\`.`]
 					: []),
 				'## Editors\n\nPyCharm and VS Code (with the Python extension) open the folder; pytest is configured in `pyproject.toml`.',
 			];

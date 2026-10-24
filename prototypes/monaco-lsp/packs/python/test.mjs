@@ -245,6 +245,47 @@ try {
     const raisesInfo = await lsp.request('textDocument/hover', { textDocument: { uri: uri('tests/test_models.py') }, position: { line: 13, character: 12 } });
     check('`with pytest.raises(E) as info` types `info` as ExceptionInfo[E]', /ExceptionInfo\[ZeroDivisionError\]/.test(raisesInfo.result?.contents?.value ?? ''), JSON.stringify(raisesInfo.result?.contents?.value));
 
+    // A Hypothesis property test: `hypothesis` resolves to the stubs made
+    // from the wheel the runner installs, with its types and docstrings.
+    const PROPS = [
+        'from hypothesis import given',
+        'from hypothesis import strategies as st',
+        '',
+        'from models import Point',
+        '',
+        '',
+        '@given(st.integers(min_value=0), st.lists(st.floats(allow_nan=False)))',
+        'def test_norm(x: int, ys: list[float]) -> None:',
+        '    assert Point(x, 0).norm() == x',
+        '',
+        '',
+        'nums = st.integers()',
+        'points = st.builds(Point, st.floats(-1e9, 1e9), st.floats(-1e9, 1e9))',
+        '',
+        '',
+        '@given(points, points)',
+        'def test_symmetric(a: Point, b: Point) -> None:',
+        '    assert a.norm() >= 0 and b.norm() >= 0',
+        '',
+    ].join('\n');
+    await lsp.notify('textDocument/didOpen', { textDocument: { uri: uri('tests/test_props.py'), languageId: 'python', version: 1, text: PROPS } });
+    diags = await diagnostics('tests/test_props.py', () => true);
+    check('a Hypothesis test file has no diagnostics: hypothesis and hypothesis.strategies resolve', diags?.length === 0, JSON.stringify(diags?.map((d) => d.message)));
+    const integers = await lsp.request('textDocument/hover', { textDocument: { uri: uri('tests/test_props.py') }, position: { line: 6, character: 12 } });
+    const integersText = integers.result?.contents?.value ?? JSON.stringify(integers.result);
+    check(
+        'hover on `st.integers` shows its signature and Hypothesis\'s docstring',
+        /def integers\(/.test(integersText) && /SearchStrategy\[int\]/.test(integersText) && /shrink towards zero/.test(integersText),
+        JSON.stringify(integersText.slice(0, 200)),
+    );
+    const nums = await lsp.request('textDocument/hover', { textDocument: { uri: uri('tests/test_props.py') }, position: { line: 11, character: 1 } });
+    check('`st.integers()` is typed SearchStrategy[int]', /SearchStrategy\[int\]/.test(nums.result?.contents?.value ?? ''), JSON.stringify(nums.result?.contents?.value));
+    const points = await lsp.request('textDocument/hover', { textDocument: { uri: uri('tests/test_props.py') }, position: { line: 12, character: 1 } });
+    check('`st.builds(Point, ...)` is typed SearchStrategy[Point]', /SearchStrategy\[Point\]/.test(points.result?.contents?.value ?? ''), JSON.stringify(points.result?.contents?.value));
+    const stCompletion = await lsp.request('textDocument/completion', { textDocument: { uri: uri('tests/test_props.py') }, position: { line: 11, character: 10 } });
+    const stItems = (stCompletion.result?.items ?? stCompletion.result ?? []).map((i) => i.label);
+    check('completion after `st.` offers the strategies', ['integers', 'lists', 'floats', 'text', 'composite'].every((l) => stItems.includes(l)), JSON.stringify(stItems.slice(0, 12)));
+
     const shutdown = await lsp.request('shutdown', null);
     check('shutdown answers', shutdown.error === undefined);
     const errors = (await lsp.log()).filter((m) => m.method === 'worker/error' || (m.method === 'window/logMessage' && m.params.type === 1));
