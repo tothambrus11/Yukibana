@@ -60,7 +60,7 @@ import GHC.Unit.Module (moduleNameString, moduleUnit, unitString)
 import GHC.Unit.State (listVisibleModuleNames)
 import GHC.Utils.Json (JsonDoc (..))
 import GHC.Utils.Logger (pushJsonLogHook)
-import GHC.Wasm.Prim
+import GHC.Wasm.Prim (JSString, freeJSVal, fromJSString, toJSString)
 
 -- * State
 
