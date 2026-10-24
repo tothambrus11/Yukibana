@@ -64,6 +64,9 @@ jobs:
           key: ghc-wasm-tools-${{ hashFiles('prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh') }}
           restore-keys: ghc-wasm-tools-
 
+      - name: Install alex and happy
+        run: sudo apt-get install -y --no-install-recommends alex happy
+
       - name: Build
         run: prototypes/monaco-lsp/packs/haskell/ghc/build-tools.sh "$RUNNER_TEMP/tools"
 

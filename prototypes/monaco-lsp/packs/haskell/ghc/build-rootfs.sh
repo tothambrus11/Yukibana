@@ -92,6 +92,21 @@ rm -rf "$ROOT/tmp/hslib/lib/doc" "$ROOT/tmp/hslib/lib/html" "$ROOT/tmp/hslib/lib
     "$ROOT"/tmp/hslib/lib/*.mjs "$ROOT"/tmp/hslib/lib/*.js "$ROOT"/tmp/hslib/lib/*.txt
 HS_SEARCHDIR=$(find "$ROOT/tmp/hslib/lib" -type f -name 'libHSbase-*.so' -print0 | xargs -0 -n1 dirname | sed "s|^$ROOT||")
 rm -rf "$ROOT$HS_SEARCHDIR"/*Cabal*
+# Packages nothing here links and a student's program has no use for:
+# haddock's (the API and its markup library), and haskeline and xhtml, which
+# only GHCi's line editor and haddock use. ghc-pkg refuses (and the build
+# stops) if anything left depends on one.
+UNUSED=(haddock-api haddock-library haskeline xhtml)
+$GHC_PKG --no-user-package-db --global-package-db="$ROOT/tmp/hslib/lib/package.conf.d" unregister "${UNUSED[@]}"
+for p in "${UNUSED[@]}"; do
+    rm -rf "$ROOT$HS_SEARCHDIR/$p"-[0-9]* "$ROOT$HS_SEARCHDIR/libHS$p"-[0-9]*
+done
+$GHC_PKG --no-user-package-db --global-package-db="$ROOT/tmp/hslib/lib/package.conf.d" recache
+# GHC's own shared libraries as GHC links its others (WASM_SO_OPT): the
+# bindist's keep their DWARF and are not size-optimised (libHSghc.so 170 MB
+# before, about 135 after). The C libraries only lose their debug info.
+find "$ROOT/tmp/hslib/lib" -name '*.so' -print0 | xargs -0 -P "$(nproc)" -I{} sh -c 'wasm-opt $WASM_SO_OPT "$1" -o "$1"' _ {}
+find "$ROOT/tmp/clib" -name '*.so' -print0 | xargs -0 -P "$(nproc)" -I{} wasm-opt --strip-dwarf --strip-producers {} -o {}
 # The ghc package's own interface files (36 MB) serve only a program that
 # imports the GHC API; libyuki.so needs its shared library, not them.
 find "$ROOT$HS_SEARCHDIR" -maxdepth 1 -type d -name 'ghc-[0-9]*' -exec rm -rf {} +

@@ -12,6 +12,9 @@
 # its hints), OUT/tools.json (versions) and OUT/LICENSE-tools.txt, then runs
 # each once under wasmtime (which ghc-wasm-meta installs).
 #
+# ghc-lib-parser generates its lexer and parser when it is built, with the
+# build machine's alex and happy (the workflow installs them).
+#
 # Like build-rootfs.sh it needs GHC's wasm toolchain, so it runs in CI
 # (.github/workflows/haskell-ghc.yml), which installs it the same way.
 set -euo pipefail
@@ -51,6 +54,7 @@ build() { # package version exe [cabal flags]
         wasm32-wasi-cabal --store-dir="$STORE" install "$1-$2" "${@:4}" \
             --installdir="$BIN" --install-method=copy --overwrite-policy=always \
             --disable-profiling --disable-documentation \
+            --with-alex="$(command -v alex)" --with-happy="$(command -v happy)" \
             --ghc-options='-O1'
     )
     wasm-opt --low-memory-unused --strip-dwarf --strip-debug -Oz "$BIN/$3" -o "$OUT/$3.wasm"
