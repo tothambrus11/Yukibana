@@ -473,13 +473,21 @@ function testSuite(pkg, classes) {
     return lines.join('\n');
 }
 
+/**
+ * The test program's main class, which calls each package's YukibanaTests.
+ * It is in the unnamed package: a class in a named package cannot refer to
+ * one in the unnamed package (JLS 7.5: there is no way to import it), so a
+ * main class in `yukibana.junit`, as this was, could not call the suite of
+ * test classes declared without a package, and the generated runner did not
+ * compile. From the unnamed package both are in reach.
+ */
+const TEST_MAIN = 'YukibanaTestMain';
+
 function testMain(packages) {
     const calls = packages.map((p) => `        ${p ? p + '.' : ''}YukibanaTests.run(r);`).join('\n');
-    return `package yukibana.junit;
-
-public final class TestMain {
+    return `public final class ${TEST_MAIN} {
     public static void main(String[] args) {
-        var r = new Report();
+        var r = new yukibana.junit.Report();
 ${calls}
         System.exit(r.finish());
     }
@@ -579,13 +587,13 @@ async function run({ type, files, entry, stdin }) {
         }
         for (const [pkg, classes] of byPackage) compiler.addSourceFile(`${pkg.replace(/\./g, '/')}/YukibanaTests.java`.replace(/^\//, ''), testSuite(pkg, classes));
         compiler.addSourceFile('yukibana/junit/Report.java', REPORT);
-        compiler.addSourceFile('yukibana/junit/TestMain.java', testMain([...byPackage.keys()]));
+        compiler.addSourceFile(`${TEST_MAIN}.java`, testMain([...byPackage.keys()]));
         compiler.clearOutputFiles();
         if (report() || !compiler.compile() || report()) {
             write(2, 'The generated test runner did not compile (above). A test class or method may not be accessible from its package.\n');
             return exit(1);
         }
-        mainClass = 'yukibana.junit.TestMain';
+        mainClass = TEST_MAIN;
     } else {
         const mains = found.mains.filter((m) => !m.cls.startsWith('yukibana.'));
         const entryPackage = files[entry] !== undefined ? packageOf(files[entry]) : '';

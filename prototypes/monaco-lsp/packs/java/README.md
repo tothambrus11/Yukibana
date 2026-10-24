@@ -157,8 +157,13 @@ Test compiles `src/test/java/` (or `tests/`) with the main sources and
 Assertions are JUnit's own classes (`Assertions`, `assertThrows`,
 opentest4j's `AssertionFailedError` messages). The JUnit
 Platform itself is not used: it finds and calls tests by reflection, which
-TeaVM does not have, so the runner generates a class that calls each test
-directly. Therefore **`@ParameterizedTest`, `@RepeatedTest`,
+TeaVM does not have, so the runner generates a class per package that
+calls each test directly (package-private test classes and methods, JUnit's
+usual style, need the caller in their package), and a main class in the
+unnamed package that calls those: test classes without a `package`
+declaration work too (until this was fixed, the main class was in a named
+package, which cannot refer to the unnamed one, and such a project's Test
+failed with "The generated test runner did not compile"). Therefore **`@ParameterizedTest`, `@RepeatedTest`,
 `@TestFactory`, test methods with parameters, and `static` or
 `private` `@Test` methods are reported as skipped**, "not supported here".
 The report is the console launcher's tree (`✔`, `✘`, `↷`) and summary, in

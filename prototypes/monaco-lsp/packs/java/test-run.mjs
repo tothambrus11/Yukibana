@@ -207,6 +207,28 @@ class MoreTest {
         /throwsOnPurpose\(\) ✔/.test(failing.stdout) && /nullIsNull\(\) ✔/.test(failing.stdout) &&
         /\[ +5 tests successful +\]/.test(failing.stdout) && /\[ +1 tests failed +\]/.test(failing.stdout) && /\[ +1 tests skipped +\]/.test(failing.stdout),
         `stdout=${JSON.stringify(failing.stdout)} stderr=${JSON.stringify(failing.stderr)}`);
+    // Test classes declared without a package, alone and next to packaged
+    // ones: the generated main class must reach both (it is in the unnamed
+    // package, since a named package cannot refer to the unnamed one).
+    const DEFAULT_PACKAGE_TEST = `import static org.junit.jupiter.api.Assertions.*;
+
+import org.junit.jupiter.api.Test;
+
+class CalculatorTest {
+    @Test
+    void addsInTheDefaultPackage() {
+        assertEquals(4, Main.twice(2));
+    }
+}
+`;
+    const unnamed = await runProgram({ 'Main.java': 'public class Main {\n    static int twice(int n) {\n        return 2 * n;\n    }\n\n    public static void main(String[] args) {\n        System.out.println(twice(21));\n    }\n}\n', 'src/test/java/CalculatorTest.java': DEFAULT_PACKAGE_TEST }, 'Main.java', { test: true });
+    check('Test runs test classes in the unnamed package (no package declaration), calling a class of the unnamed package, exit 0', unnamed.exit === 0 &&
+        /CalculatorTest ✔/.test(unnamed.stdout) && /addsInTheDefaultPackage\(\) ✔/.test(unnamed.stdout) && /\[ +1 tests successful +\]/.test(unnamed.stdout),
+        `stdout=${JSON.stringify(unnamed.stdout)} stderr=${JSON.stringify(unnamed.stderr)}`);
+    const mixed = await runProgram({ ...sample.files, 'src/test/java/CalculatorTest.java': DEFAULT_PACKAGE_TEST.replace('Main.twice(2)', '2 + 2') }, sample.entry, { test: true });
+    check('Test runs unnamed-package and packaged test classes together', mixed.exit === 0 &&
+        /CalculatorTest ✔/.test(mixed.stdout) && /GeometryTest ✔/.test(mixed.stdout) && /\[ +4 tests successful +\]/.test(mixed.stdout),
+        `stdout=${JSON.stringify(mixed.stdout)} stderr=${JSON.stringify(mixed.stderr)}`);
     const none = await runProgram(main('System.out.println(1);'), 'Main.java', { test: true });
     check('Test with no @Test methods says so', none.exit === 0 && /No tests found/.test(none.stdout), `stdout=${JSON.stringify(none.stdout)} stderr=${JSON.stringify(none.stderr)}`);
 
