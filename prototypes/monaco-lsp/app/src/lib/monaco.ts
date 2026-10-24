@@ -138,6 +138,8 @@ import 'monaco-editor/languages/definitions/rust/register';
 import 'monaco-editor/languages/definitions/php/register';
 import 'monaco-editor/languages/definitions/java/register';
 import 'monaco-editor/languages/definitions/kotlin/register';
+// Monaco has no Haskell grammar: ours.
+import './haskell-language';
 
 // Monaco runs diffing and word-based helpers in a worker of its own, and each
 // of the JSON, HTML and CSS services in another, started the first time the

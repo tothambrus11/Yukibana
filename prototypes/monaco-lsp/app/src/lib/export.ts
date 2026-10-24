@@ -58,6 +58,10 @@ const BUILD: Record<LanguageId, BuildFiles> = {
 		paths: ['build.gradle.kts', 'settings.gradle.kts'],
 		generate: (p) => ({ 'build.gradle.kts': buildGradleKts(p.files, p.language.entry), 'settings.gradle.kts': 'rootProject.name = "kotlin-project"\n' }),
 	},
+	haskell: {
+		paths: ['haskell-project.cabal', 'cabal.project'],
+		generate: (p) => ({ 'haskell-project.cabal': haskellCabal(p.files, p.language.entry), 'cabal.project': 'packages: .\n' }),
+	},
 };
 
 /**
@@ -877,6 +881,102 @@ export function buildGradleKts(files: Files, entry: string): string {
 	].join('\n');
 }
 
+// ---- Haskell: Cabal
+
+/** Folders treated as tests: hspec's `test/` and the sample's `tests/`. */
+const HASKELL_TESTS = /^tests?\//;
+
+/** A Haskell file's module and the source directory it is found from. */
+interface HaskellModule {
+	path: string;
+	/** Main for a file without a header, as Haskell says. */
+	name: string;
+	/** As hs-source-dirs wants it: `.` for the project folder. */
+	dir: string;
+}
+
+/**
+ * Each `.hs` file's module and source directory, as the Haskell pack finds
+ * them (packs/haskell/src/project.js, sourceRoots): a file whose path ends
+ * as its module name says is found from the folder above that path, any
+ * other from its own folder.
+ */
+function haskellModules(files: Files): HaskellModule[] {
+	return Object.entries(files)
+		.filter(([p]) => p.endsWith('.hs'))
+		.sort(([a], [b]) => a.localeCompare(b))
+		.map(([path, text]) => {
+			const code = text.replace(/\{-[\s\S]*?-\}/g, ' ').replace(/--.*$/gm, '');
+			const name = /^\s*module\s+([A-Z][\w']*(?:\.[A-Z][\w']*)*)/.exec(code)?.[1] ?? 'Main';
+			const tail = `${name.replaceAll('.', '/')}.hs`;
+			const own = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+			const dir = path === tail || path.endsWith(`/${tail}`) ? path.slice(0, path.length - tail.length).replace(/\/$/, '') : own;
+			return { path, name, dir: dir || '.' };
+		});
+}
+
+/** A stanza field's list, one entry per line as cabal-fmt writes it. */
+function cabalList(field: string, items: readonly string[]): string[] {
+	if (items.length === 0) return [];
+	return [`    ${field}:`, ...items.map((item, i) => `${i === 0 ? '        ' : '      , '}${item}`)];
+}
+
+/**
+ * haskell-project.cabal for the project where it is: the program from
+ * `entry` with every other module outside the test folders, and, when the
+ * project has tests, a test suite from tests/Spec.hs (or test/Spec.hs, or
+ * the first test file with a `main`, the runner's choice) on hspec. The
+ * browser compiles with MicroHs, whose Prelude is Haskell 2010's with
+ * GHC's common extensions, so GHC2021 is the language that accepts what it
+ * accepted. containers is a dependency when a module imports from it, as
+ * hspec is of the tests.
+ */
+export function haskellCabal(files: Files, entry: string): string {
+	const modules = haskellModules(files);
+	const main = modules.find((m) => m.path === entry);
+	const tests = modules.filter((m) => HASKELL_TESTS.test(m.path));
+	const testMain =
+		['tests/Spec.hs', 'test/Spec.hs'].map((p) => tests.find((m) => m.path === p)).find((m) => m !== undefined) ??
+		tests.find((m) => /^main\s*(::|=)/m.test(files[m.path] ?? ''));
+	// Main modules other than the two entries are programs of their own,
+	// which a component cannot hold beside its own Main.
+	const library = modules.filter((m) => m.name !== 'Main' && !HASKELL_TESTS.test(m.path));
+	const testOnly = tests.filter((m) => m.name !== 'Main');
+	const containers = Object.values(files).some((t) => /^\s*import\s+(qualified\s+)?Data\.(Map|Set|IntMap|IntSet|Sequence|Graph|Tree)\b/m.test(t));
+	const mainIs = (m: HaskellModule) => (m.dir === '.' ? m.path : m.path.slice(m.dir.length + 1));
+	const dirs = (ms: readonly (HaskellModule | undefined)[]) => [...new Set(ms.flatMap((m) => (m ? [m.dir] : [])))];
+	const lines = [
+		'cabal-version: 3.0',
+		'name:          haskell-project',
+		'version:       0.1.0.0',
+		'build-type:    Simple',
+		'',
+		'common shared',
+		'    default-language: GHC2021',
+		'    ghc-options:      -Wall',
+		...cabalList('build-depends', ['base >=4.16 && <5', ...(containers ? ['containers >=0.6'] : [])]),
+		'',
+		'executable haskell-project',
+		'    import:           shared',
+		`    main-is:          ${main ? mainIs(main) : entry}`,
+		`    hs-source-dirs:   ${dirs([main ?? { path: entry, name: 'Main', dir: '.' }, ...library]).join(' ')}`,
+		...cabalList('other-modules', library.map((m) => m.name)),
+	];
+	if (testMain) {
+		lines.push(
+			'',
+			'test-suite spec',
+			'    import:           shared',
+			'    type:             exitcode-stdio-1.0',
+			`    main-is:          ${mainIs(testMain)}`,
+			`    hs-source-dirs:   ${dirs([testMain, ...testOnly, ...library]).join(' ')}`,
+			...cabalList('other-modules', [...testOnly, ...library].map((m) => m.name)),
+			...cabalList('build-depends', ['hspec >=2.10']),
+		);
+	}
+	return `${lines.join('\n')}\n`;
+}
+
 // ---- Every language: README.md and .gitignore
 
 /** The README's Test section for a Node project: `node --test`, after `npm install` when it uses fast-check. */
@@ -972,6 +1072,14 @@ function instructions(language: Language, files: Files): string[] {
 				'## Editors\n\nIntelliJ IDEA opens the folder and imports `build.gradle.kts`; so do Android Studio and, with the Kotlin extension, VS Code.',
 			];
 		}
+		case 'haskell': {
+			const tests = paths.some((p) => HASKELL_TESTS.test(p) && p.endsWith('.hs'));
+			return [
+				'## Build and run\n\nWith GHC 9.4 or later and cabal 3.8 or later (GHCup from haskell.org installs both):\n\n```sh\ncabal run -v0\n```\n\nThe browser compiles with MicroHs, which accepts Haskell 2010 and most of GHC\'s common extensions; GHC is stricter in places (warnings from `-Wall`, and string literals are `String` unless a module turns on `OverloadedStrings`).',
+				...(tests ? ['## Test\n\nThe tests use hspec, which cabal downloads the first time:\n\n```sh\ncabal test --test-show-details=direct\n```'] : []),
+				'## Editors\n\nVS Code (with the Haskell extension), Emacs, Vim and Zed run the Haskell Language Server, which reads the `.cabal` file; GHCup installs it with `ghcup install hls`.',
+			];
+		}
 		case 'java': {
 			const tests = paths.some((p) => JAVA_TESTS.test(p) && p.endsWith('.java'));
 			return [
@@ -1013,6 +1121,7 @@ const IGNORED: Record<LanguageId, readonly string[]> = {
 	rust: ['target/'],
 	java: ['target/', '*.class', '.classpath', '.project', '.settings/', '*.iml'],
 	kotlin: ['build/', '.gradle/', '.kotlin/', '*.class', '*.iml'],
+	haskell: ['dist-newstyle/', '.stack-work/', '*.hi', '*.o', '*.dyn_hi', '*.dyn_o'],
 };
 
 /** A .gitignore for the build output of the language's tools. */

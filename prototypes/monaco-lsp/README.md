@@ -75,6 +75,7 @@ no DOM and no npm packages except fast-check, for property-based tests
 | PHP | Phpactor 2026.10.07 on PHP 8.4 (php-wasm) | PHP 8.4.25's CLI (php-wasm), PHPUnit 12.5 | 7.5 MB | 2 KB (the same php.wasm); Test 0.6 MB |
 | Java | javac (OpenJDK 25u) compiled to WebAssembly GC by TeaVM 0.16.0 (teavm-javac), with our language service on its trees | the same javac, then TeaVM linking the program to WebAssembly GC in the browser; JUnit Jupiter 5.14 | 2.0 MB | 2.3 MB (TeaVM's class library) |
 | Kotlin | ours, syntax only, on tree-sitter-kotlin 1.1.0 (web-tree-sitter 0.25) | none: no Kotlin compiler runs in a browser | 0.26 MB | none |
+| Haskell | MicroHs 0.16 (its type checker, patched to remember what it resolved) with our LSP layer | the same MicroHs, compiling and running in the worker; hspec-style Test | 1.6 MB | 2 KB (the same files) |
 
 Sizes are brotli transfer sizes. The app itself is 1.2 MB, icons included.
 Each pack's README has the details: what was patched and why, what is
@@ -170,6 +171,10 @@ after weeks without a visit, persistent storage or not.
   type errors, no library members in completion, no Run and no Test;
   completion, hover and definition cover the project's own declarations.
   Download's Gradle build runs and tests it with the real compiler.
+* **Haskell**: MicroHs, not GHC: one error per module, its own messages
+  (type mismatches in GHC's words), string literals always overloaded, and
+  `base` plus containers and a subset of hspec as the only libraries.
+  Download's cabal build runs it with GHC.
 * **All**: one browser tab is one machine. A program that never ends needs
   Stop, and memory is the tab's.
 

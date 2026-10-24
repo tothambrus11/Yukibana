@@ -37,6 +37,10 @@ const CASES = {
 	java: { output: 'Point[x=0.0, y=0.0] to Point[x=3.0, y=4.0]: 5.0', testOutput: '3 tests successful', file: 'Main.java', error: '\nclass Broken { int n = "no"; }\n', access: '\nclass Probe { double f(Point p) { return p.', member: 'norm', definition: 'Point', definitionFile: 'Point.java', hover: 'Point' },
 	// Syntax only, and no runner (packs/kotlin/README.md): the error is a syntax error.
 	kotlin: { file: 'Main.kt', error: '\nfun broken() { val = 1 }\n', access: '\nval q = Point(1.0, 2.0)\nval r = q.', member: 'norm', definition: 'Point', definitionFile: 'Geometry.kt', hover: 'Point' },
+	// Haskell has no member access: the completion is of a name Main imports.
+	// A constructor to jump from, as the grammar gives names applied in
+	// brackets no span of their own.
+	haskell: { output: '(0.0, 0.0) to (3.0, 4.0): 5.0', testOutput: '4 examples, 0 failures', file: 'Main.hs', error: '\nbroken :: Int\nbroken = True\n', access: '\nprobe = dis', member: 'distance', definition: 'Circle', definitionFile: 'Geometry.hs', hover: 'Point' },
 };
 
 const only = process.argv.slice(2);

@@ -1,0 +1,13 @@
+{
+    "name": "yukibana-pack-haskell",
+    "private": true,
+    "description": "Yukibana Haskell pack: MicroHs (compiler and type checker) in WebAssembly, as a language server and a runner in module Web Workers. See build.sh; this file only holds the test's dependency.",
+    "type": "module",
+    "scripts": {
+        "build": "./build.sh",
+        "test": "node test.mjs"
+    },
+    "devDependencies": {
+        "playwright-core": "1.56.1"
+    }
+}
