@@ -1,12 +1,16 @@
 // The Swift pack's runner (../../CONTRACT.md, "Running a program"): compiles
 // the project with the real Swift compiler and runs it, all in this worker.
 //
-//   swift-frontend.wasm  Swift 6.3.3's compiler frontend, built for a
-//                        wasm32-wasip1 host by tothambrus11/swift-toolchain-wasm
-//   wasm-ld.wasm         LLVM's linker from the same build
-//   swift-sysroot.tar    the stdlib modules and archives, wasi-libc,
-//                        compiler-rt: that release's sysroot, trimmed by
-//                        build.sh to what a Foundation-free program needs
+//   swift-frontend-lsp.wasm  Swift 6.3.3's compiler frontend, built for a
+//                            wasm32-wasip1 host by
+//                            tothambrus11/swift-toolchain-wasm: the same
+//                            module the language server runs sourcekitd
+//                            from, so the browser downloads it once; here
+//                            only its `swift_frontend_main` is called
+//   wasm-ld.wasm             LLVM's linker from the same build
+//   swift-sysroot.tar        the stdlib modules and archives, wasi-libc,
+//                            compiler-rt: that release's sysroot, trimmed by
+//                            build.sh to what a Foundation-free program needs
 //
 // The pipeline is the driver's, replayed by hand (WASI cannot spawn): one
 // whole-module `swift-frontend -frontend -c` over every .swift file, then
@@ -25,7 +29,7 @@
 
 import {
     Fd, FRONTEND_WASM, LINKER_WASM, autolinkEntries, compileArgs, linkArgs, loadSysroot, loadXCTest,
-    loadTool, mkdirp, readFile, remove, runWasi, textSink, wasiDefs, writeFile, writeProject,
+    loadTool, mkdirp, readFile, remove, runFrontend, runWasi, textSink, wasiDefs, writeFile, writeProject,
 } from './toolchain.js';
 import { dropOwnModuleImportWarnings, importsXCTest, isTestFile, planTestRun, projectModuleName } from './xctest.js';
 
@@ -125,7 +129,7 @@ async function run({ files, entry, stdin }, testing) {
     // The frontend's diagnostics, posted when it ends (they all come at the
     // end anyway), less the warnings that projectModuleName causes.
     const diagnostics = textSink();
-    let code = await runWasi(frontend, {
+    let code = await runFrontend(frontend, {
         args: compileArgs(sources, '/build/main.o', moduleName), root,
         stdout: diagnostics, stderr: diagnostics,
     });

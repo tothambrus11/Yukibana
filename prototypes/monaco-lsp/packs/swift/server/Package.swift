@@ -1,7 +1,7 @@
 // swift-tools-version:6.0
-// The Swift half of the swift pack: a WebAssembly reactor module built on
-// swift-syntax (parser, parser diagnostics, classifier, lexical lookup,
-// basic formatter). It is NOT SourceKit-LSP; see ../README.md for why.
+// swift-ls.wasm: a WebAssembly reactor module built on swift-syntax (parser,
+// classifier, basic formatter) that formats and classifies tokens for the
+// Swift pack. Everything else comes from sourcekitd; see ../README.md.
 import PackageDescription
 
 let package = Package(
@@ -15,11 +15,8 @@ let package = Package(
       dependencies: [
         .product(name: "SwiftSyntax", package: "swift-syntax"),
         .product(name: "SwiftParser", package: "swift-syntax"),
-        .product(name: "SwiftParserDiagnostics", package: "swift-syntax"),
-        .product(name: "SwiftDiagnostics", package: "swift-syntax"),
         .product(name: "SwiftIDEUtils", package: "swift-syntax"),
         .product(name: "SwiftBasicFormat", package: "swift-syntax"),
-        .product(name: "SwiftLexicalLookup", package: "swift-syntax"),
       ],
       swiftSettings: [.swiftLanguageMode(.v5)],
       // A reactor: no main loop, the worker calls the exported functions.

@@ -5,9 +5,10 @@
 //   node tools/trim-sysroot.mjs <in.tar> <out.tar> [extra-dir-to-add prefix]
 //
 // The rules below come from tracing every path_open/path_filestat_get that
-// swift-frontend.wasm and wasm-ld.wasm make (tools/bench.mjs with a trace
+// the compiler and wasm-ld.wasm make (tools/bench.mjs with a trace
 // file) while compiling the sample, a program importing WASILibc,
-// Synchronization and RegexBuilder, and -typecheck runs; see README.md.
+// Synchronization and RegexBuilder, and -typecheck runs; see README.md. The
+// .swiftdoc files are kept for sourcekitd, see below.
 // What is dropped and why:
 //   * Foundation's C modules (CoreFoundation, _FoundationCShims,
 //     _foundation_unicode: 2.8 MB of ICU tables alone) and libCoreFoundation.a:
@@ -20,9 +21,13 @@
 //   * clang's target-specific intrinsic headers (x86, ARM, PowerPC, Hexagon,
 //     RISC-V, CUDA, OpenCL...): their modules `require` another target, so
 //     clang never reads them for wasm32.
-//   * .swiftdoc and .swiftinterface files: the binary .swiftmodule is what
-//     the compiler loads. Exception: _Concurrency's and _StringProcessing's
+//   * .swiftinterface files: the binary .swiftmodule is what the compiler
+//     loads. Exception: _Concurrency's and _StringProcessing's
 //     .private.swiftinterface, which the frontend opens on every compile.
+// Kept although the compiler does not need them: the kept modules' .swiftdoc
+// files, the standard library's doc comments, which sourcekitd shows in
+// hover and completion (5.4 MB raw, about 1 MB brotli; without them a
+// stdlib hover is the bare declaration).
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
@@ -56,7 +61,7 @@ function keep(path, isDir) {
         const m = /^([^/]+)\.swiftmodule\/(.*)$/.exec(rest);
         if (m) {
             if (!KEEP_MODULES.includes(m[1])) return false;
-            if (m[2].endsWith('.swiftmodule')) return true;
+            if (m[2].endsWith('.swiftmodule') || m[2].endsWith('.swiftdoc')) return true;
             return m[2].endsWith('.private.swiftinterface') && (m[1] === '_Concurrency' || m[1] === '_StringProcessing');
         }
         return KEEP_ARCHIVES.includes(rest);

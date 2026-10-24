@@ -71,7 +71,7 @@ no DOM and no npm packages except fast-check, for property-based tests
 | Python | basedpyright 1.40 | Pyodide 314.0.7 (Python 3.14) | 1.1 MB | 4.5 MB |
 | Scala 3 | the Scala 3.7.4 compiler's interactive API, compiled with Scala.js | the same compiler and the Scala.js linker; ScalaCheck 1.18.1 | 2.6 MB; ScalaCheck 0.25 MB when a source names it | 3.7 MB; ScalaCheck 0.34 MB more when a source names it |
 | C and C++ | clangd 21 (Emscripten, threads) | clang 21 and wasm-ld, WASI | 8.0 MB | 12.2 MB; Test 0.06 to 0.28 MB (the framework's libraries) |
-| Swift | swift-syntax-ls (ours) plus swift-frontend 6.3.3 for types and errors | the same swift-frontend and wasm-ld | 30.2 MB | 8.2 MB |
+| Swift | sourcekitd 6.3.3 through sourcekit-lsp-lite, in one module with the compiler; swift-syntax for formatting | that module's swift-frontend, and wasm-ld | 31.2 MB | 8.2 MB |
 | Rust | rust-analyzer's IDE crates (ra_ap_ide 0.0.358) with our LSP layer, std 1.98 sources | Miri 1.78 (rustc's MIR interpreter, not a compiler), quickcheck 1.0.3 | 4.2 MB; quickcheck sources 0.47 MB when Cargo.toml names it | 29.8 MB; quickcheck 1.6 MB when Cargo.toml names it |
 | PHP | Phpactor 2026.10.07 on PHP 8.4 (php-wasm) | PHP 8.4.25's CLI (php-wasm), PHPUnit 12.5, Eris 1.3 | 7.6 MB | 2 KB (the same php.wasm); Test 0.6 MB, Eris 45 KB when used |
 | Java | javac (OpenJDK 25u) compiled to WebAssembly GC by TeaVM 0.16.0 (teavm-javac), with our language service on its trees | the same javac, then TeaVM linking the program to WebAssembly GC in the browser; JUnit Jupiter 5.14 | 2.0 MB | 2.3 MB (TeaVM's class library) |
@@ -113,7 +113,7 @@ serves from, and asks the browser for persistent storage first.
 | --- | --- | --- |
 | The app (precached) | 1.2 MB | 4.9 MB |
 | The app's lazy files | 0.5 MB | 2.8 MB |
-| Every pack (Python 5.9, JavaScript 1.1, C++ 19.9, Swift 36.9, Scala 6.0, Rust 32.5, PHP 7.9, Java 4.4, Kotlin 0.3) | 114 MB | 534 MB |
+| Every pack (Python 5.9, JavaScript 1.1, C++ 19.9, Swift 39.5, Scala 6.0, Rust 32.5, PHP 7.9, Java 4.4, Kotlin 0.3) | 117 MB | 540 MB |
 
 A new build installs in the background and the top bar offers "New
 version: reload"; until then the tab keeps the build it runs. Its app cache
@@ -128,13 +128,14 @@ after weeks without a visit, persistent storage or not.
 
 ## Limits
 
-* **Swift**: not SourceKit-LSP, which cannot run here. Diagnostics are the
-  real compiler's (including the mandatory SIL passes: missing return, use
-  before initialisation) and its fix-its are quick fixes; hover,
-  definition, references, inlay hints and member completion come from the
-  compiler's typed AST and a standard library index, with swift-syntax as
-  the fallback. No macros, so no swift-testing: tests use our XCTest, a
-  checked subset of swift-corelibs-xctest. Foundation is not in the sysroot.
+* **Swift**: sourcekitd itself, the one SourceKit-LSP drives, through
+  sourcekit-lsp-lite (SourceKit-LSP cannot run here): diagnostics
+  (including the mandatory SIL passes: missing return, use before
+  initialisation) with fix-its as quick fixes, completion, hover,
+  definition, references, rename (base names only), signature help, inlay
+  hints. Formatting is swift-syntax's BasicFormat. No macros, so no
+  swift-testing: tests use our XCTest, a checked subset of
+  swift-corelibs-xctest. Foundation is not in the sysroot.
 * **C++**: no threads, a fixed stack. Exceptions work (WebAssembly
   exception handling, so a browser from 2025: Chrome 137, Firefox 131,
   Safari 18.4). Tests in `tests/` are GoogleTest (without gMock or death

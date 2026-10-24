@@ -241,7 +241,13 @@ export class LanguageClient {
 	private listen(): void {
 		const conn = this.connection;
 		const events = this.options.events;
-		conn.onNotification('yukibana/loading', (p) => events.loading(p as LoadingProgress));
+		// A pack may download after `initialize` (Swift fetches XCTest when the
+		// first file imports it), and nothing else clears the status then: a
+		// download that has reached its total is over.
+		conn.onNotification('yukibana/loading', (p) => {
+			const progress = p as LoadingProgress;
+			events.loading(progress.total > 0 && progress.loaded >= progress.total ? null : progress);
+		});
 		conn.onNotification('window/logMessage', (p) => {
 			const m = p as lsp.LogMessageParams;
 			events.log(LOG_LEVELS[m.type] ?? 'log', m.message);

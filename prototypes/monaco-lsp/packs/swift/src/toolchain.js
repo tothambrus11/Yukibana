@@ -1,26 +1,29 @@
-// The Swift toolchain that runs in the browser: swift-frontend.wasm and
-// wasm-ld.wasm from Ambrus Tóth's swift-toolchain-wasm (Swift 6.3.3 compiler
-// frontend and LLVM's wasm-ld, both cross-compiled to a wasm32-wasip1 host),
-// driven over an in-memory file system with no driver in between.
+// The Swift toolchain that runs in the browser, from Ambrus Tóth's
+// swift-toolchain-wasm, driven over an in-memory file system with no driver
+// in between:
 //
-// Shared by runner.js (compile, link, run) and typecheck.js (the language
-// server's semantic diagnostics). Both fetch the same URLs, so the browser and
-// the app's service worker hold one copy.
+//   swift-frontend-lsp.wasm  Swift 6.3.3's compiler frontend and sourcekitd
+//                            (with sourcekit-lsp-lite) in one wasm32-wasip1
+//                            reactor module: `swift_frontend_main` compiles,
+//                            the `lsp_*` exports are the language server
+//   wasm-ld.wasm             LLVM's wasm linker, a WASI command
+//
+// Shared by server.js (the language server, src/lite.js) and runner.js
+// (compile, link, run). Both fetch the same URLs, so the browser and the
+// app's service worker hold one copy.
 //
 // Where this came from: the argument vectors, the tar reader and the
-// "every WASI tool is a command module over one shared file system" design
-// are ported from tothambrus11/yukibana-swift packages/runtime/src/
-// (pipeline.ts, tar.ts, run.ts, vfs.ts, wasm-backend.ts), which captured the
-// vectors from a real `swiftc -target wasm32-unknown-wasip1 -v`. The WASI
-// implementation is the same library that runtime uses,
-// @bjorn3/browser_wasi_shim 0.4.2, bundled in by esbuild.
+// "every WASI tool runs over one shared file system" design are ported from
+// tothambrus11/yukibana-swift packages/runtime/src/ (pipeline.ts, tar.ts,
+// run.ts, vfs.ts, wasm-backend.ts), which captured the vectors from a real
+// `swiftc -target wasm32-unknown-wasip1 -v`. The WASI implementation is the
+// same library that runtime uses, @bjorn3/browser_wasi_shim 0.4.2, bundled
+// in by esbuild.
 
 import { ConsoleStdout, Directory, Fd, File, OpenFile, PreopenDirectory, WASI, WASIProcExit, wasi as wasiDefs } from '@bjorn3/browser_wasi_shim';
 
 export { ConsoleStdout, Directory, Fd, File, OpenFile, PreopenDirectory, WASI, WASIProcExit, wasiDefs };
 
-/** The swift-toolchain-wasm release the artifacts were taken from (build.sh pins it). */
-export const RELEASE = 'swift-6.3.3-wasm';
 export const SWIFT_VERSION = '6.3.3';
 
 export const SYSROOT = '/sysroot';
@@ -51,6 +54,22 @@ export function commonFrontendArgs(moduleName = 'main') {
 }
 
 /**
+ * The compiler arguments sourcekit-lsp-lite passes sourcekitd (its
+ * initializationOptions.compilerArgs): driver-style arguments, as SwiftPM's
+ * build settings would give SourceKit-LSP. The files and `-module-name` are
+ * the server's own (every .swift file under the root, the module named by a
+ * `@testable import`, as projectModuleName does for the runner).
+ */
+export function sourceKitArgs() {
+    return [
+        '-target', 'wasm32-unknown-wasip1',
+        '-sdk', WASI_SYSROOT,
+        '-resource-dir', RESOURCES,
+        '-module-cache-path', MODULE_CACHE,
+    ];
+}
+
+/**
  * `swift-frontend -frontend -c`: one invocation for the whole module (no
  * -primary-file), writing one object. Measured against one invocation per
  * file in build-time notes (README): with two files it is the faster choice,
@@ -59,54 +78,6 @@ export function commonFrontendArgs(moduleName = 'main') {
  */
 export function compileArgs(sources, output, moduleName = 'main') {
     return ['swift-frontend', '-frontend', '-c', ...sources, ...commonFrontendArgs(moduleName), '-empty-abi-descriptor', '-o', output];
-}
-
-/** The per-file variant, kept for the measurement in test-run.mjs/bench. */
-export function compileArgsPrimary(sources, primary, output) {
-    return [
-        'swift-frontend', '-frontend', '-c',
-        ...sources.flatMap((s) => (s === primary ? ['-primary-file', s] : [s])),
-        ...commonFrontendArgs(), '-empty-abi-descriptor', '-o', output,
-    ];
-}
-
-/** `swift-frontend -frontend -typecheck`: diagnostics only, no SIL, no code. */
-export function typecheckArgs(sources, moduleName = 'main') {
-    return ['swift-frontend', '-frontend', '-typecheck', ...sources, ...commonFrontendArgs(moduleName)];
-}
-
-/**
- * The editor's second check: `-emit-sil`, which type-checks and then runs
- * the mandatory SIL passes, because several everyday errors are only found
- * there, not by `-typecheck`: a missing return, a variable used before it is
- * initialised, a `let` assigned twice, unreachable code, overlapping inout
- * accesses. The SIL itself goes to `output` and is not read.
- *
- * Without mandatory inlining. With it, one call to a `@_transparent`
- * stdlib method such as `x.squareRoot()` makes the pass deserialize
- * Double's whole FloatingPoint witness table (73 functions, 330 KB of SIL)
- * and the check took 4-10 s instead of 0.2 s in this wasm build, which is
- * where a type error that appeared 20 s after an edit came from. What
- * inlining adds to the diagnostics is constant folding through the inlined
- * operators: `1 / 0` ("division by zero") is no longer reported while
- * typing; Run still reports it.
- */
-export function diagnoseArgs(sources, output, moduleName = 'main') {
-    return ['swift-frontend', '-frontend', '-emit-sil', ...sources, ...commonFrontendArgs(moduleName),
-        '-Xllvm', '-sil-disable-pass=mandatory-inlining', '-o', output];
-}
-
-/**
- * The editor's first check: `-dump-ast`, type checking plus the typed
- * syntax tree on stdout, which src/ast.js reads for hover, definition,
- * references and member completion. It reports the same type-checking
- * diagnostics as `-typecheck` and costs about the same (the dump is a few
- * tens of KB per hundred lines). Every file is a `-primary-file`: without
- * primaries the frontend type-checks the whole module but dumps only the
- * first file.
- */
-export function astArgs(sources, moduleName = 'main') {
-    return ['swift-frontend', '-frontend', '-dump-ast', ...sources.flatMap((s) => ['-primary-file', s]), ...commonFrontendArgs(moduleName)];
 }
 
 /**
@@ -316,6 +287,38 @@ export async function runWasi(module, { args, root, stdout, stderr, stdin, env =
     }
 }
 
+/**
+ * Runs `swift-frontend` (the arguments as its command line, `args[0]` the
+ * program name) in a fresh instance of swift-frontend-lsp.wasm, against
+ * `root` mounted at `/`, and returns its exit status. One compile per
+ * instance: the frontend leaves LLVM shut down when it returns
+ * (swift-toolchain-wasm docs/status.md, "One module for the compiler and the
+ * server"), so the compiled module is instantiated again each time, which
+ * is cheap next to compiling it.
+ */
+export async function runFrontend(module, { args, root, stdout, stderr, env = ['TMPDIR=/tmp', 'HOME=/tmp'] }) {
+    const fds = [new OpenFile(new File(new Uint8Array())), stdout, stderr, new PreopenDirectory('/', root.contents)];
+    const wasi = new WASI(args, env, fds, { debug: false });
+    const instance = await WebAssembly.instantiate(module, { wasi_snapshot_preview1: wasi.wasiImport });
+    wasi.initialize(instance);
+    const x = instance.exports;
+    const encoder = new TextEncoder();
+    const pointers = args.map((arg) => {
+        const bytes = encoder.encode(`${arg}\0`);
+        const p = x.lsp_alloc(bytes.length);
+        new Uint8Array(x.memory.buffer, p, bytes.length).set(bytes);
+        return p;
+    });
+    const argv = x.lsp_alloc(4 * pointers.length); // malloc's alignment suits a u32 array
+    new Uint32Array(x.memory.buffer, argv, pointers.length).set(pointers);
+    try {
+        return x.swift_frontend_main(args.length, argv);
+    } catch (e) {
+        if (e instanceof WASIProcExit) return e.code;
+        throw e;
+    }
+}
+
 /** `file:line:col: severity: message`, as the frontend prints diagnostics. */
 export function parseDiagnostics(text) {
     const out = [];
@@ -375,7 +378,7 @@ export async function loadSysroot(onLoading) {
     return root;
 }
 
-export const FRONTEND_WASM = 'swift-frontend.wasm';
+export const FRONTEND_WASM = 'swift-frontend-lsp.wasm';
 export const LINKER_WASM = 'wasm-ld.wasm';
 export const SYSROOT_TAR = 'swift-sysroot.tar';
 export const XCTEST_TAR = 'swift-xctest.tar';

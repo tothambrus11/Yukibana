@@ -1,7 +1,7 @@
 // Writes .gz and .br siblings next to every .js, .wasm, .tar and .json in a
 // directory, and prints the sizes: the app's host serves them when present.
 // A sibling newer than its source is kept (brotli -q11 of the 113 MB
-// swift-frontend.wasm takes minutes). Brotli uses a 16 MB window (lgwin 24,
+// swift-frontend-lsp.wasm takes minutes). Brotli uses a 16 MB window (lgwin 24,
 // the most browsers decode) because the toolchain files are large.
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

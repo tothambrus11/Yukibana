@@ -2,7 +2,7 @@
   "name": "yukibana-pack-swift",
   "private": true,
   "type": "module",
-  "description": "Swift language pack: a swift-syntax based LSP server (not SourceKit-LSP) compiled to wasm32-wasi, semantic diagnostics and a runner from the wasm-hosted Swift 6.3.3 frontend (swift-toolchain-wasm)",
+  "description": "Swift language pack: sourcekit-lsp-lite over sourcekitd 6.3.3 and the Swift 6.3.3 compiler in one wasm-hosted module (swift-toolchain-wasm), swift-syntax formatting and semantic tokens, and a runner",
   "scripts": {
     "build": "./build.sh",
     "test": "node test.mjs",

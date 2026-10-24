@@ -338,6 +338,15 @@ export function planTestRun(files) {
 }
 
 /**
+ * True for the message of the compiler's "file 'X.swift' is part of module
+ * 'App'; ignoring import" warning (as sourcekitd reports it, without the
+ * location): projectModuleName causes it on purpose, see below.
+ */
+export function isOwnModuleImportWarning(message) {
+    return /^file '[^']*' is part of module '[^']*'; ignoring import$/.test(message);
+}
+
+/**
  * Removes the compiler's "file 'X.swift' is part of module 'App'; ignoring
  * import" warnings (with their source line and caret) from frontend output:
  * projectModuleName causes them on purpose, and the `@testable import App`
@@ -348,7 +357,8 @@ export function dropOwnModuleImportWarnings(text) {
     const out = [];
     let dropping = false;
     for (const line of text.split('\n')) {
-        if (header.test(line)) dropping = /: warning: file '[^']*' is part of module '[^']*'; ignoring import$/.test(line);
+        const h = header.exec(line);
+        if (h) dropping = h[0].endsWith(': warning: ') && isOwnModuleImportWarning(line.slice(h[0].length));
         else if (line === '' && dropping) {
             dropping = false;
             continue; // the blank line that ends the dropped block

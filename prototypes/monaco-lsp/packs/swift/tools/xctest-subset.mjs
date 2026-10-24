@@ -25,7 +25,7 @@
 //  4. Conformance corpus (xctest/conformance/API.swift, which spells out the
 //     type of every public declaration): type-checks against ours natively,
 //     against the real XCTest natively, and against ours as the browser has
-//     it (swift-xctest.tar) with the pack's swift-frontend.wasm 6.3.3; and
+//     it (swift-xctest.tar) with the pack's swift-frontend-lsp.wasm 6.3.3; and
 //     every public name of ours must appear in it.
 //  5. Behaviour (xctest/conformance/Behaviour.swift): built natively against
 //     both, run, and the two reports compared line by line with dates, times
@@ -146,7 +146,7 @@ check('corpus: API.swift type-checks against ours (native Swift 6.4.1)', r.statu
 r = tc([]);
 check('corpus: API.swift type-checks against the real XCTest (native Swift 6.4.1)', r.status === 0, r.stderr);
 r = await typecheckInBrowserToolchain(api);
-check('corpus: API.swift type-checks against ours as the browser has it (swift-frontend.wasm 6.3.3, swift-xctest.tar)', r.code === 0, r.out);
+check('corpus: API.swift type-checks against ours as the browser has it (swift-frontend-lsp.wasm 6.3.3, swift-xctest.tar)', r.code === 0, r.out);
 const corpusTokens = new Set(readFileSync(api, 'utf8').match(/[A-Za-z_]\w*/g));
 const names = [...new Set([...ourDecls.values()].filter(({ node }) => !node.implicit && node.declKind !== 'Accessor')
     .map(({ node }) => node.name).filter((n) => /^[A-Za-z_]/.test(n) && n !== 'init'))];
@@ -280,16 +280,17 @@ function nextWord(words, k) {
     return '';
 }
 
-/** `swift-frontend.wasm -typecheck` of one file with the browser's XCTest, under Node, as typecheck.js runs it. */
+/** `swift-frontend -typecheck` of one file with the browser's XCTest and compiler (swift-frontend-lsp.wasm), under Node. */
 async function typecheckInBrowserToolchain(file) {
     const tcjs = await import('../src/toolchain.js');
-    const frontend = await WebAssembly.compile(readFileSync(join(STATIC, 'swift-frontend.wasm')));
+    const frontend = await WebAssembly.compile(readFileSync(join(STATIC, tcjs.FRONTEND_WASM)));
     const root = new tcjs.Directory(new Map());
     tcjs.untar(root, new Uint8Array(readFileSync(join(STATIC, 'swift-sysroot.tar'))), tcjs.SYSROOT);
     tcjs.untar(root, new Uint8Array(readFileSync(join(STATIC, 'swift-xctest.tar'))), tcjs.SYSROOT);
     tcjs.mkdirp(root, '/tmp');
     tcjs.writeFile(root, '/workspace/API.swift', readFileSync(file));
     const out = tcjs.textSink();
-    const code = await tcjs.runWasi(frontend, { args: [...tcjs.typecheckArgs(['/workspace/API.swift']), '-warnings-as-errors'], root, stdout: out, stderr: out });
+    const args = ['swift-frontend', '-frontend', '-typecheck', '/workspace/API.swift', ...tcjs.commonFrontendArgs(), '-warnings-as-errors'];
+    const code = await tcjs.runFrontend(frontend, { args, root, stdout: out, stderr: out });
     return { code, out: out.text };
 }

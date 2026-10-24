@@ -1,10 +1,10 @@
 // Builds the browser's XCTest (xctest/XCTest/*.swift) with the pack's own
-// swift-frontend.wasm (Swift 6.3.3) under Node, because a binary
+// compiler, swift-frontend-lsp.wasm (Swift 6.3.3), under Node, because a binary
 // .swiftmodule only loads in the compiler version that wrote it:
 //
-//   node tools/build-xctest.mjs <dir with swift-frontend.wasm> <swift-sysroot.tar> <out.tar>
+//   node tools/build-xctest.mjs <dir with swift-frontend-lsp.wasm> <swift-sysroot.tar> <out.tar>
 //
-// Writes <out.tar> (swift-xctest.tar), which runner.js and typecheck.js
+// Writes <out.tar> (swift-xctest.tar), which runner.js and server.js
 // unpack over the sysroot when a project imports XCTest:
 //
 //   swift/lib/swift_static/wasi/XCTest.swiftmodule/wasm32-unknown-wasip1.swiftmodule
@@ -27,7 +27,7 @@ const [toolDir, sysrootTar, outTar] = process.argv.slice(2);
 const SRC = resolve(fileURLToPath(new URL('.', import.meta.url)), '../xctest/XCTest');
 
 const t0 = performance.now();
-const frontend = await WebAssembly.compile(readFileSync(join(toolDir, 'swift-frontend.wasm')));
+const frontend = await WebAssembly.compile(readFileSync(join(toolDir, tc.FRONTEND_WASM)));
 const root = new tc.Directory(new Map());
 tc.untar(root, new Uint8Array(readFileSync(sysrootTar)), tc.SYSROOT);
 tc.mkdirp(root, '/tmp');
@@ -37,7 +37,7 @@ const sources = readdirSync(SRC).filter((n) => n.endsWith('.swift')).sort().map(
 });
 let log = '';
 const sink = tc.textSink((t) => (log += t));
-const code = await tc.runWasi(frontend, {
+const code = await tc.runFrontend(frontend, {
     args: ['swift-frontend', '-frontend', '-c', ...sources, ...tc.commonFrontendArgs('XCTest'),
         '-parse-as-library', '-module-link-name', 'XCTest', '-O', '-enable-experimental-feature', 'Extern',
         '-emit-module-path', '/out/XCTest.swiftmodule', '-o', '/out/XCTest.o'],
