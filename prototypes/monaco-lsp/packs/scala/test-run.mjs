@@ -135,7 +135,7 @@ try {
                 finish();
             }
         };
-        worker.postMessage({ type: 'run', files, entry, stdin: opts.noStdin ? null : stdin });
+        worker.postMessage({ type: 'run', files, entry, stdin: opts.noStdin ? null : stdin, ...(opts.optimization ? { options: { optimization: opts.optimization } } : {}) });
     }), { files, entry, opts });
 
     const phases = (r) => r.phases.map(([p, t]) => `${p}@${t}ms`).join(' ');
@@ -335,6 +335,29 @@ class GeometrySpec extends Properties("Geometry"):
     const warm = await runProgram(sample.files, sample.entry);
     check('the sample project runs again (warm: no download)', warm.exit === 0 && warm.stdout === cold.stdout,
         `(${warm.ms} ms, ${(bytesServed / 1e6).toFixed(1)} MB fetched: ${phases(warm)})`);
+
+    // Optimisation (README, "Optimization"): `on` links with the Scala.js
+    // optimizer. Seen in a stack trace: `twice`, marked @inline (which only
+    // the optimizer honours), is a frame of its own without it and inlined
+    // into main with it. Semantics stay compliant either way.
+    const INLINE = `object Main:
+  @noinline def boom(n: Int): Int = if n > 0 then throw new IllegalStateException("deep") else n
+  @inline def twice(n: Int): Int = boom(n) * 2
+  def main(args: Array[String]): Unit = println(twice(args.length + 1))
+`;
+    const plain = await runProgram({ 'Main.scala': INLINE }, 'Main.scala', { optimization: 'off' });
+    const optimized = await runProgram({ 'Main.scala': INLINE }, 'Main.scala', { optimization: 'on' });
+    check('optimisation: without the optimizer an @inline method is a frame of its own, with it it is inlined',
+        plain.exit === 1 && /\bat .*twice/.test(plain.stderr) && optimized.exit === 1 && /IllegalStateException: deep/.test(optimized.stderr) && !/twice/.test(optimized.stderr) && /\bat .*boom/.test(optimized.stderr),
+        `off: ${JSON.stringify(plain.stderr)}\n  on: ${JSON.stringify(optimized.stderr)}`);
+    const sampleOn = await runProgram(sample.files, sample.entry, { optimization: 'on' });
+    check('optimisation: the sample prints the same with the optimizer', sampleOn.exit === 0 && sampleOn.stdout === cold.stdout, `(${sampleOn.ms} ms: ${phases(sampleOn)}) ${JSON.stringify(sampleOn.stderr)}`);
+    const thrownOn = await runProgram({ 'Main.scala': THROW }, 'Main.scala', { optimization: 'on' });
+    check('optimisation: an index out of bounds still throws with the optimizer', thrownOn.exit === 1 && thrownOn.stdout === 'before\n' && /ArrayIndexOutOfBoundsException/.test(thrownOn.stderr),
+        JSON.stringify(thrownOn.stderr.split('\n')[0]));
+    const fast = await runProgram(sample.files, sample.entry, { optimization: 'full' });
+    check('optimisation: an unknown level is refused, naming the levels, before any download', fast.exit === 1 && fast.stderr === 'Unsupported optimisation level "full"; supported: off, on\n' && Object.keys(fast.loading).length === 0,
+        JSON.stringify(fast.stderr));
 } finally {
     await context.close();
     server.close();

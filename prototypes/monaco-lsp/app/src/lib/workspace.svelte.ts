@@ -125,7 +125,7 @@ export class Workspace {
 	private host: EditorHost | null = null;
 	/** Whether the user chose run options for this project: only then are they saved with it. */
 	private runOptionsChosen = false;
-	/** The level chosen for a language whose level no project file holds (Swift), saved with the project; null: the default. */
+	/** The level chosen for a language whose level no project file holds (Swift, Scala), saved with the project; null: the default. */
 	private chosenLevel: string | null = null;
 	/** Bumped by every language switch, so a switch overtaken by a later one is skipped. */
 	private generation = 0;
@@ -281,8 +281,8 @@ export class Workspace {
 	 * Puts the project on the optimisation level `flag` (optimization.ts).
 	 * For C and C++ compile_flags.txt's `-O` line is rewritten (or the file
 	 * created) as one edit, which Undo takes back, so clangd, Run and the
-	 * views follow the file; for Swift the level is saved with the project
-	 * and goes with Run and Test. The output panel says what changed.
+	 * views follow the file; for Swift and Scala the level is saved with the
+	 * project and goes with Run (and Test). The output panel says what changed.
 	 */
 	chooseOptimization(flag: string): void {
 		const levels = levelsOf(this.language);
@@ -305,7 +305,8 @@ export class Workspace {
 			this.write('info', `Optimization: ${flag} (${how}).`);
 		} else {
 			this.chosenLevel = level.default ? null : flag;
-			this.write('info', `Optimization: ${flag}, for Run and Test${level.default ? ' (the default)' : ''}.`);
+			const what = languageOf(this.language).tests ? 'Run and Test' : 'Run';
+			this.write('info', `Optimization: ${level.label}, for ${what}${level.default ? ' (the default)' : ''}.`);
 		}
 		this.refreshOptimization();
 		this.scheduleSave();

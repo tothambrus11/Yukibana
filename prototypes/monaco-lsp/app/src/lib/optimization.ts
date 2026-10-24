@@ -16,12 +16,20 @@
  * Swift: saved with the project (no project file of the browser's sets it)
  * and sent with Run and Test; Download writes it into Package.swift.
  *
+ * Scala: whether the Scala.js linker runs its optimizer, saved with the
+ * project and sent with Run. Download cannot carry it: the downloaded
+ * project is an sbt project for the JVM, which has no such switch.
+ *
  * Imports nothing, so `node` can load this file directly (tests/optimization.mjs).
  */
 
 /** One level of a language, in the order the picker lists them. */
 export interface OptimizationLevel {
-	/** The flag that selects it, as the compiler spells it: `-O2`, `-Onone`. */
+	/**
+	 * The flag that selects it, as the compiler spells it (`-O2`, `-Onone`),
+	 * or, for Scala, whose linker takes no flag, `off` or `on`: what Run
+	 * sends as `options.optimization` (packs/CONTRACT.md).
+	 */
 	readonly flag: string;
 	/** What the picker shows. */
 	readonly label: string;
@@ -36,7 +44,7 @@ export interface OptimizationLevel {
 }
 
 /** The languages with levels. */
-export type OptimizingLanguage = 'cpp' | 'swift';
+export type OptimizingLanguage = 'cpp' | 'swift' | 'scala';
 
 /**
  * Clang's levels. `-O2` is the default because it is what Run used before
@@ -72,9 +80,21 @@ export const SWIFT_LEVELS: readonly OptimizationLevel[] = [
 	{ flag: '-Osize', label: '-Osize', unavailable: SWIFT_O_UNAVAILABLE },
 ];
 
+/**
+ * The Scala.js linker's optimizer, off or on. Off is the default because it
+ * is what Run did before (each Run links the whole program, and the
+ * optimizer adds about a second to that); on is what `sbt fastLinkJS` does,
+ * and makes collection-heavy programs about a fifth faster (packs/scala
+ * README, "Optimization").
+ */
+export const SCALA_LEVELS: readonly OptimizationLevel[] = [
+	{ flag: 'off', label: 'Optimizer off', default: true },
+	{ flag: 'on', label: 'Optimizer on' },
+];
+
 /** The levels of `language`, or null for a language without them. */
 export function levelsOf(language: string): readonly OptimizationLevel[] | null {
-	return language === 'cpp' ? CPP_LEVELS : language === 'swift' ? SWIFT_LEVELS : null;
+	return language === 'cpp' ? CPP_LEVELS : language === 'swift' ? SWIFT_LEVELS : language === 'scala' ? SCALA_LEVELS : null;
 }
 
 /** The default level of a language with levels. */

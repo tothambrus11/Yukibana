@@ -153,12 +153,14 @@
 		{/if}
 	{/if}
 	{#if levels && workspace.optimization}
-		<!-- C and C++: compile_flags.txt's -O line (optimization.ts), shown as it is when hand-edited; Swift: saved with the project. -->
+		<!-- C and C++: compile_flags.txt's -O line (optimization.ts), shown as it is when hand-edited; Swift and Scala: saved with the project. -->
 		<label
 			class="select optimization"
 			title={workspace.language === 'cpp'
 				? 'Optimization: the level Run, Test and the IR and assembly views compile at. Choosing one rewrites the -O line of compile_flags.txt'
-				: 'Optimization: the level Run and Test compile at, saved with the project and written into Package.swift by Download'}
+				: workspace.language === 'scala'
+					? 'Optimization: whether Run links with the Scala.js optimizer (as sbt fastLinkJS does), saved with the project. It adds about a second to each Run'
+					: 'Optimization: the level Run and Test compile at, saved with the project and written into Package.swift by Download'}
 		>
 			<span class="sr-only">Optimization</span>
 			<select

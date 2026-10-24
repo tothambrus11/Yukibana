@@ -204,6 +204,7 @@ async function run(language, c) {
 	}
 	// After cppTargets, which checks that nothing before it fetched the views.
 	if (language === 'cpp' && existsSync(join(build, 'packs', 'cpp', 'explorer.js'))) await cppOptimization(page, check);
+	if ((language === 'swift' || language === 'scala') && existsSync(join(build, 'packs', language, 'runner.js'))) await savedOptimization(page, check, language);
 
 	check(errors.length === 0, `no page errors${errors.length ? ': ' + errors.join('; ') : ''}`);
 	await page.close();
@@ -356,6 +357,36 @@ async function cppOptimization(page, check) {
 	await page.locator('header button', { hasText: 'Reset project' }).click();
 	const reset = await page.waitForFunction(() => globalThis.monaco.editor.getModels().find((m) => m.uri.path === '/workspace/compile_flags.txt')?.getValue().startsWith('-std='), null, { timeout: 15_000 }).then(() => true, () => false);
 	check(reset && (await picker.inputValue()) === '-O2', `Reset project puts the sample back at -O2 (${await picker.inputValue()})`);
+}
+
+/**
+ * The Optimization select of a language whose level is saved with the
+ * project (optimization.ts: Swift, Scala): it starts at the default and
+ * disables what does not work yet; a level chosen survives a reload and Run
+ * still prints the sample's output; Reset project returns to the default.
+ */
+async function savedOptimization(page, check, language) {
+	const picker = page.locator('header .optimization select');
+	const { start, choose, disabled } = language === 'swift' ? { start: '-Onone', choose: null, disabled: ['-O', '-Osize'] } : { start: 'off', choose: 'on', disabled: [] };
+	check((await picker.inputValue()) === start, `the Optimization select starts at ${start} (${await picker.inputValue()})`);
+	const off = await picker.locator('option:disabled').evaluateAll((options) => options.map((o) => o.value));
+	check(off.join() === disabled.join(), `levels not available yet are disabled (${off.join(', ') || 'none'})`);
+	if (!choose) return;
+	await picker.selectOption(choose);
+	await page.locator('.dv-tab .dock-tab', { hasText: /^Output$/ }).first().click();
+	const said = await page.waitForFunction(() => [...document.querySelectorAll('.output')].some((o) => o.textContent?.includes('Optimization: Optimizer on, for Run.')), null, { timeout: 5_000 }).then(() => true, () => false);
+	check(said, 'choosing a level says so in the output panel');
+	await page.waitForTimeout(1500);
+	await page.reload();
+	const kept = await page.locator('header .optimization select').waitFor({ timeout: 60_000 }).then(async () => (await picker.inputValue()) === choose, () => false);
+	check(kept, `${choose} is saved with the project and still chosen after a reload (${await picker.inputValue().catch(() => '?')})`);
+	await page.locator('header button.run').click();
+	const ran = await ended(page);
+	check(ran.done && ran.shown.includes(CASES[language].output) && /Exited with code 0 /.test(ran.status), `Run at ${choose} prints the sample's output (${ran.status})`);
+	page.once('dialog', (d) => void d.accept());
+	await page.locator('header button', { hasText: 'Reset project' }).click();
+	const reset = await page.waitForFunction((v) => document.querySelector('header .optimization select')?.value === v, start, { timeout: 15_000 }).then(() => true, () => false);
+	check(reset, `Reset project puts the sample back at ${start}`);
 }
 
 /**

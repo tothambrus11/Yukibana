@@ -15,6 +15,9 @@
 //      blocks on the SharedArrayBuffer with Atomics.wait. Then the program's
 //      main runs.
 //
+// `options.optimization`, `off` (the default) or `on`, is whether step 2
+// runs the Scala.js optimizer (OPTIMIZATION_LEVELS below).
+//
 // A program that never ends blocks this worker; the app terminates it.
 //
 // ScalaCheck, the one library besides the standard ones: a project whose
@@ -155,7 +158,21 @@ function formatDiagnostic(d) {
     return text;
 }
 
-async function run({ files, entry, stdin }) {
+/** The optimisation levels (the run message's `options.optimization`), the
+ *  first the default: `off` links without the Scala.js optimizer, `on` with
+ *  it, as `sbt fastLinkJS` does by default. Off is the default because the
+ *  optimizer costs about a second of linking on every Run and gains only on
+ *  programs that run for seconds (README, "Optimization"). */
+const OPTIMIZATION_LEVELS = ['off', 'on'];
+
+async function run({ files, entry, stdin, options }) {
+    const optimization = options?.optimization ?? OPTIMIZATION_LEVELS[0];
+    if (!OPTIMIZATION_LEVELS.includes(optimization)) {
+        write(2, `Unsupported optimisation level ${JSON.stringify(optimization)}; supported: ${OPTIMIZATION_LEVELS.join(', ')}\n`);
+        flushAll();
+        post({ type: 'exit', code: 1 });
+        return;
+    }
     const res = await fetch(new URL('manifest.json', BASE));
     if (!res.ok) throw new Error(`manifest.json: HTTP ${res.status}`);
     const manifest = await res.json();
@@ -210,7 +227,7 @@ async function run({ files, entry, stdin }) {
     const ir = [...result.ir, ...entries(library), ...(libraryQc ? entries(libraryQc) : [])];
     let linked;
     try {
-        linked = await link(ir, [['yukibana.runtime.Std', 'init', 'noargs'], [main, 'main', 'args']], false, (level, message) => {
+        linked = await link(ir, [['yukibana.runtime.Std', 'init', 'noargs'], [main, 'main', 'args']], optimization === 'on', (level, message) => {
             if (level !== 'trace') write(2, `${level === 'error' ? 'link error' : 'link warning'}: ${message}\n`);
         });
     } catch (e) {

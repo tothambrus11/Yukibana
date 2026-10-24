@@ -124,7 +124,8 @@ App to runner, once:
   files: Record<string, string>,  // the project: relative path -> text
   entry: string,                  // the entry file, e.g. "main.py"
   stdin: SharedArrayBuffer | null,
-  options?: { emulation: 'system' | 'user'; cpus: 1 | 2 | 4; strace: boolean } }
+  options?: { emulation: 'system' | 'user'; cpus: 1 | 2 | 4; strace: boolean }
+          | { optimization: string } }
 ```
 
 `options` are how a program is emulated, for a runner that runs it in an
@@ -135,6 +136,15 @@ runner uses them only for a Linux target (`--target=` in
 Linux under QEMU's system emulation with `cpus` CPUs, `user` under QEMU's
 user mode (one CPU), and `strace` traces its system calls. Absent, they
 are `system`, 1, `false`. A runner with no use for them ignores them.
+
+`{ optimization }` is the project's optimisation level, for a language
+whose level no project file holds (`app/src/lib/optimization.ts`): the app
+sends it with Run and Test for Swift (`-Onone`, `-O`, `-Osize`) and Scala
+(`off`, `on`: the Scala.js optimizer), each pack's README "Optimization"
+says what it does. Absent, the runner's default. A runner refuses a level
+it does not have (stderr naming the levels, exit 1) rather than guess. A C
+or C++ project's level is the `-O` line of its `compile_flags.txt`, which
+the runner reads anyway, so none is sent.
 
 A runner that can also run the project's tests takes the same message with
 `type: 'test'` (the app offers Test for languages with `tests: true` in

@@ -146,7 +146,8 @@ pickling, inlining, erasure, lambda lifting and the rest, up to its built-in
 **Scala.js back end** (`-scalajs`, `GenSJSIR`), which writes Scala.js IR
 (`.sjsir`) into memory. The **Scala.js 1.19.0 linker** then links that IR with
 the IR of the Scala.js standard library into one ES module, as
-`sbt fastLinkJS` would. The linker is upstream's own build of itself for
+`sbt fastLinkJS` would (without its optimizer, unless the project chose it:
+"Optimization"). The linker is upstream's own build of itself for
 JavaScript (`org.scala-js:scalajs-linker_sjs1_2.13:1.19.0`, from Maven
 Central), behind a 90-line wrapper (`compiler-js/linker`). The linked module is
 imported in the worker and the program's `main` runs. Nothing is interpreted
@@ -373,6 +374,37 @@ runner's own parts are small: linking the Scala.js linker takes about 20 s,
 the runtime helper 2 s, the IR bundle and `classpath-sjs.bin` a few seconds.
 An incremental rebuild after editing `ScalaService.scala` or
 `ScalaJSCompiler.scala` took 1-2.5 minutes.
+
+## Optimization
+
+The toolbar's Optimization select (the app's `optimization.ts`) has two
+entries, **Optimizer off** (the default) and **Optimizer on**: whether the
+Scala.js linker runs its optimizer (`StandardConfig.withOptimizer`,
+`compiler-js/linker`). It is saved with the project and sent with Run as
+`options.optimization`, `off` or `on` (`../CONTRACT.md`); the runner refuses
+anything else before downloading. The optimizer inlines (it honours
+`@inline`), eliminates boxing and dead code, and specialises calls. `sbt
+fastLinkJS` runs it by default, so **on** is what a Scala.js project built
+with sbt runs. **Off** stays the default because it was what Run did
+before, and because each Run links the whole program again, so the
+optimizer's cost comes back every time.
+
+Measured in headless Chromium on 4 cores, linking and running (warm):
+
+| program | off | on |
+|---|---|---|
+| the sample (link) | 0.9 s | 1.8 s |
+| a 20-million-step loop over a case class, a Vector pipeline, a `groupBy` | about 0.7 s | about 0.7 s |
+| collection-heavy: `Array.tabulate`, iterators, `sorted.distinct`, `Option` flattening, a StringBuilder | 5.0-5.2 s | 4.0-4.3 s |
+
+So the optimizer pays for itself only on programs that run for seconds,
+which is when a student would choose it. Semantics stay the "compliant"
+ones either way: a bad cast or an index out of bounds throws.
+`test-run.mjs` checks that an `@inline` method is a stack frame of its own
+when the optimizer is off and is inlined when it is on, that the sample and
+an out-of-bounds exception behave the same, and that an unknown level is
+refused. Download cannot carry the choice: `build.sbt` builds for the JVM,
+which has no Scala.js optimizer.
 
 ## Sizes
 

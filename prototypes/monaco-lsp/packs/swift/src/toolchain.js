@@ -161,9 +161,22 @@ export function sourceKitArgs() {
  * because each per-file invocation re-loads the 16 MB stdlib module.
  * `entry` (main.swift) is the file whose top-level code becomes main.
  */
-export function compileArgs(sources, output, moduleName = 'main') {
-    return ['swift-frontend', '-frontend', '-c', ...sources, ...commonFrontendArgs(moduleName), '-empty-abi-descriptor', '-o', output];
+export function compileArgs(sources, output, moduleName = 'main', optimization = '-Onone') {
+    return ['swift-frontend', '-frontend', '-c', ...sources, ...commonFrontendArgs(moduleName), optimization, '-empty-abi-descriptor', '-o', output];
 }
+
+/**
+ * The optimisation levels a program may be compiled at (the run message's
+ * `options.optimization`), the first the default: `-Onone` is what
+ * `swift build` uses in its debug configuration, and what every program was
+ * compiled at before the level could be chosen. `-O` and `-Osize` need a
+ * compiler with swift-toolchain-wasm's patch 0004: before it, a 32-bit
+ * frontend under-allocates SIL debug-variable instructions and corrupts its
+ * heap in the optimiser, trapping in free() on ordinary programs (README,
+ * "Optimization"). The app does not offer them until then; the runner
+ * takes them so that the pack's tests can try a newer compiler.
+ */
+export const OPTIMIZATION_LEVELS = ['-Onone', '-O', '-Osize'];
 
 /**
  * The libraries every program links, in link order: yukibana-swift's

@@ -102,6 +102,51 @@ the downloads are cached, and the browser's wasm code cache helps "load".
 The app's service worker caches `/packs/**`, and the test uses a service
 worker that does the same.
 
+## Optimization
+
+The toolbar's Optimization select (the app's `optimization.ts`) lists
+swift-frontend's three levels: `-Onone` (the default, what `swift build`
+uses in its debug configuration, and what every Run compiled at before),
+`-O` and `-Osize`. No project file of the browser's holds a level, so it is
+saved with the project, sent with Run and Test as `options.optimization`
+(`../CONTRACT.md`), and written by Download into `Package.swift` as
+`swiftSettings: [.unsafeFlags(["-O"])]` on the executable and test targets.
+The runner refuses any other value before downloading anything.
+
+**`-O` and `-Osize` are listed but disabled** for now, because the pinned
+compiler (swift-toolchain-wasm `swift-6.3.3-wasm-3`) crashes at those
+levels on ordinary programs. Four lines are enough:
+
+```swift
+func runTest(_ blocks: [Int]) {
+    for block in blocks { print(block) }
+}
+runTest([])
+```
+
+compiles at `-Onone` and traps in `free()` at `-O`. Renaming a variable
+can make it compile, because the crash depends on the heap's layout. The
+cause, found by instrumenting the compiler's allocator: when SILCombine
+salvages debug info, it creates `debug_value` instructions whose trailing
+objects include a `SILDIExprElement`, which holds a `uint64_t` and so is
+8-byte aligned on wasm32. `allocateDebugVarCarryingInst` sized the
+allocation as a plain sum of the trailing objects' sizes, without the
+padding `llvm::TrailingObjects` inserts before that element. On a 64-bit
+host the padding happens to be 0. On a 32-bit host it is up to 4 bytes, so
+the instruction's trailing data ran up to 4 bytes past its allocation,
+over the next malloc chunk's header, and a later `free` of that neighbour
+trapped. The
+fix is swift-toolchain-wasm's patch
+`0004-debug-variable-trailing-padding.patch`, which sizes the allocation
+with each trailing object's alignment. It is the same sum on upstream
+`main`, in `getDebugVarTrailingDataSize`. The levels become available once
+a toolchain release with that patch is pinned in `build.sh` and
+`optimization.ts` stops marking them unavailable. `test-run.mjs` has
+the cases: the program above, XCTest's own teardown loop (the first place
+it was seen) and XCTest tests, at both levels. They run with
+`SWIFT_OPTIMIZED=1`, and with `SWIFT_FRONTEND=<path>` to try a compiler
+that is not in the pack yet.
+
 ## Macros
 
 Swift runs a macro by sending its syntax to a *plugin*, a program or
@@ -327,7 +372,7 @@ module 'App'; ignoring import" is dropped from both.
 only when the project imports XCTest. It is a file of its own, so a change
 to it does not invalidate the 44 MB sysroot in caches. `build.sh` builds it
 with **the pack's own `swift-frontend-lsp.wasm` under Node**
-(`tools/build-xctest.mjs`: one whole-module `-c -O` with
+(`tools/build-xctest.mjs`: one whole-module `-c -Onone` with
 `-emit-module-path`, about 13-17 s), because a binary module loads only in
 the compiler that wrote it. `-module-link-name XCTest` makes `import XCTest`
 add `-lXCTest` to the object's autolink entries, so the runner links it with
@@ -500,10 +545,11 @@ gone.
   swift-testing's and `StringifyMacros`. A project cannot build a macro of
   its own (that needs a plugin compiled from its source), and SwiftUI's
   `#Preview` and the like have no module here.
-* **`-O` traps in the macro-enabled compiler** for some modules (an
-  out-of-bounds `free` after a Swift-implemented SIL optimizer pass, found
-  building XCTest; reported to swift-toolchain-wasm), so the browser's
-  XCTest is built at `-Onone`. Programs compile at `-Onone` anyway.
+* **`-O` and `-Osize` crash the pinned compiler** on ordinary programs (a
+  heap overrun on 32-bit hosts when SILCombine salvages debug info, first
+  seen building XCTest; "Optimization" has the cause and the fix), so the
+  Optimization select offers only `-Onone` for now, and the browser's XCTest
+  is built at `-Onone`.
 * **No Foundation**: the core sysroot has no Foundation module, so `import
   Foundation` is an error ("no such module"). The standard library,
   `_Concurrency`, `_StringProcessing` (Regex), `Synchronization`,

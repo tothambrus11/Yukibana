@@ -26,9 +26,13 @@
 // or the project's own main.swift if that one calls XCTMain. A 'run' leaves
 // test files (those importing XCTest) out, as SwiftPM leaves the test target
 // out of the executable.
+//
+// `options.optimization` (either type) is the level the module is compiled
+// at, one of toolchain.js's OPTIMIZATION_LEVELS; absent, `-Onone` (README,
+// "Optimization").
 
 import {
-    Fd, FRONTEND_WASM, LINKER_WASM, autolinkEntries, compileArgs, linkArgs, linkLibraries, loadMacroPlugins, loadSwiftTesting,
+    Fd, FRONTEND_WASM, LINKER_WASM, OPTIMIZATION_LEVELS, autolinkEntries, compileArgs, linkArgs, linkLibraries, loadMacroPlugins, loadSwiftTesting,
     loadSysroot, loadTool, loadXCTest, mkdirp, readFile, remove, runFrontend, runWasi, textSink, usesMacroPlugins, wasiDefs,
     writeFile, writeProject,
 } from './toolchain.js';
@@ -90,8 +94,15 @@ class Stdin extends Fd {
 /** Where a generated test main.swift is compiled from (outside the project). */
 const TEST_MAIN = '/build/xctest/main.swift';
 
-async function run({ files, entry, stdin }, testing) {
+async function run({ files, entry, stdin, options }, testing) {
     const t0 = performance.now();
+    // The optimisation level (OPTIMIZATION_LEVELS); anything else is refused
+    // before a byte is downloaded, rather than handed to the frontend.
+    const optimization = options?.optimization ?? OPTIMIZATION_LEVELS[0];
+    if (!OPTIMIZATION_LEVELS.includes(optimization)) {
+        post({ type: 'stderr', text: `error: unsupported optimisation level ${JSON.stringify(optimization)}; supported: ${OPTIMIZATION_LEVELS.join(', ')}\n` });
+        return 1;
+    }
     const ms = () => `${Math.round(performance.now() - t0)} ms`;
     // What to compile: for a run, the program (test files left out); for a
     // test run, the plan of src/xctest.js. Module name: see projectModuleName.
@@ -145,7 +156,7 @@ async function run({ files, entry, stdin }, testing) {
     // end anyway), less the warnings that projectModuleName causes.
     const diagnostics = textSink();
     let code = await runFrontend(frontend, {
-        args: compileArgs(sources, '/build/main.o', moduleName), root,
+        args: compileArgs(sources, '/build/main.o', moduleName, optimization), root,
         stdout: diagnostics, stderr: diagnostics,
     });
     const shown = relative(moduleName === 'main' ? diagnostics.text : dropOwnModuleImportWarnings(diagnostics.text));

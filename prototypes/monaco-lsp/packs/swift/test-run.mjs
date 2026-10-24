@@ -62,12 +62,15 @@ self.addEventListener('fetch', (e) => {
 });`);
         return;
     }
-    const file = normalize(join(STATIC, path));
+    // SWIFT_FRONTEND: another swift-frontend-lsp.wasm to compile with (a
+    // swift-toolchain-wasm build not yet in the pack), served uncompressed.
+    const frontend = path === '/packs/swift/swift-frontend-lsp.wasm' && process.env.SWIFT_FRONTEND;
+    const file = frontend || normalize(join(STATIC, path));
     try {
-        if (!file.startsWith(STATIC) || !(await stat(file)).isFile()) throw new Error('not a file');
+        if ((!frontend && !file.startsWith(STATIC)) || !(await stat(file)).isFile()) throw new Error('not a file');
         const headers = { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'cache-control': 'max-age=3600', ...ISOLATION };
         let body;
-        if (/\bbr\b/.test(req.headers['accept-encoding'] ?? '') && !file.endsWith('.gz')) {
+        if (!frontend && /\bbr\b/.test(req.headers['accept-encoding'] ?? '') && !file.endsWith('.gz')) {
             try {
                 body = await readFile(file + '.br');
                 headers['content-encoding'] = 'br';
@@ -197,7 +200,7 @@ try {
     // line each, then end of file), optionally terminate it after the program
     // printed `stopAfter`. Resolves with what came back and when.
     await page.evaluate(() => {
-        window.runProject = (files, { inputs = [], stopAfter = null, entry = 'main.swift', type = 'run' } = {}) =>
+        window.runProject = (files, { inputs = [], stopAfter = null, entry = 'main.swift', type = 'run', optimization = null } = {}) =>
             new Promise((done) => {
                 const t0 = performance.now();
                 const result = { stdout: '', stderr: '', code: null, phases: [], loading: {}, stdinRequests: 0, stdoutBeforeInput: [], terminated: false };
@@ -247,7 +250,7 @@ try {
                         }, 1000);
                     }
                 };
-                worker.postMessage({ type, files, entry, stdin: sab });
+                worker.postMessage({ type, files, entry, stdin: sab, ...(optimization ? { options: { optimization } } : {}) });
             });
     });
 
@@ -532,6 +535,54 @@ final class ListedTests: XCTestCase {
     check("swift-testing: 'run' leaves the test files out, as SwiftPM leaves out the test target",
         runOfTested.code === 0 && runOfTested.stdout === 'counter at 0\n' && !('swift-testing.tar' in runOfTested.loading),
         `code=${runOfTested.code} ${JSON.stringify(runOfTested.stdout)}\n${runOfTested.stderr}`);
+
+    // 9. Optimisation levels (README, "Optimization"): -Onone named is the
+    //    default; a level the frontend does not have is refused before any
+    //    download. -O and -Osize only with SWIFT_OPTIMIZED=1, for a compiler
+    //    with swift-toolchain-wasm's patch 0004 (SWIFT_FRONTEND, or the pack
+    //    once its pin has it): the pinned one corrupts its heap there.
+    const onone = await run(SAMPLE, { optimization: '-Onone' });
+    check('optimisation: the sample at -Onone, named, prints the same', onone.code === 0 && onone.stdout === EXPECTED, `code=${onone.code} ${JSON.stringify(onone.stdout)}\n${onone.stderr}`);
+    const o3 = await run(SAMPLE, { optimization: '-O3' });
+    check('optimisation: a level swift-frontend lacks is refused, naming the levels, exit 1, nothing loaded',
+        o3.code === 1 && o3.stderr === 'error: unsupported optimisation level "-O3"; supported: -Onone, -O, -Osize\n' && o3.phases.length === 0,
+        `code=${o3.code} ${JSON.stringify(o3.stderr)} ${timeline(o3)}`);
+    // Two programs that crashed the pinned frontend at -O, both in free():
+    // SILCombine's salvaged debug_value instructions overran their
+    // allocation. Whether a program trips it depends on the heap's layout, so
+    // on its identifiers too: these are kept exactly as found. The second is
+    // XCTest's own teardown loop.
+    const LOOP = { 'main.swift': 'func runTest(_ blocks: [Int]) {\n    for block in blocks { print(block) }\n}\nrunTest([])\n' };
+    const TEARDOWN = { 'main.swift': `open class Case {
+    private final var teardownBlocks: [() async throws -> Void] = []
+    public init() {}
+    public func addTeardownBlock(_ block: @Sendable @escaping () async throws -> Void) { teardownBlocks.append(block) }
+    func recordThrown(_ e: any Error) { print("thrown", e) }
+    final func runTest() async {
+        for block in teardownBlocks.reversed() {
+            do { try await block() } catch { recordThrown(error) }
+        }
+    }
+}
+let c = Case()
+c.addTeardownBlock { print("a") }
+c.addTeardownBlock { print("b") }
+await c.runTest()
+` };
+    if (process.env.SWIFT_OPTIMIZED) {
+        for (const level of ['-O', '-Osize']) {
+            const sample = await run(SAMPLE, { optimization: level });
+            check(`optimisation: the sample at ${level} prints the same`, sample.code === 0 && sample.stdout === EXPECTED, `code=${sample.code} in ${sample.ms} ms\n${sample.stderr}`);
+            const loop = await run(LOOP, { optimization: level });
+            check(`optimisation: a loop over an empty array compiles and runs at ${level}`, loop.code === 0 && loop.stdout === '' && loop.stderr === '', `code=${loop.code} ${JSON.stringify(loop.stdout)}\n${loop.stderr.slice(0, 2000)}`);
+            const teardown = await run(TEARDOWN, { optimization: level });
+            check(`optimisation: async closures in a reversed loop compile and run at ${level}`, teardown.code === 0 && teardown.stdout === 'b\na\n', `code=${teardown.code} ${JSON.stringify(teardown.stdout)}\n${teardown.stderr.slice(0, 2000)}`);
+            const tests = await run(CALC, { type: 'test', optimization: level });
+            check(`optimisation: XCTest tests pass at ${level}`, tests.code === 0 && /Executed 5 tests, with 0 failures/.test(tests.stdout), `code=${tests.code} in ${tests.ms} ms\n${tests.stderr.slice(0, 2000)}`);
+        }
+    } else {
+        console.log('skip  optimisation at -O and -Osize (SWIFT_OPTIMIZED=1, with a compiler that has swift-toolchain-wasm patch 0004)');
+    }
 } finally {
     await browser.close();
     server.close();

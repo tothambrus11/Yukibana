@@ -39,8 +39,10 @@ interface Project {
 	paths: readonly string[];
 	/**
 	 * The level chosen for a language whose level no project file holds
-	 * (optimization.ts: Swift), as its flag; null for the default. A C or
-	 * C++ project's is in its compile_flags.txt.
+	 * (optimization.ts: Swift, Scala), as its flag; null for the default. A
+	 * C or C++ project's is in its compile_flags.txt. Scala's is not
+	 * exported: build.sbt builds for the JVM, where the Scala.js optimizer
+	 * does not exist.
 	 */
 	optimization: string | null;
 }

@@ -1,6 +1,7 @@
 // Unit tests of the optimisation levels (src/lib/optimization.ts): which
 // level compile_flags.txt puts a C++ project on, how the Optimization picker
-// rewrites that file, and how a saved level is read back.
+// rewrites that file, which languages have levels, and how a saved level is
+// read back.
 //
 //   node --test tests/optimization.mjs     (Node 22.18 or later: loads the TypeScript source)
 import assert from 'node:assert/strict';
@@ -47,10 +48,13 @@ test('the level and the target are independent lines of the same file', () => {
 	assert.equal(withCppLevel(flags, '-O2'), '--target=x86_64-linux-musl\n-std=c++20\n');
 });
 
-test('only C, C++ and Swift have levels, and a saved level that is not one of the language\'s is the default', () => {
+test('only C, C++, Swift and Scala have levels, and a saved level that is not one of the language\'s is the default', () => {
 	assert.ok(levelsOf('cpp'));
 	assert.deepEqual(levelsOf('swift').map((l) => l.flag), ['-Onone', '-O', '-Osize']);
-	for (const language of ['python', 'javascript', 'typescript', 'rust', 'java', 'kotlin', 'php', 'haskell', 'scala']) assert.equal(levelsOf(language), null, language);
+	assert.deepEqual(levelsOf('scala').map((l) => l.flag), ['off', 'on']);
+	assert.equal(savedLevelOf('scala', 'on'), 'on');
+	assert.equal(savedLevelOf('scala', '-O'), null);
+	for (const language of ['python', 'javascript', 'typescript', 'rust', 'java', 'kotlin', 'php', 'haskell']) assert.equal(levelsOf(language), null, language);
 	for (const level of levelsOf('swift')) assert.equal(savedLevelOf('swift', level.flag), level.unavailable ? null : level.flag, level.flag);
 	assert.equal(savedLevelOf('cpp', '-O0'), '-O0');
 	assert.equal(savedLevelOf('swift', '-O3'), null);
