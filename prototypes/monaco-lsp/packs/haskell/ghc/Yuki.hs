@@ -25,6 +25,7 @@ module Yuki () where
 
 import Control.Exception (SomeException, displayException, evaluate, fromException, try)
 import Control.Monad (forM, when)
+import Control.Concurrent.MVar (modifyMVar_, takeMVar)
 import Control.Monad.IO.Class (liftIO)
 import Data.Coerce (coerce)
 import Data.IORef
@@ -33,6 +34,8 @@ import Data.List (intercalate, nub, sortOn, stripPrefix)
 import qualified Data.Map.Strict as M
 import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe)
 import qualified Data.Set as S
+import GHC.IO.Handle.FD (fdToHandle)
+import GHC.IO.Handle.Types (Handle (..))
 import System.Environment (setEnv)
 import System.Exit (ExitCode (..))
 import System.IO
@@ -523,6 +526,7 @@ run st args = do
         (e : as) -> (e, as)
         [] -> ("Main.hs", [])
   mapM_ (\e -> let (k, v) = break (== '=') e in setEnv k (drop 1 v)) envs
+  freshStdio
   ok <- inGhc st $ do
     logger <- getLogger
     (df, _, _) <- parseDynamicFlags logger (stFlags st) (map noLoc flags)
@@ -550,6 +554,23 @@ run st args = do
             pure 1
       hFlush stderr
       pure (obj [("exit", J.JSInt code)])
+
+-- | Gives the next program the standard handles a new process would have:
+-- a session runs one program after another (the runner keeps it, as GHCi
+-- does), and the last may have read stdin to its end (getContents leaves
+-- it semi-closed, unusable) or changed the buffering. stdin becomes a new
+-- handle on fd 0, without what the last program left unread; stdout and
+-- stderr are unbuffered again.
+freshStdio :: IO ()
+freshStdio = do
+  h <- fdToHandle 0
+  case (stdin, h) of
+    (FileHandle _ old, FileHandle _ new) -> do
+      fresh <- takeMVar new
+      modifyMVar_ old (const (pure fresh))
+    _ -> pure ()
+  hSetBuffering stdout NoBuffering
+  hSetBuffering stderr NoBuffering
 
 -- * JSON
 
