@@ -287,13 +287,25 @@ export function createDock(element: HTMLElement, workspace: Workspace): EditorHo
 		return editorArea;
 	};
 
+	/**
+	 * Brings `panel` to the front of its group, and does nothing when it is
+	 * already there. dockview's setActive on the active panel re-renders it,
+	 * and its default renderer does that by removing the panel's element and
+	 * appending it again: an iframe reloads when moved, so every Run loaded
+	 * the preview twice at once, and Chrome sometimes kept the document but
+	 * never painted it (a white preview until the page was reloaded).
+	 */
+	const reveal = (panel: IDockviewPanel | undefined): void => {
+		if (panel && panel.group.activePanel !== panel) panel.api.setActive();
+	};
+
 	const host = {
 		open(path: string, selection?: monaco.IRange): void {
 			const id = editorId(path);
 			opening = true;
 			try {
 				const panel = dock.getPanel(id);
-				if (panel) panel.api.setActive();
+				if (panel) reveal(panel);
 				else {
 					dock.addPanel({
 						id,
@@ -327,12 +339,12 @@ export function createDock(element: HTMLElement, workspace: Workspace): EditorHo
 			history.clear();
 		},
 		showTerminal(): void {
-			dock.getPanel('terminal')?.api.setActive();
+			reveal(dock.getPanel('terminal'));
 		},
 		showPreview(): void {
 			const panel = dock.getPanel('preview');
 			if (panel) {
-				panel.api.setActive();
+				reveal(panel);
 				return;
 			}
 			// Above the terminal, so the page and its console are seen together.
@@ -342,6 +354,9 @@ export function createDock(element: HTMLElement, workspace: Workspace): EditorHo
 				component: 'preview',
 				tabComponent: 'fixed',
 				title: 'Preview',
+				// Never moved in the DOM, so the iframe does not reload when the
+				// panel is shown again, dragged or its group rearranged.
+				renderer: 'always',
 				...(terminal ? { position: { referencePanel: terminal, direction: 'above' as const } } : {}),
 			});
 		},

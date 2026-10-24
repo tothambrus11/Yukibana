@@ -378,6 +378,30 @@ async function previewing(page, check) {
 	const reloaded = await frame.locator('#increment', { hasText: 'Edited' }).waitFor({ timeout: 15_000 }).then(() => true, () => false);
 	const mark = await inner()?.evaluate(() => window.yukibanaMark).catch(() => 'gone');
 	check(reloaded && mark === undefined, `a TypeScript edit reloads the page (button says Edited: ${reloaded}, mark after: ${mark})`);
+
+	// Run again with the Preview already in front loads the page once, not
+	// twice: re-activating the panel used to take the iframe out of the DOM
+	// and put it back (a reload) just before the new page arrived (another),
+	// and Chrome sometimes left the frame white.
+	await page.evaluate(() => {
+		window.yukibanaDetached = 0;
+		new MutationObserver((records) => {
+			for (const r of records)
+				for (const n of r.removedNodes)
+					if (n instanceof Element && (n.matches('iframe.preview-frame') || n.querySelector('iframe.preview-frame'))) window.yukibanaDetached++;
+		}).observe(document.body, { childList: true, subtree: true });
+	});
+	const readies = async () => ((await terminal.textContent()) ?? '').split('page ready').length - 1;
+	const runs = 3;
+	const counts = [];
+	for (let i = 0; i < runs; i++) {
+		await page.locator('header button.run').click();
+		await terminal.filter({ hasText: 'page ready' }).waitFor({ timeout: 15_000 }).catch(() => {});
+		await page.waitForTimeout(1_000);
+		counts.push(await readies());
+	}
+	const detached = await page.evaluate(() => window.yukibanaDetached);
+	check(detached === 0 && counts.every((c) => c === 1), `each Run loads the preview once, without moving its iframe (iframe detached ${detached} times; "page ready" per run: ${counts.join(', ')})`);
 }
 
 /** In the references peek, arrows preview each reference and Enter goes to it and closes the peek, as in VS Code. */
