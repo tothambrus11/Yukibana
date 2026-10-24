@@ -306,6 +306,11 @@ try {
             (init.error ? ` error: ${init.error.message}` : '')
     );
     check(
+        "serverInfo does not name clangd's configured default target, which is not the project's",
+        !/target=/.test(init.result?.serverInfo?.version ?? ''),
+        init.result?.serverInfo?.version
+    );
+    check(
         'yukibana/loading reports clangd.wasm and sysroot.tar.gz',
         ['clangd.wasm', 'sysroot.tar.gz'].every((l) =>
             loads.some((m) => m.params.label === l && m.params.loaded === m.params.total && m.params.total > 0)

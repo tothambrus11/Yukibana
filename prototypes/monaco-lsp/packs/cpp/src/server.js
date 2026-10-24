@@ -114,7 +114,18 @@ function writeStdoutByte(byte) {
     const text = decoder.decode(outBuf.subarray(0, outLen));
     outLen = 0;
     bodyLength = -1;
-    post(JSON.parse(text));
+    post(withoutDefaultTarget(JSON.parse(text)));
+}
+
+// clangd's version string ends in "; target=<its LLVM_DEFAULT_TARGET_TRIPLE>",
+// the triple it was configured with (x86_64-linux-musl, see build.sh), which
+// says nothing about the project: the target is the one compile_flags.txt
+// names, or wasm32-wasip1. The app shows serverInfo in its status bar, where
+// it read as the selected target and never changed, so it is dropped there.
+function withoutDefaultTarget(message) {
+    const info = message.result?.serverInfo;
+    if (typeof info?.version === 'string') info.version = info.version.replace(/;\s*target=\S+/, '');
+    return message;
 }
 
 // ---- stderr: clangd's log, one line per window/logMessage.
