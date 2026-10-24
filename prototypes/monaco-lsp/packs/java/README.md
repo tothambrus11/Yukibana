@@ -94,6 +94,19 @@ Headless Chromium on a 4-core x86-64 Linux container (`test.mjs`,
 * Output: 100,000 printed lines (589,000 characters) arrive in about 190
   messages in 1.5 s.
 
+## Optimization: not offered
+
+TeaVM compiles every Run at `TeaVMOptimizationLevel.ADVANCED`, the level
+`teavm-javac`'s `Compiler.java` sets (the context of our patch). TeaVM has
+three: `SIMPLE` (fewer passes, for debugging), `ADVANCED` and `FULL` (also
+whole-program inlining, slower to compile). Choosing one would need the
+level passed through `compiler.wasm`'s entry point, so a rebuild of the
+compiler (about 10 minutes of Gradle), and the levels change how long
+TeaVM takes (2 s of the sample's 2.7 s Run) more than how a student's
+program behaves; javac itself has no optimisation levels. Not measured;
+the app's Optimization select is not shown for Java. Download's Maven
+project runs on the JVM, whose JIT has no level either.
+
 ## What we changed
 
 `teavm-javac.patch` (upstream files), `compiler/` (our Java, built into

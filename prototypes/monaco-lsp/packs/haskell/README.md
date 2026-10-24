@@ -176,6 +176,20 @@ toolchain installed.
   stalled for tens of seconds). The runner is therefore reused across runs;
   only Stop starts a new one.
 
+## Optimization: not offered
+
+Run loads the project into GHC's bytecode interpreter, as `runghc` and
+GHCi do, and GHC ignores `-O` for interpreted code unless
+`-fno-unoptimized-core-for-interpreter` is also given (experimental, per
+GHC 9.14's user guide). Measured with both flags on a strict fold, a list
+comprehension, a `Data.Map` build and an `Integer` sum: the first run took
+30.4 s against 17.7 s without them (the optimiser runs in the browser's
+GHC before anything executes), and the second run in the same session did
+not finish in 600 s. Compiling to wasm code instead (`-fobject-code`) would
+need a linker and a code generator per Run in the browser, which this pack
+does not have. So the app's Optimization select is not shown for Haskell;
+Download's cabal project builds with cabal's default, `-O1`.
+
 ## Licences
 
 GHC and its libraries (BSD-3-Clause and others: `LICENSE-ghc-and-libraries.txt`

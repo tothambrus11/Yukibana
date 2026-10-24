@@ -138,6 +138,12 @@ plugin with the entry's `MainKt` class, `kotlin.test` on JUnit 5) and
   declarations after it until it is closed (a text fallback keeps member
   completion working for top-level `val x = Class(…)`).
 
+## Optimization: not offered
+
+There is no Run for Kotlin ("Why no Run"), so nothing to optimise; the
+app's Optimization select is not shown. Download's Gradle project builds
+for the JVM, where kotlinc has no optimisation levels.
+
 ## Licences
 
 web-tree-sitter (`LICENSE-web-tree-sitter.txt`) and tree-sitter-kotlin

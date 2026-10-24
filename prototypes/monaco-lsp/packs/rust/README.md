@@ -278,6 +278,21 @@ there are no procedural macros here (and it is unmaintained since 2020).
 Writing a mutation runner for this pack would be a new tool, not an
 existing one, which this pack does not do.
 
+## Optimization: not offered
+
+Run never compiles to machine code: Miri interprets the program's MIR, so
+there is no optimisation level in the sense of `cargo build --release`
+(Cargo's `opt-level` is LLVM's, and Miri never runs LLVM). The only knob
+left is rustc's MIR optimiser, `-Zmir-opt-level`, which Miri keeps at 0 on
+purpose: MIR optimisations may remove undefined behaviour that Miri exists
+to report. Measured anyway (a loop over a `Copy` struct, an iterator chain,
+a sort of 50,000 numbers; Chromium, 4 cores): the default 59.9 s, level 1
+60.7 s, level 2 54.5 s, level 3 48.7 s. Up to a fifth faster at the
+price of detecting less undefined behaviour, and not what the same code
+does at `--release` (where it would take milliseconds), so a level here
+would mislead more than it helps. The app's Optimization select is not
+shown for Rust.
+
 ## Alternatives considered
 
 - **The `rust-analyzer` binary on WASI**: needs threads (its main loop,

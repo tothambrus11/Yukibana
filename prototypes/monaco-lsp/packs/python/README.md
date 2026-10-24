@@ -400,6 +400,13 @@ rewritten, and none is faked:
 A tool that mutated the AST and re-ran pytest in the same interpreter would
 be a new tool, not one of these.
 
+## Optimization: not offered
+
+CPython's `-O` (and `-OO`) does not make code faster: it removes `assert`
+statements and `if __debug__:` blocks (and `-OO` docstrings), which would
+silently turn off the assertions students' tests and programs rely on.
+Pyodide has no JIT. The app's Optimization select is not shown for Python.
+
 ## Limits
 
 * **`crossOriginIsolated` is needed for stdin.** Without it the app passes

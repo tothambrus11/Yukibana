@@ -300,6 +300,14 @@ and are reported; bare imports (`'lodash'`) fail, since there are no
 packages but fast-check (see "Packages"); the program runs in a worker, so
 there is no DOM.
 
+## Optimization: not offered
+
+JavaScript and TypeScript have no optimisation level to choose: TypeScript
+is only stripped of its types, and the browser's engine (V8 in Chromium)
+decides by itself which functions to optimise, as it runs. The app's
+Optimization select is not shown for JavaScript, TypeScript or web
+projects.
+
 ## Environment
 
 What a program run with **Run** (or **Test**) has, checked by

@@ -285,6 +285,16 @@ A project whose PHP files use `Eris\` also gets `giorgiosironi/eris`
 it (and PHPUnit 12) for such a project. The sample's tests do not use Eris,
 so its Download stays checkable end to end without `composer install`.
 
+## Optimization: not offered
+
+PHP compiles to opcodes on every run. php-wasm includes OPcache, whose
+optimiser (`opcache.optimization_level`) is off for the command line by
+default; its JIT cannot work in WebAssembly, which cannot generate code at
+run time. Measured with `-d opcache.enable_cli=1` (a recursive Fibonacci,
+3 million loop iterations, a 300,000-element array filter; Chromium, 4
+cores): 485-587 ms against 517-663 ms without, a difference within
+run-to-run noise. So the app's Optimization select is not shown for PHP.
+
 ## Licences
 
 * php-wasm (Playground's build scripts and loader): GPL-2.0-or-later,
