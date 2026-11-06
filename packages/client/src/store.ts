@@ -12,11 +12,13 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Session, SessionStore } from './session.js';
 
+/** Returns where the terminal's session file lives for `env`, by the order the module header gives. */
 export function defaultSessionPath(env: NodeJS.ProcessEnv = process.env): string {
   const dir = env['YUKIBANA_CONFIG_DIR'] ?? join(env['XDG_CONFIG_HOME'] ?? join(homedir(), '.config'), 'yukibana');
   return join(dir, 'session.json');
 }
 
+/** Returns a session store kept in the file at `path`, written as the module header says. */
 export function fileStore(path: string = defaultSessionPath()): SessionStore {
   return {
     async load() {

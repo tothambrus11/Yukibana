@@ -29,6 +29,7 @@ export interface BundleFile {
   readonly linkTarget?: string;
 }
 
+/** What a submission from a folder would hold, read and checked but not yet sent. */
 export interface SubmissionBundle {
   /** The project the folder's `yukibana.json` names, or null when it names
    *  none (a course repository rather than a starter). `submit` refuses a
@@ -60,6 +61,7 @@ export interface SubmissionBundle {
 
 const NO_CONFIG = `there is no ${CONFIG_FILE} here; submit from the folder the starter unpacked into`;
 
+/** The outcome of bundling a folder: a bundle, or the reasons none could be made, in sentences. */
 export type BundleResult = { ok: true; bundle: SubmissionBundle } | { ok: false; problems: readonly string[] };
 
 /** Returns a bundle of the folder `dir`, which must hold the starter's

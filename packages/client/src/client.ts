@@ -32,12 +32,14 @@ import {
   type Submission,
 } from './lib/wire.js';
 
+/** Where a `YukibanaClient` sends its requests, and as whom. */
 export interface ClientOptions {
   /** The registry, like https://cloud.yukibana.dev */
   readonly url: string;
   /** An access token for the person, asked for before every request so a
    *  provider can refresh it. */
   readonly accessToken: () => Promise<string> | string;
+  /** The fetch to send requests with; the global one when absent. */
   readonly fetch?: typeof fetch;
 }
 
@@ -54,6 +56,7 @@ export class RegistryError extends Error {
   }
 }
 
+/** Which of a project's submissions `submissions` lists; every one the caller may see when empty. */
 export interface SubmissionQuery {
   /** Only each author's newest submission: the ones that count. */
   readonly latest?: boolean;
@@ -61,7 +64,10 @@ export interface SubmissionQuery {
   readonly author?: string;
 }
 
+/** The registry's JSON API, as one person: each method is one request, whose answer is decoded and checked, and a
+ *  refusal is thrown as a `RegistryError`. */
 export class YukibanaClient {
+  /** The registry's origin, like https://cloud.yukibana.dev, without a path. */
   readonly origin: string;
   readonly #token: () => Promise<string> | string;
   readonly #fetch: typeof fetch;
@@ -215,6 +221,7 @@ export class YukibanaClient {
 
 const seg = (id: string): string => encodeURIComponent(id);
 
+/** Returns the sentence an error body gives as its `message`, or the whole text when it is not such a JSON body. */
 export function messageOf(text: string): string {
   try {
     const body = JSON.parse(text) as { message?: unknown };

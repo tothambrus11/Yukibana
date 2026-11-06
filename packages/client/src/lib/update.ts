@@ -99,6 +99,7 @@ export type Change =
   | { readonly kind: 'merge'; readonly path: string; readonly base: Version | null; readonly theirs: Version }
   | { readonly kind: 'choose'; readonly path: string; readonly reason: ChooseReason; readonly base: Version | null; readonly theirs: Version | null };
 
+/** What updating a student's folder to the newest starter would change, path by path. */
 export interface UpdatePlan {
   /** The release the folder is updated to, as the newest starter's config
    *  says; null for a starter built without one. */
@@ -117,6 +118,7 @@ export interface UpdatePlan {
   readonly changes: readonly Change[];
 }
 
+/** The outcome of `planUpdate`: a plan, or the one sentence that says why there is none. */
 export type Planned = { readonly ok: true; readonly plan: UpdatePlan } | { readonly ok: false; readonly problem: string };
 
 /** The paths of `folderPaths` (every file in the folder, relative) whose
@@ -232,7 +234,7 @@ function sameVersion(a: Version | null, b: Version | null): boolean {
   return (a.mode & 0o111) === (b.mode & 0o111) && a.data.length === b.data.length && a.data.every((x, i) => x === b.data[i]);
 }
 
-/** Whether a person would merge the bytes line by line: UTF-8, and no NUL,
+/** `true` iff a person would merge the bytes line by line: UTF-8, and no NUL,
  *  which is how git tells too. */
 export function isText(bytes: Uint8Array): boolean {
   if (bytes.includes(0)) return false;

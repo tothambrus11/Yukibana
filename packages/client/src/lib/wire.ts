@@ -13,8 +13,10 @@ import * as z from 'zod';
 import { _default as withDefault } from 'zod';
 import { fieldOf, nameOf } from './issues.js';
 
+/** A person's role in an edition. */
 export type EditionRole = 'student' | 'assistant' | 'owner';
 
+/** The person the access token is for. */
 export interface Me {
   readonly userId: string;
   readonly email: string | null;
@@ -24,6 +26,7 @@ export interface Me {
   readonly platformRole: string;
 }
 
+/** An edition the caller is enrolled in. */
 export interface Edition {
   readonly editionId: string;
   readonly courseCode: string;
@@ -34,6 +37,7 @@ export interface Edition {
   readonly role: EditionRole;
 }
 
+/** A project the caller may see, with what it means for them. */
 export interface Project {
   readonly projectId: string;
   readonly editionId: string;
@@ -69,6 +73,7 @@ export interface Project {
   readonly myLastSubmittedAt: string | null;
 }
 
+/** The person a submission is by, as far as the caller may see them. */
 export interface Author {
   readonly userId: string;
   readonly fullName: string | null;
@@ -78,6 +83,7 @@ export interface Author {
   readonly email: string | null;
 }
 
+/** A submission's record; the archive itself is downloaded separately. */
 export interface Submission {
   readonly submissionId: string;
   readonly projectId: string;
@@ -96,6 +102,7 @@ export interface Submission {
   readonly baseReleaseId: string | null;
 }
 
+/** A release's record, as staff see it. */
 export interface Release {
   readonly releaseId: string;
   readonly label: string;
@@ -107,6 +114,7 @@ export interface Release {
   readonly viaToken: boolean;
 }
 
+/** An enrolment in an edition. */
 export interface Member {
   readonly email: string;
   readonly role: EditionRole;
@@ -117,12 +125,14 @@ export interface Member {
   readonly githubLogin: string | null;
 }
 
+/** The registry's receipt for a submission it stored. */
 export interface Accepted {
   readonly submissionId: string;
   readonly byteSize: number;
   readonly sha256: string;
 }
 
+/** The registry's receipt for a release it stored: each archive's size in bytes and SHA-256. */
 export interface Published {
   readonly releaseId: string;
   readonly starter: { readonly size: number; readonly sha256: string };

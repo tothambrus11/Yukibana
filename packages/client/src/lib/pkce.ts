@@ -20,8 +20,11 @@ import { createHash, randomBytes } from 'node:crypto';
 
 const base64url = (bytes: Uint8Array): string => Buffer.from(bytes).toString('base64url');
 
+/** A PKCE pair (RFC 7636). */
 export interface Pkce {
+  /** The secret, base64url; it never leaves this process. */
   readonly verifier: string;
+  /** The verifier's S256 challenge, sent with the authorization request. */
   readonly challenge: string;
 }
 
@@ -32,6 +35,7 @@ export function pkce(random: (n: number) => Uint8Array = randomBytes): Pkce {
   return { verifier, challenge: challengeOf(verifier) };
 }
 
+/** Returns the S256 challenge of `verifier`: its SHA-256, base64url without padding. */
 export function challengeOf(verifier: string): string {
   return base64url(createHash('sha256').update(verifier).digest());
 }
