@@ -60,6 +60,18 @@ jobs:
       - name: Unit tests
         run: pnpm test:coverage
 
+      # The library the IDE builds from this repository, and the CLI over it, keep their own checks until PR 3 brings
+      # them into the root's; PR 5's per-package CI replaces this step.
+      - name: Check the client library and the CLI
+        run: |
+          pnpm --filter @yukibana/client run typecheck
+          pnpm --filter @yukibana/client run lint
+          pnpm --filter @yukibana/client test
+          npm --prefix packages/cli ci
+          npm --prefix packages/cli run typecheck
+          npm --prefix packages/cli run lint
+          npm --prefix packages/cli test
+
       - name: Upload coverage report
         uses: actions/upload-artifact@v7
         with:

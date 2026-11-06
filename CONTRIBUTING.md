@@ -98,6 +98,9 @@ Until they join the pnpm workspace, [cloud/web](cloud/web) and [packages/cli](pa
 link: run `pnpm --filter @yukibana/client install` (or `pnpm setup:ide`) at the root first. Their guide is
 [docs/cloud/CLAUDE.md](docs/cloud/CLAUDE.md).
 
+The cloud's devcontainer is not where editors look for one (`.devcontainer/` at the root), so start it from the root
+with `devcontainer up --workspace-folder . --config cloud/dev/.devcontainer/devcontainer.json`.
+
 ## Troubleshooting
 
 ### `Could not resolve path of module: @vscode/windows-ca-certs`

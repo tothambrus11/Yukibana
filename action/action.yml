@@ -48,8 +48,9 @@ runs:
       run: |
         # The CLI (npm) links @yukibana/client (pnpm workspace) as file:../client,
         # and npm installs nothing for a link: the workspace installs the
-        # client's dependencies. The pnpm version is the root's packageManager.
-        npx --yes pnpm@12.8.1 --dir "${{ github.action_path }}/.." --filter @yukibana/client install --frozen-lockfile
+        # client's dependencies, with the pnpm the root's packageManager names.
+        pnpm="$(node -p "require('${{ github.action_path }}/../package.json').packageManager")"
+        npx --yes "$pnpm" --dir "${{ github.action_path }}/.." --filter @yukibana/client install --frozen-lockfile
         # Flags before the command. `npm run build --prefix x` is ambiguous:
         # npm may hand the flag to the script instead of reading it itself.
         npm --prefix "${{ github.action_path }}/../packages/cli" ci

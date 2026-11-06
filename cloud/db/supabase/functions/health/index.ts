@@ -1,4 +1,4 @@
-// Minimal edge function, used by `npm run smoke` to prove the edge runtime is up
+// Minimal edge function, used by `node cloud/dev/scripts/smoke.mjs` to prove the edge runtime is up
 // and that cloud/db/supabase/functions is correctly bind-mounted into it.
 Deno.serve(
   () =>

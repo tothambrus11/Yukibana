@@ -1,5 +1,8 @@
 # Deploying Yukibana Cloud
 
+> The commands and paths below (`app/`, `ops/`, `supabase/`, `scripts/`) are those of the yukibana-cloud repository,
+> which deploys the cloud until it is deployed from here.
+
 One Supabase project (Postgres and Auth), one Cloudflare Worker, one R2
 bucket. Everything below fits the free tier of both, with one caveat: R2 asks
 for a payment method before it will turn on, even though the 10 GB allowance

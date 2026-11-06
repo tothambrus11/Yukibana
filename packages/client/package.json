@@ -5,8 +5,6 @@
   "description": "The library the IDE and the CLI share: the registry client, login and sessions, packing, unpacking and assembly of Yukibana course projects.",
   "license": "MIT",
   "type": "module",
-  "main": "lib/library.js",
-  "types": "lib/library.d.ts",
   "exports": {
     ".": {
       "types": "./lib/library.d.ts",
@@ -18,21 +16,9 @@
     },
     "./package.json": "./package.json"
   },
-  "typesVersions": {
-    "*": {
-      "config": [
-        "lib/lib/yukibana.d.ts"
-      ]
-    }
-  },
-  "files": [
-    "lib"
-  ],
-  "engines": {
-    "node": ">=22.15"
-  },
   "scripts": {
     "build": "tsc --build tsconfig.build.json",
+    "clean": "tsc --build --clean tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --type-aware --deny-warnings",

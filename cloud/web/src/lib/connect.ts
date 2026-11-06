@@ -2,7 +2,7 @@
  *  website: what `/auth/connect` accepts and where it sends the browser,
  *  decided without asking anyone.
  *
- *  The CLI (or the IDE through `@yukibana/cli`) listens on 127.0.0.1 and
+ *  The CLI (or the IDE through `@yukibana/client`) listens on 127.0.0.1 and
  *  opens `/auth/connect` with a PKCE challenge, its loopback address and a
  *  state of its own. The person logs in to the website as usual (GitHub or
  *  an emailed code), sees whom they are signed in as, and confirms. Only

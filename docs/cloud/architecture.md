@@ -16,7 +16,7 @@ is how the code inside them is written.
 | **The Worker** | The SvelteKit app in `cloud/web/`, built by `adapter-cloudflare` into one Cloudflare Worker. It serves the pages and the JSON API under `/api/`, and holds no state between requests. | `cloud/web/`, configured by `cloud/web/wrangler.jsonc` |
 | **Postgres** | Supabase's database. The schema, every policy, every function that writes, the roles the Worker connects as, and the audit log. | `cloud/db/supabase/migrations/`, plus `cloud/db/ops/bootstrap.sql` for passwords |
 | **Supabase Auth** | Who someone is: an account per verified address, proved by GitHub (an OAuth App) or by a one-time code mailed through Resend. It issues the JWTs everything else trusts. | `cloud/db/supabase/config.toml`, pushed by the deploy |
-| **Supabase Realtime** | Private broadcast topics that tell open pages "this edition changed". It carries news, never data. | the `live_signals` migration, checked by `ops/realtime-policies.sql` |
+| **Supabase Realtime** | Private broadcast topics that tell open pages "this edition changed". It carries news, never data. | the `live_signals` migration, checked by `cloud/db/ops/realtime-policies.sql` |
 | **Hyperdrive** | Cloudflare's pool in front of Postgres. The Worker opens a client per request; Hyperdrive keeps the real connections. | the `hyperdrive` binding in `wrangler.jsonc` |
 | **The bucket** | The bytes: release archives and submissions. R2 in production, RustFS locally and in CI, both spoken to over S3. | `cloud/web/src/lib/server/storage.ts`, `cloud/dev/compose.yml` |
 
