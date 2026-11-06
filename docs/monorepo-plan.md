@@ -441,15 +441,12 @@ switch to `zod/mini`.
   is then kept (an adapter over v2 or its own handlers) is decided when v2 exists.
 - **Submitting keeps working in every API version that exists.** The submit flow (login and refresh, `/me`, the
   project lookup, `POST /submissions`) is the last thing an old version may lose.
-- An API version is retired only when the usage counts (§8.3) show no client using it for a whole term.
 
 ### 8.3 Clients and `minClient`
 
 - Every request sends `Yukibana-Client: ide/1.4.0` or `cli/1.4.0`. The host injects its version into
   `@yukibana/client` (Electron's `app.getVersion()`, the CLI's version inlined at build), because the client package
   itself stays `0.0.0-dev`.
-- The Worker counts requests per client and version per day in a database table, so retiring an API version is based
-  on data; Workers logs don't keep a term's history.
 - Settings in a database row, edited on the admin page (an emergency can't wait for a PR and a deploy):
   `minClient`, `blockBelow`. `GET /api/v1/meta` returns them.
 - **`minClient` is advice.** Below it:
@@ -626,6 +623,8 @@ updater extension to learn from).
   deadlines, and a machine-level switch to turn updates off for managed labs.
 - A job that runs the previous release's CLI against a PR's cloud, once API compatibility matters (after `v1.0.0`).
 - SchemaStore registration of the JSON Schema.
+- Per-client usage counts, if retiring an API version ever needs data. Not a table in `public`: `tests.fingerprint()`
+  would see every GET, and token requests have no table grant.
 
 ## 16. Open questions
 
@@ -658,7 +657,7 @@ PRs, each with a conventional title:
 6. `docs: merge the contributor guides`.
 7. `feat(project-schema)!: strict versioned yukibana.json with typed migrations` (+ `yukibana.release.json`, corpus,
    JSON Schemas served per version, `config init`/`upgrade`).
-8. `refactor(api)!: one API definition and /api/v1` (+ `/api/v1/meta`, settings row and admin page, usage counts,
+8. `refactor(api)!: one API definition and /api/v1` (+ `/api/v1/meta`, settings row and admin page,
    `Yukibana-Client`).
 9. `chore: add the MIT license and third-party notices` (after O2).
 10. `ci: tag-driven release of the IDE and CLI` (+ smoke tests, drafts, npm publishing, the Action, the `/updates` and
