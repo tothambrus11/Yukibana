@@ -20,7 +20,7 @@ export async function readArchive(bytes: Uint8Array): Promise<Entry[]> {
   return readTar(await gunzip(bytes));
 }
 
-/** Whether `dir` is missing or empty: the only places this writes into. */
+/** `true` iff `dir` is missing or empty: the only places this writes into. */
 export async function isEmptyDir(dir: string): Promise<boolean> {
   try {
     return (await readdir(dir)).length === 0;

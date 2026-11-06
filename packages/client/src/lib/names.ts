@@ -8,6 +8,7 @@
  *  and that no two students share, ignoring case (macOS and Windows do).
  */
 
+/** A student as `folderNames` names them: their account id, which is unique, and whatever names the registry has for them, any of which may be missing. */
 export interface Person {
   readonly userId: string;
   readonly fullName: string | null;

@@ -1,7 +1,7 @@
 /** From a repository snapshot to the archive a student downloads.
  *
  *  Pure: entries in, entries out, plus what was removed and what was wrong.
- *  The builder (../build.ts) reads the tree and writes the archives; this is
+ *  The builder (packages/cli/src/build.ts) reads the tree and writes the archives; this is
  *  the part worth testing in a table.
  */
 
@@ -9,6 +9,8 @@ import { matcher } from './glob.js';
 import type { Entry } from './tar.js';
 import { CONFIG_FILE, IDE_STATE, buildOutput, excludes, manifestProblems, parseConfig, starterConfig, type Config } from './yukibana.js';
 
+/** What `planStarter` makes of a snapshot: the starter's entries, what was hidden, and what was wrong.
+ *  The build may proceed iff `problems` is empty; `config` is null only when `problems` says why. */
 export interface Plan {
   /** What goes in the starter, under `folder/`, a directory entry first. */
   readonly entries: readonly Entry[];

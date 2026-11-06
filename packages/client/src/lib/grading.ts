@@ -23,6 +23,7 @@ export interface ReleaseRef {
  *  default), the newest, or one release of the project by id. */
 export type Wanted = 'own' | 'newest' | { readonly releaseId: string };
 
+/** The releases an assembly of one submission takes, as `chooseReleases` decides them: the one it grades against and the one the student started from. */
 export interface Choice<R extends ReleaseRef> {
   /** The release whose read-only and hidden files the assembly takes. */
   readonly grade: R;
