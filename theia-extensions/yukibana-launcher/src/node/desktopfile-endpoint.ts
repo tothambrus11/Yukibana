@@ -9,11 +9,9 @@
 
 import { EnvVariablesServer } from '@theia/core/lib/common/env-variables';
 import { BackendApplicationContribution } from '@theia/core/lib/node/backend-application';
-import { Application, Router } from '@theia/core/shared/express';
+import { Application, json, Request, Response, Router } from '@theia/core/shared/express';
 import { inject, injectable } from '@theia/core/shared/inversify';
-import { json } from 'body-parser';
 import { execFile } from 'child_process';
-import { Request, Response } from 'express-serve-static-core';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { getStorageFilePath } from './launcher-util';
@@ -28,7 +26,6 @@ interface DesktopFileInformation {
 // Taken from https://github.com/eclipse-theia/theia-ide/blob/master/theia-extensions/launcher/src/node/desktopfile-endpoint.ts
 @injectable()
 export class YukibanaDesktopFileServiceEndpoint implements BackendApplicationContribution {
-
     protected static PATH = '/desktopfile';
     protected static STORAGE_FILE_NAME = 'desktopfile.json';
 
@@ -119,7 +116,9 @@ export class YukibanaDesktopFileServiceEndpoint implements BackendApplicationCon
                             if (pngFile) {
                                 unpackedImagePath = path.join(appDir, pngFile);
                             }
-                        } catch { /* ignore */ }
+                        } catch {
+                            /* ignore */
+                        }
                     }
                     if (fs.existsSync(unpackedImagePath)) {
                         fs.copyFileSync(unpackedImagePath, imagePath);

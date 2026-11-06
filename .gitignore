@@ -10,6 +10,7 @@
 *.log
 **/test-screenshots
 **/test-results
-**/allure-results
+**/playwright-report
 **/coverage
-.nyc_output
+
+.idea

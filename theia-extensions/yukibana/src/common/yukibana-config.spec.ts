@@ -2,24 +2,27 @@
  * SPDX-License-Identifier: MIT
  */
 import { expect } from 'chai';
-import { loadConfig } from './yukibana-config';
+import { describe, it } from 'vitest';
+import { DEFAULT_CONFIG, loadConfig } from './yukibana-config';
 
 interface ConfigError {
-    key: string[]
+    key: string[];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    value: any
+    value: any;
 }
 
 /* eslint-disable no-null/no-null */
 describe('loadConfig', () => {
     it('should provide defaults for an empty config', () => {
-        const config = loadConfig({});
+        const config = loadConfig('{}');
+        expect(config).to.be.deep.equal(DEFAULT_CONFIG);
         expect(config).to.be.deep.equal({
             assignmentFile: 'ASSIGNMENT.md',
             features: {
                 codeSuggestions: true,
                 squiggles: true,
                 ai: true,
+                codeLenses: true,
             },
             layout: {
                 widgets: {
@@ -37,10 +40,17 @@ describe('loadConfig', () => {
             openFiles: [],
             readOnly: [],
             submission: {
+                include: null,
+                exclude: [],
                 respectGitignore: true,
                 target: 'cloud',
+                filename: 'submission.tar.gz',
+                maxBytes: 32 * 1024 * 1024,
             },
-            projectId: '',
+            telemetry: {
+                liveTypingStats: false,
+            },
+            projectId: null,
         });
     });
 
@@ -50,6 +60,7 @@ describe('loadConfig', () => {
         { key: ['features', 'codeSuggestions'], value: 0 },
         { key: ['features', 'squiggles'], value: 0 },
         { key: ['features', 'ai'], value: 0 },
+        { key: ['features', 'codeLenses'], value: 0 },
         { key: ['layout'], value: [] },
         { key: ['layout', 'widgets'], value: [] },
         { key: ['layout', 'widgets', 'files'], value: 0 },
@@ -68,21 +79,23 @@ describe('loadConfig', () => {
         { key: ['submission', 'exclude'], value: {} },
         { key: ['submission', 'respectGitignore'], value: 0 },
         { key: ['submission', 'target'], value: null },
-        { key: ['projectId'], value: null },
+        { key: ['telemetry'], value: [] },
+        { key: ['telemetry', 'liveTypingStats'], value: 0 },
+        { key: ['projectId'], value: '' },
     ];
 
     errors.forEach(({ key, value }) => {
         it(`should throw an error if ${key.join('.')} is invalid`, () => {
             let config = value;
-            key.reverse().forEach(part => {
+            [...key].reverse().forEach(part => {
                 config = { [part]: config };
             });
-            expect(() => loadConfig(config)).to.throw();
+            expect(() => loadConfig(JSON.stringify(config))).to.throw(`"${key.join('.')}"`);
         });
     });
 
     it('should accept extra parameters', () => {
-        expect(() => loadConfig({ extraParameter: 'value' })).to.not.throw();
+        expect(() => loadConfig('{"extraParameter": "value"}')).to.not.throw();
     });
 
     it('should accept a well-formed config', () => {
@@ -92,6 +105,7 @@ describe('loadConfig', () => {
                 codeSuggestions: false,
                 squiggles: false,
                 ai: false,
+                codeLenses: false,
             },
             layout: {
                 widgets: {
@@ -104,31 +118,28 @@ describe('loadConfig', () => {
                     aiChat: false,
                 },
                 containers: {
-                    'container1': false,
+                    container1: false,
                 },
                 views: {
-                    'view1': false,
+                    view1: false,
                 },
             },
-            openFiles: [
-                'open-file.txt',
-            ],
-            readOnly: [
-                'read-only.txt',
-            ],
+            openFiles: ['open-file.txt'],
+            readOnly: ['read-only.txt'],
             submission: {
-                include: [
-                    'to-include.txt',
-                ],
-                exclude: [
-                    'to-exclude.txt',
-                ],
+                include: ['to-include.txt'],
+                exclude: ['to-exclude.txt'],
                 respectGitignore: false,
                 target: 'custom',
+                filename: 'submission.tar.gz',
+                maxBytes: 32 * 1024 * 1024,
             },
-            projectId: 'a-project-id',
+            telemetry: {
+                liveTypingStats: true,
+            },
+            projectId: '01a11653-0353-7389-81f4-01837a3ed666',
         };
         const toLoad = { ...config, extraParameter: 'value' };
-        expect(loadConfig(toLoad)).to.deep.equal(config);
+        expect(loadConfig(JSON.stringify(toLoad))).to.deep.equal(config);
     });
 });

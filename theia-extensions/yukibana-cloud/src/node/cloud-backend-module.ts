@@ -4,34 +4,66 @@
 import { ConnectionHandler, RpcConnectionHandler } from '@theia/core';
 import { LocalizationContribution } from '@theia/core/lib/node/i18n/localization-contribution';
 import { ContainerModule } from '@theia/core/shared/inversify';
+import { IdentityProviderContribution } from 'yukibana-ext/lib/node/identity-service';
 import { AuthClient, cloudAuthPath, CloudService, cloudServicePath } from '../common/cloud-protocol';
+import { OpenWorkspacesClient, openWorkspacesPath } from '../common/open-workspaces-protocol';
 import { CloudAuthImpl } from './cloud-auth';
 import { CloudClient } from './cloud-client';
+import { CloudIdentityProvider } from './cloud-identity-provider';
 import { YukibanaCloudLocalizationContribution } from './cloud-localization-contribution';
 import { CloudServiceImpl } from './cloud-service';
 import { CloudSessionManager } from './cloud-session-manager';
+import { OpenWorkspaces, OpenWorkspacesServerImpl } from './open-workspaces';
+import { UpdateService, updateServicePath } from '../common/update-protocol';
+import { UpdateServiceImpl } from './update/update-service';
 
-export default new ContainerModule(bind => {
+export default new ContainerModule((bind, unbind, isBound, rebind) => {
     bind(CloudSessionManager).toSelf().inSingletonScope();
 
     bind(CloudAuthImpl).toSelf().inTransientScope();
-    bind(ConnectionHandler).toDynamicValue(
-        ctx => new RpcConnectionHandler<AuthClient>(cloudAuthPath, client => {
-            const server = ctx.container.get(CloudAuthImpl);
-            server.setClient(client);
-            client.onDidCloseConnection(() => server.dispose());
-            return server;
-        })
-    ).inSingletonScope();
+    bind(ConnectionHandler)
+        .toDynamicValue(
+            ctx =>
+                new RpcConnectionHandler<AuthClient>(cloudAuthPath, client => {
+                    const server = ctx.container.get(CloudAuthImpl);
+                    server.setClient(client);
+                    client.onDidCloseConnection(() => server.dispose());
+                    return server;
+                }),
+        )
+        .inSingletonScope();
 
     bind(CloudServiceImpl).toSelf().inSingletonScope();
     bind(CloudService).toService(CloudServiceImpl);
-    bind(ConnectionHandler).toDynamicValue(
-        ctx => new RpcConnectionHandler(cloudServicePath, () => ctx.container.get(CloudService))
-    ).inSingletonScope();
+    bind(ConnectionHandler)
+        .toDynamicValue(ctx => new RpcConnectionHandler(cloudServicePath, () => ctx.container.get(CloudService)))
+        .inSingletonScope();
 
     bind(CloudClient).toSelf().inSingletonScope();
 
+    bind(UpdateServiceImpl).toSelf().inSingletonScope();
+    bind(UpdateService).toService(UpdateServiceImpl);
+    bind(ConnectionHandler)
+        .toDynamicValue(ctx => new RpcConnectionHandler(updateServicePath, () => ctx.container.get(UpdateService)))
+        .inSingletonScope();
+
+    bind(OpenWorkspaces).toSelf().inSingletonScope();
+    bind(OpenWorkspacesServerImpl).toSelf().inTransientScope();
+    bind(ConnectionHandler)
+        .toDynamicValue(
+            ctx =>
+                new RpcConnectionHandler<OpenWorkspacesClient>(openWorkspacesPath, client => {
+                    const server = ctx.container.get(OpenWorkspacesServerImpl);
+                    server.setClient(client);
+                    client.onDidCloseConnection(() => server.dispose());
+                    return server;
+                }),
+        )
+        .inSingletonScope();
+
     bind(YukibanaCloudLocalizationContribution).toSelf().inSingletonScope();
     bind(LocalizationContribution).toService(YukibanaCloudLocalizationContribution);
+
+    bind(CloudIdentityProvider).toSelf().inSingletonScope();
+    bind(IdentityProviderContribution).toService(CloudIdentityProvider);
 });

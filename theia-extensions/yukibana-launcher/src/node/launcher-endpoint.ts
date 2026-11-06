@@ -11,10 +11,9 @@ import { ILogger } from '@theia/core/lib/common';
 import { EnvVariablesServer } from '@theia/core/lib/common/env-variables';
 import URI from '@theia/core/lib/common/uri';
 import { BackendApplicationContribution } from '@theia/core/lib/node/backend-application';
-import { Application, Request, Response, Router } from '@theia/core/shared/express';
+import { Application, json, Request, Response, Router } from '@theia/core/shared/express';
 import { inject, injectable } from '@theia/core/shared/inversify';
 import * as sudo from '@vscode/sudo-prompt';
-import { json } from 'body-parser';
 import * as fs from 'fs-extra';
 import * as os from 'os';
 import * as path from 'path';
@@ -157,16 +156,18 @@ setsid -f ${t} "$@" >> ${l} 2>&1 < /dev/null
             fs.writeFileSync(tmpFile, this.buildLauncherScript(target!, logFile), { mode: 0o755 });
             const command = `mv ${this.bashQuote(tmpFile)} ${this.bashQuote(launcher)} && chmod 755 ${this.bashQuote(launcher)}`;
             sudo.exec(command, { name: sudoPromptName }, () => {
-                try { fs.removeSync(tmpDir); } catch { /* best effort */ }
+                try {
+                    fs.removeSync(tmpDir);
+                } catch {
+                    /* best effort */
+                }
             });
         }
 
         const storageFile = await getStorageFilePath(this.envServer, YukibanaLauncherServiceEndpoint.STORAGE_FILE_NAME);
         const data = fs.existsSync(storageFile) ? await this.readLauncherPathsFromStorage(storageFile) : [];
         const filtered = data.filter(existing => existing.source !== launcher);
-        const entry: PathEntry = shouldCreateLauncher
-            ? { source: launcher, target }
-            : { source: launcher };
+        const entry: PathEntry = shouldCreateLauncher ? { source: launcher, target } : { source: launcher };
         fs.outputJSONSync(storageFile, [...filtered, entry]);
 
         response.sendStatus(200);

@@ -1,25 +1,21 @@
 /**
  * SPDX-License-Identifier: MIT
  */
+// @vitest-environment jsdom
 /* eslint-disable no-null/no-null */ // the registry sends missing account details as null
-import { FrontendApplicationConfigProvider } from '@theia/core/lib/browser/frontend-application-config-provider';
-import { enableJSDOM } from '@theia/core/lib/browser/test/jsdom';
-
-const disableJSDom = enableJSDOM();
-FrontendApplicationConfigProvider.set({});
-
-import { ILogger, URI } from '@theia/core';
+import { ILogger } from '@theia/core';
 import { Deferred } from '@theia/core/lib/common/promise-util';
 import { MockLogger } from '@theia/core/lib/common/test/mock-logger';
-import { expect } from 'chai';
 import { Project } from '@yukibana/cli';
+import { expect } from 'chai';
+import { describe, it } from 'vitest';
 import { CanSubmitStatus, CloudAccount, CloudAuth, CloudService, SubmissionResult } from '../common/cloud-protocol';
-import { CloudAccountService } from './cloud-account-service';
+import { NO_UPDATE, UpdateState } from '../common/update-protocol';
 import { ACCOUNT_ACTIONS_GROUP, ACCOUNT_INFO_GROUP, accountMenuItems, accountStatusBarEntry } from './cloud-account-menu';
+import { CloudAccountService } from './cloud-account-service';
 import { AuthClientImpl } from './cloud-auth-client';
 import { CloudSubmissionTarget } from './cloud-submission-target';
-
-disableJSDom();
+import { UpdateCheck } from './update/update-check';
 
 const account: CloudAccount = {
     userId: '095fc917-0000-0000-0000-000000000000',
@@ -29,7 +25,7 @@ const account: CloudAccount = {
     platformRole: 'admin',
 };
 
-function setupAccounts(whoAmI: () => Promise<CloudAccount | undefined>): { accounts: CloudAccountService, authClient: AuthClientImpl } {
+function setupAccounts(whoAmI: () => Promise<CloudAccount | undefined>): { accounts: CloudAccountService; authClient: AuthClientImpl } {
     const auth = { whoAmI };
     const authClient = new AuthClientImpl();
     const accounts = new CloudAccountService();
@@ -133,21 +129,29 @@ describe('CloudAccountService', () => {
     });
 
     it('should keep the error if the registry cannot be reached', async () => {
-        const { accounts } = setupAccounts(async () => { throw new Error('fetch failed'); });
+        const { accounts } = setupAccounts(async () => {
+            throw new Error('fetch failed');
+        });
         await accounts.refresh();
         expect(accounts.state).to.deep.equal({ kind: 'error', reason: 'fetch failed' });
     });
 
     it('should share a check already under way', async () => {
         let calls = 0;
-        const { accounts } = setupAccounts(async () => { calls++; return account; });
+        const { accounts } = setupAccounts(async () => {
+            calls++;
+            return account;
+        });
         await Promise.all([accounts.refresh(), accounts.refresh()]);
         expect(calls).to.equal(1);
     });
 
     it('should not share a check that began before a login changed', async () => {
         let calls = 0;
-        const { accounts, authClient } = setupAccounts(async () => { calls++; return account; });
+        const { accounts, authClient } = setupAccounts(async () => {
+            calls++;
+            return account;
+        });
         const before = accounts.refresh();
         authClient.notifyLoginChanged();
         await Promise.all([before, accounts.refresh()]);
@@ -192,7 +196,10 @@ describe('CloudAccountService', () => {
 describe('CloudSubmissionTarget', () => {
     const project = { projectId: 'project', courseCode: 'OS', editionLabel: '2026.Q1', role: 'owner' } as Project;
 
-    function setupTarget(current: CloudAccount | undefined, options: { result?: SubmissionResult, status?: CanSubmitStatus, info?: Project } = {}): CloudSubmissionTarget {
+    function setupTarget(
+        current: CloudAccount | undefined,
+        options: { result?: SubmissionResult; status?: CanSubmitStatus; info?: Project; update?: UpdateState } = {},
+    ): CloudSubmissionTarget {
         const { accounts } = setupAccounts(async () => current);
         const target = new CloudSubmissionTarget();
         Object.assign(target, {
@@ -201,9 +208,24 @@ describe('CloudSubmissionTarget', () => {
                 canSubmitProject: async () => ({ status: options.status ?? CanSubmitStatus.OPEN, project: options.info }),
             } as unknown as CloudService,
             accounts,
+            updates: { refresh: async () => options.update ?? NO_UPDATE } satisfies UpdateCheck,
         });
         return target;
     }
+
+    it('should let a student submit without a note when their project has the newest version', async () => {
+        const availability = await setupTarget(account).getAvailability('project');
+        expect(availability).to.deep.equal({ available: true });
+    });
+
+    it('should tell a student who submits late that a newer version of the assignment is waiting', async () => {
+        const update: UpdateState = { rolledBack: false, available: { from: 'a', to: 'b', projectTitle: 'Warm-up', decided: [], pending: [] } };
+        const availability = await setupTarget(account, { status: CanSubmitStatus.LATE, update }).getAvailability('project');
+        expect(availability.available).to.equal(true);
+        if (availability.available) {
+            expect(availability.message).to.match(/^You are late but you can still submit\. Hurry up\. Your teacher published a newer version/);
+        }
+    });
 
     it('should say which account and role is not allowed to submit', async () => {
         const target = setupTarget(account, { status: CanSubmitStatus.NOT_ALLOWED, info: project });
@@ -235,7 +257,7 @@ describe('CloudSubmissionTarget', () => {
 
     it('should say which account a refused submission was made with', async () => {
         const target = setupTarget(account, { result: { ok: false, reason: 'the registry answered 403: This project is not accepting submissions from you now.' } });
-        const result = await target.submit('project', new URI('file:///submission.tar.zst'));
+        const result = await target.submit('project', 'submission-1');
         expect(result).to.deep.equal({
             ok: false,
             reason: 'the registry answered 403: This project is not accepting submissions from you now. (logged in as ambrus@example.com)',
@@ -244,12 +266,12 @@ describe('CloudSubmissionTarget', () => {
 
     it('should leave the reason alone if nobody is logged in', async () => {
         const target = setupTarget(undefined, { result: { ok: false, reason: 'not logged in' } });
-        expect(await target.submit('project', new URI('file:///submission.tar.zst'))).to.deep.equal({ ok: false, reason: 'not logged in' });
+        expect(await target.submit('project', 'submission-1')).to.deep.equal({ ok: false, reason: 'not logged in' });
     });
 
     it('should pass a successful submission through', async () => {
         const accepted = { ok: true, submissionId: 'submission', byteSize: 1, sha256: '00' } as SubmissionResult;
         const target = setupTarget(account, { result: accepted });
-        expect(await target.submit('project', new URI('file:///submission.tar.zst'))).to.equal(accepted);
+        expect(await target.submit('project', 'submission-1')).to.equal(accepted);
     });
 });

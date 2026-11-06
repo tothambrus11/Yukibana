@@ -1,12 +1,7 @@
 /**
  * SPDX-License-Identifier: MIT
  */
-import { FrontendApplicationConfigProvider } from '@theia/core/lib/browser/frontend-application-config-provider';
-import { enableJSDOM } from '@theia/core/lib/browser/test/jsdom';
-
-const disableJSDom = enableJSDOM();
-FrontendApplicationConfigProvider.set({});
-
+// @vitest-environment jsdom
 import { Disposable, Emitter, Event, URI } from '@theia/core';
 import { Deferred } from '@theia/core/lib/common/promise-util';
 import { MockLogger } from '@theia/core/lib/common/test/mock-logger';
@@ -14,18 +9,30 @@ import { FileService, ReadTextFileOptions, TextFileContent } from '@theia/filesy
 import { FileChangesEvent, FileChangeType, FileStat, WatchOptions } from '@theia/filesystem/lib/common/files';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
 import { expect } from 'chai';
-import { loadConfig } from '../../common/yukibana-config';
+import { describe, it } from 'vitest';
+import { DEFAULT_CONFIG } from '../../common/yukibana-config';
 import { ConfigProvider } from './config-provider';
 import { ReadOnlyPolicy } from './read-only-policy';
 
+// FileChangeType is an ambient const enum (declared only in a .d.ts), which
+// Vitest's per-file transpilation cannot inline, so spell out its values.
+// See: https://github.com/eclipse-theia/theia/issues/18240
+const UPDATED: FileChangeType = 0;
+const ADDED: FileChangeType = 1;
+const DELETED: FileChangeType = 2;
+
+/** Project ids, which the config only accepts as uuidv7s. */
+const PROJECT_ID = '01a11653-0353-7389-81f4-01837a3ed666';
+const NEW_PROJECT_ID = '01a11653-0353-7389-81f4-01837a3ed667';
+
 interface MockFileService extends Pick<FileService, 'exists' | 'read' | 'watch' | 'onDidFilesChange'> {
-    write(resource: URI, content: string): void
-    delete(resource: URI): void
+    write(resource: URI, content: string): void;
+    delete(resource: URI): void;
 }
 
 interface MockWorkspaceService extends Pick<WorkspaceService, 'ready' | 'onWorkspaceChanged' | 'tryGetRoots'> {
-    markReady(): void
-    setRoot(root: URI): void
+    markReady(): void;
+    setRoot(root: URI): void;
 }
 
 function createMockFileService(files: Record<string, string>): MockFileService {
@@ -49,20 +56,20 @@ function createMockFileService(files: Record<string, string>): MockFileService {
                 value: doc,
             };
         },
-        watch: (resource: URI, options: WatchOptions): Disposable => Disposable.create(
-            () => watched.delete(resource.toString())
-        ),
+        watch: (resource: URI, options: WatchOptions): Disposable => Disposable.create(() => watched.delete(resource.toString())),
         onDidFilesChange: changeEmitter.event,
         write: (resource: URI, content: string) => {
             const path = resource.toString();
             const added = files[path] === undefined;
             files[path] = content;
-            changeEmitter.fire(new FileChangesEvent([
-                {
-                    resource: resource,
-                    type: added ? FileChangeType.ADDED : FileChangeType.UPDATED,
-                }
-            ]));
+            changeEmitter.fire(
+                new FileChangesEvent([
+                    {
+                        resource: resource,
+                        type: added ? ADDED : UPDATED,
+                    },
+                ]),
+            );
         },
         delete: (resource: URI): void => {
             const path = resource.toString();
@@ -70,13 +77,15 @@ function createMockFileService(files: Record<string, string>): MockFileService {
                 return;
             }
             delete files[path];
-            changeEmitter.fire(new FileChangesEvent([
-                {
-                    resource: resource,
-                    type: FileChangeType.DELETED,
-                }
-            ]));
-        }
+            changeEmitter.fire(
+                new FileChangesEvent([
+                    {
+                        resource: resource,
+                        type: DELETED,
+                    },
+                ]),
+            );
+        },
     };
 }
 
@@ -84,20 +93,23 @@ function createMockWorkspaceService(initialRoot?: URI): MockWorkspaceService {
     const ready = new Deferred<void>();
     const changeEmitter = new Emitter<FileStat[]>();
     let root: URI | undefined = initialRoot;
-    const getRoots = (): FileStat[] => root ? [
-        {
-            resource: root,
-            name: root.path.base || root.path.toString(),
-            isFile: false,
-            isDirectory: true,
-            isSymbolicLink: false,
-            isReadonly: false,
-            mtime: 0,
-            ctime: 0,
-            size: 0,
-            etag: '',
-        },
-    ] : [];
+    const getRoots = (): FileStat[] =>
+        root
+            ? [
+                  {
+                      resource: root,
+                      name: root.path.base || root.path.toString(),
+                      isFile: false,
+                      isDirectory: true,
+                      isSymbolicLink: false,
+                      isReadonly: false,
+                      mtime: 0,
+                      ctime: 0,
+                      size: 0,
+                      etag: '',
+                  },
+              ]
+            : [];
     return {
         ready: ready.promise,
         markReady: () => ready.resolve(),
@@ -123,12 +135,7 @@ function setup(initialRoot?: URI): MockServices {
     const fileService = createMockFileService({});
     const workspaceService = createMockWorkspaceService();
     const logger = new MockLogger();
-    const provider = new ConfigProvider(
-        fileService as unknown as FileService,
-        workspaceService as unknown as WorkspaceService,
-        readOnlyPolicy,
-        logger,
-    );
+    const provider = new ConfigProvider(fileService as unknown as FileService, workspaceService as unknown as WorkspaceService, readOnlyPolicy, logger);
     if (!!initialRoot) {
         workspaceService.setRoot(initialRoot);
     }
@@ -142,8 +149,6 @@ function setup(initialRoot?: URI): MockServices {
     };
 }
 
-disableJSDom();
-
 describe('ConfigProvider', () => {
     const root = new URI('file:///');
 
@@ -152,7 +157,7 @@ describe('ConfigProvider', () => {
         await provider.onStart();
 
         const config = await provider.ready;
-        const defaultConfig = loadConfig({});
+        const defaultConfig = DEFAULT_CONFIG;
         expect(config).to.deep.equal(defaultConfig);
     });
 
@@ -161,7 +166,7 @@ describe('ConfigProvider', () => {
         await provider.onStart();
 
         const config = await provider.ready;
-        const defaultConfig = loadConfig({});
+        const defaultConfig = DEFAULT_CONFIG;
         expect(config).to.deep.equal(defaultConfig);
     });
 
@@ -171,48 +176,48 @@ describe('ConfigProvider', () => {
         await provider.onStart();
 
         const config = await provider.ready;
-        const defaultConfig = loadConfig({});
+        const defaultConfig = DEFAULT_CONFIG;
         expect(config).to.deep.equal(defaultConfig);
     });
 
     it('should load a valid config file', async () => {
         const { provider, fileService } = setup(root);
-        fileService.write(root.resolve('yukibana.json'), '{"projectId": "valid-id"}');
+        fileService.write(root.resolve('yukibana.json'), `{"projectId": "${PROJECT_ID}"}`);
         await provider.onStart();
 
         const config = await provider.ready;
-        const defaultConfig = loadConfig({});
-        expect(config).to.deep.equal({ ...defaultConfig, projectId: 'valid-id' });
+        const defaultConfig = DEFAULT_CONFIG;
+        expect(config).to.deep.equal({ ...defaultConfig, projectId: PROJECT_ID });
         expect(config).to.deep.equal(provider.config);
     });
 
     it('should reload if the config has changed', async () => {
         const { provider, fileService } = setup(root);
-        fileService.write(root.resolve('yukibana.json'), '{"projectId": "valid-id"}');
+        fileService.write(root.resolve('yukibana.json'), `{"projectId": "${PROJECT_ID}"}`);
         await provider.onStart();
 
         await provider.ready;
         const configChanged = Event.toPromise(provider.onConfigChanged);
-        fileService.write(root.resolve('yukibana.json'), '{"projectId": "new-id"}');
+        fileService.write(root.resolve('yukibana.json'), `{"projectId": "${NEW_PROJECT_ID}"}`);
         const newConfig = await configChanged;
-        const defaultConfig = loadConfig({});
-        expect(newConfig).to.deep.equal({ ...defaultConfig, projectId: 'new-id' });
+        const defaultConfig = DEFAULT_CONFIG;
+        expect(newConfig).to.deep.equal({ ...defaultConfig, projectId: NEW_PROJECT_ID });
         expect(newConfig).to.deep.equal(provider.config);
     });
 
     it('should reload if the workspace root has changed', async () => {
         const root2 = new URI('file:///root2');
         const { provider, fileService, workspaceService } = setup(root);
-        fileService.write(root.resolve('yukibana.json'), '{"projectId": "valid-id"}');
-        fileService.write(root2.resolve('yukibana.json'), '{"projectId": "new-id"}');
+        fileService.write(root.resolve('yukibana.json'), `{"projectId": "${PROJECT_ID}"}`);
+        fileService.write(root2.resolve('yukibana.json'), `{"projectId": "${NEW_PROJECT_ID}"}`);
         await provider.onStart();
 
         await provider.ready;
         const configChanged = Event.toPromise(provider.onConfigChanged);
         workspaceService.setRoot(root2);
         const newConfig = await configChanged;
-        const defaultConfig = loadConfig({});
-        expect(newConfig).to.deep.equal({ ...defaultConfig, projectId: 'new-id' });
+        const defaultConfig = DEFAULT_CONFIG;
+        expect(newConfig).to.deep.equal({ ...defaultConfig, projectId: NEW_PROJECT_ID });
         expect(newConfig).to.deep.equal(provider.config);
     });
 });

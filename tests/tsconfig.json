@@ -1,21 +1,12 @@
 {
   "extends": "../configs/base.tsconfig.json",
   "compilerOptions": {
-    "composite": true,
-    "lib": [
-      "DOM",
-      "DOM.Iterable",
-      "ESNext"
-    ],
-    "module": "commonjs",
-    "moduleResolution": "node",
-    "outDir": "lib",
-    "baseUrl": ".",
-    "rootDir": "."
+    // Playwright compiles the tests itself.
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "lib": ["DOM", "DOM.Iterable", "ESNext"]
   },
-  "references": [],
-  "include": [
-    "src/**/*",
-    "e2e/**/*"
-  ]
+  "include": ["*.ts", "src/**/*", "e2e/**/*"]
 }

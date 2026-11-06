@@ -3,6 +3,7 @@
  */
 import { Project } from '@yukibana/cli';
 import { expect } from 'chai';
+import { describe, it } from 'vitest';
 import { CanSubmitStatus } from '../common/cloud-protocol';
 import { CloudClient } from './cloud-client';
 import { CloudSessionManager } from './cloud-session-manager';
@@ -11,8 +12,12 @@ const HOUR = 3600 * 1000;
 const at = (offset: number): string => new Date(Date.now() + offset).toISOString();
 
 const open = {
-    projectId: 'project', role: 'student', canSubmit: true,
-    availableAfter: at(-HOUR), deadline: at(HOUR), closesAt: at(2 * HOUR),
+    projectId: 'project',
+    role: 'student',
+    canSubmit: true,
+    availableAfter: at(-HOUR),
+    deadline: at(HOUR),
+    closesAt: at(2 * HOUR),
 } as Project;
 
 async function status(project: Partial<Project>): Promise<CanSubmitStatus> {

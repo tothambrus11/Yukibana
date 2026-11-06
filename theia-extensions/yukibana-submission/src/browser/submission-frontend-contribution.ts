@@ -1,21 +1,24 @@
 /**
  * SPDX-License-Identifier: MIT
  */
-import { Command, CommandContribution, CommandRegistry, CommandService, ContributionProvider, ILogger, MessageService, nls, URI } from '@theia/core';
+import { Command, CommandContribution, CommandRegistry, CommandService, ContributionProvider, ILogger, MessageService, nls } from '@theia/core';
 import { inject, injectable, named } from '@theia/core/shared/inversify';
 import { TelemetryService } from '@theia/telemetry/lib/common';
 import { WorkspaceService } from '@theia/workspace/lib/browser/workspace-service';
 import { ConfigProvider } from 'yukibana-ext/lib/browser/config/config-provider';
-import { SubmissionOptions, SubmissionService } from '../common/submission-protocol';
+import { SubmissionPreview, SubmissionService } from '../common/submission-protocol';
 import { SubmissionResult, SubmissionTarget } from '../common/submission-target';
 import { SubmissionTelemetry } from '../common/submission-telemetry';
 import { SubmissionSummaryDialog } from './submission-summary-dialog';
-import { localizeText } from '../common/localize-text';
+import { localizeMarkdown } from 'yukibana-common/lib/localize-markdown';
 
-export const SubmitCommand: Command = Command.toLocalizedCommand({
-    id: 'yukibana.submitAssignment',
-    label: 'Submit assignment...',
-}, 'yukibana/submission/submitAssignment');
+export const SubmitCommand: Command = Command.toLocalizedCommand(
+    {
+        id: 'yukibana.submitAssignment',
+        label: 'Submit assignment...',
+    },
+    'yukibana/submission/submitAssignment',
+);
 
 @injectable()
 export class SubmitCommandContribution implements CommandContribution {
@@ -32,82 +35,64 @@ export class SubmitCommandContribution implements CommandContribution {
     registerCommands(commands: CommandRegistry): void {
         commands.registerCommand(SubmitCommand, {
             execute: async () => {
-                await this.configProvider.ready;
-                const config = this.configProvider.config;
-                const root = (await this.workspaceService.roots)[0].resource;
-                const options: SubmissionOptions = {
-                    workspaceUri: root.toString(),
-                    include: config.submission.include,
-                    exclude: config.submission.exclude,
-                    respectGitignore: config.submission.respectGitignore,
-                };
-                const preview = await this.submissionService.previewSubmission(options);
-                const projectId = config.projectId;
+                const config = await this.configProvider.ready;
                 const targetId = config.submission.target;
-                const target: SubmissionTarget | undefined = this.getTarget(targetId);
+                const target = this.getTarget(targetId);
                 if (target === undefined) {
-                    this.messageService.error(localizeText('yukibana/submission/unknownTarget', 'Unknown submission target \'{0}\'', targetId));
+                    this.messageService.error(localizeMarkdown('yukibana/submission/unknownTarget', "Unknown submission target '{0}'", targetId));
                     return;
                 }
-                const confirmed = await new SubmissionSummaryDialog(projectId, preview, target, this.commandService).open();
-                if (!confirmed) {
+                const root = (await this.workspaceService.roots)[0].resource;
+                let preview: SubmissionPreview;
+                try {
+                    preview = await this.submissionService.prepare(root.toString());
+                } catch (e) {
+                    this.messageService.error(localizeMarkdown('yukibana/submission/prepareFail', 'Cannot submit this folder: {0}', e instanceof Error ? e.message : String(e)));
                     return;
                 }
-                await this.prepareAndSubmit(targetId, projectId, options);
-            }
+                try {
+                    const projectId = preview.projectId ?? '';
+                    if (await new SubmissionSummaryDialog(projectId, preview, target, this.commandService).open()) {
+                        await this.send(target, projectId, preview);
+                    }
+                } finally {
+                    await this.submissionService.release(preview.id);
+                }
+            },
         });
     }
 
-    private async prepareAndSubmit(target: string, projectId: string, options: SubmissionOptions): Promise<void> {
+    /** Sends `preview`'s submission to `target`, telling the student how it went and reporting it. */
+    private async send(target: SubmissionTarget, projectId: string, preview: SubmissionPreview): Promise<void> {
         const start = Date.now();
-        let stage: SubmissionTelemetry.SubmitStage = 'prepare';
+        const stage: SubmissionTelemetry.SubmitStage = 'transmit';
         let outcome: SubmissionTelemetry.SubmitOutcome = 'error';
-        let outputUri: string | undefined;
         let error: string | undefined;
-
+        const progress = await this.messageService.showProgress({ text: nls.localize('yukibana/submission/submitProgress', 'Submitting') });
         try {
-            const progress = await this.messageService.showProgress({ text: nls.localize('yukibana/submission/submitProgress', 'Submitting') });
+            this.logger.info(`Submitting ${preview.entries.length} files`);
             progress.report({
-                message: nls.localize('yukibana/submission/preparing', 'Preparing...')
+                message: nls.localize('yukibana/submission/transmitting', 'Transmitting...'),
             });
-            const meta = await this.submissionService.prepareSubmission(options);
-            outputUri = meta.outputUri;
-
-            stage = 'transmit';
-
-            this.logger.info(`Prepared submission (${meta.fileCount} files)`);
-            progress.report({
-                message: nls.localize('yukibana/submission/transmitting', 'Transmitting...')
-            });
-            const result = await this.submit(target, projectId, new URI(outputUri));
-            progress.cancel();
+            const result = await this.submit(target, projectId, preview.id);
             if (!result.ok) {
-                this.messageService.error(
-                    localizeText('yukibana/submission/submitFail', 'Failed to submit: {0}', result.reason),
-                    { timeout: 5000 },
-                );
+                this.messageService.error(localizeMarkdown('yukibana/submission/submitFail', 'Failed to submit: {0}', result.reason), { timeout: 5000 });
                 error = result.reason;
                 return;
             }
-
             outcome = 'submitted';
-            this.messageService.info(
-                nls.localize('yukibana/submission/submitSuccess', 'Submitted successfully'),
-                { timeout: 5000 },
-            );
-            this.report(outcome, stage, start, projectId);
+            this.messageService.info(nls.localize('yukibana/submission/submitSuccess', 'Submitted successfully'), { timeout: 5000 });
+        } catch (e) {
+            error = e instanceof Error ? e.message : String(e);
+            this.messageService.error(localizeMarkdown('yukibana/submission/submitFail', 'Failed to submit: {0}', error));
         } finally {
-            if (outcome !== 'submitted') {
-                this.report(outcome, stage, start, projectId, error);
-            }
-            if (!!outputUri) {
-                await this.submissionService.cleanSubmission(outputUri);
-            }
+            progress.cancel();
+            this.report(outcome, stage, start, projectId, error);
         }
     }
 
     private report(outcome: SubmissionTelemetry.SubmitOutcome, stage: SubmissionTelemetry.SubmitStage, start: number, projectId?: string, error?: string): void {
-        const durationMs = (Date.now()) - start;
+        const durationMs = Date.now() - start;
         const data = {
             outcome: outcome,
             stage: stage,
@@ -115,34 +100,23 @@ export class SubmitCommandContribution implements CommandContribution {
             projectId: projectId ?? '',
             error: error ?? '',
         } satisfies SubmissionTelemetry.SubmitData;
-        this.telemetry.report(
-            SubmissionTelemetry.SubmitURI,
-            data,
-            {
-                kind: (outcome === 'submitted' || outcome === 'cancelled') ? 'usage' : 'error',
-            }
-        );
+        this.telemetry.report(SubmissionTelemetry.SubmitURI, data, {
+            kind: outcome === 'submitted' || outcome === 'cancelled' ? 'usage' : 'error',
+        });
     }
 
-    private async submit(targetId: string, projectId: string, archiveURI: URI): Promise<SubmissionResult> {
-        const target: SubmissionTarget | undefined = this.getTarget(targetId);
-        if (target === undefined) {
-            return {
-                ok: false,
-                reason: nls.localize('yukibana/submission/unknownTarget', 'Unknown submission target \'{0}\'', targetId)
-            };
-        }
+    private async submit(target: SubmissionTarget, projectId: string, submissionId: string): Promise<SubmissionResult> {
         const availability = await target.getAvailability(projectId);
         if (!availability.available) {
             return {
                 ok: false,
-                reason: nls.localize('yukibana/submission/targetUnavailable', 'Submission target is unavailable: {0}', availability.reason)
+                reason: nls.localize('yukibana/submission/targetUnavailable', 'Submission target is unavailable: {0}', availability.reason),
             };
         }
-        return target.submit(projectId, archiveURI);
+        return target.submit(projectId, submissionId);
     }
 
     private getTarget(targetId: string): SubmissionTarget | undefined {
-        return this.targets.getContributions().filter(t => t.id === targetId)[0];
+        return this.targets.getContributions().find(t => t.id === targetId);
     }
 }
