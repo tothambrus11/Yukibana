@@ -63,12 +63,14 @@ quit. There's no forced restart and no other rules.
 - Register the `yukibana` npm organisation.
 - An org admin enables the merge queue, the required check, the tag ruleset and the `production`, `preview` and
   `release` environments.
-- Create a Cloudflare API token and move the Supabase secrets to this repository.
+- Create a Cloudflare API token for the cloud and move the Supabase secrets to this repository. The old repository
+  keeps its Cloudflare secrets: they deploy Light.
 
 **3. Steps that are hard to undo**
 
 - **PR 1 must be merged as a merge commit.** A squash flattens the imported history.
-- **The old repository is frozen from day one.** Anything merged there afterwards has to be re-imported by hand.
+- **The old repository's cloud parts are frozen from the import,** after the cloud PRs in flight have merged. Anything
+  merged there afterwards has to be re-imported by hand.
 - **The first npm publish (`v0.1.0`) is permanent.** It uses a short-lived token, because npm can only set up trusted
   publishing for a package that already exists. The trusted publisher must be configured just before the *second*
   release, because npm discards a setup that goes unused for 48 hours.
@@ -80,9 +82,9 @@ quit. There's no forced restart and no other rules.
 - The two course repositories (`LordBaryhobal/yukibana-template-scala`, `demo-project`) need updating right after that.
   Someone should tell their owner.
 
-**5. Spikes to run before any PR**
+**5. Spikes, each before the PR it affects**
 
-Each one could change the design:
+Each one could change the design. Only S2 and S5 gate the merge itself (PRs 1–5):
 
 - **S2: pnpm 12 filtered install with the hoisted linker.** The "don't install the other area" promise depends on it.
   If it fails, the Supabase CLI comes from Nix or the devcontainer instead of npm.

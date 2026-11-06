@@ -188,15 +188,19 @@ named catalogs. Spike S2 also checks that the hoisted `svelte-check` uses `cloud
 
 ### 4.1 Order
 
-1. **Freeze the old repository's cloud parts:** no merges outside `light/` from now until step 6 (if one is needed,
-   it's re-imported by hand). Move its open cloud issues to this repository.
+1. **Freeze the old repository's cloud parts,** once the cloud PRs already in flight there have merged: no merges
+   outside `light/` from then until step 6 (if one is needed, it's re-imported by hand). Move its open cloud issues to
+   this repository.
 2. In a fresh clone of yukibana-cloud, run git-filter-repo (4.2). Merge into a branch of this repo with
    `--allow-unrelated-histories`, fetching with `--no-tags` (the cloud's `light-*`, `haskell-inputs-*` and
    `kotlin-graalvm-*` tags must not reach this repository; the local clone already has some: check
-   `git ls-remote --tags origin` after every push). PR 1 is merged with **"Create a merge commit"**, never squashed.
+   `git ls-remote --tags origin` after every push). Before pushing, check that `git log --all -- light/ demo/` is
+   empty. PR 1 is merged with **"Create a merge commit"**, never squashed.
 3. PRs 2–4 (§17) land the code in its final layout. The cloud keeps deploying from the old repository meanwhile.
-4. PR 5 adds the deploy workflow here. Then: disconnect Workers Builds from the old repository, remove its deploy
-   secrets, and run the first deploy from here. From now on only this repository deploys the cloud.
+4. PR 5 adds the deploy workflow here. Then: disconnect Workers Builds from the old repository, move its database
+   secrets (`SUPABASE_*`, `APP_DB_PASSWORD`, `FIRST_ADMIN_EMAIL`) here, and run the first deploy from here. Its
+   `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` stay: they deploy Light. This repository gets its own Cloudflare
+   token for the cloud Worker. From now on only this repository deploys the cloud.
 5. PRs 6–10. The API change (PR 8) breaks the old Action, and the schema change (PR 7) makes existing starters
    invalid. Both are accepted (no users). Right after PR 10 publishes the first release: purge the existing releases
    in production (or re-publish them), update the two course repositories (`LordBaryhobal/yukibana-template-scala`,
@@ -237,7 +241,8 @@ return re.sub(rb"(?<![\w/])#(\d+)\b", rb"tothambrus11/yukibana-cloud#\1", messag
   link to this repository's PRs and issues.
 - Left out: `light/`, `demo/`, npm lockfiles, `.npmrc`, `.github/` (rewritten), `README.md` (merged by hand),
   `.gitattributes` (this repo's applies), `.gitignore` (merged by hand, §2.1), and the history of directories already
-  deleted on the cloud's `main` (e.g. `integrations/moodle/`).
+  deleted on the cloud's `main` (e.g. `integrations/moodle/`). Also left out: the committed
+  `.wrangler/cache/wrangler-account.json` (removed from the old repository too).
 
 ### 4.3 Conventions
 
@@ -332,6 +337,8 @@ export type V1 = z.output<typeof v1>;
 - No transforms in versioned schemas: a type test checks `z.input<typeof vN>` equals `z.output<typeof vN>`, so what
   `config upgrade` writes always parses back.
 - Any change in meaning is a new version: a new, removed or renamed field, a changed default, a new enum value.
+  So a new language `kind` is a new version, and opening such a project needs a new IDE. That's intended: an older
+  IDE can't run it anyway.
 - `parseProjectFile` reads `version`, parses with that version's schema, then runs the migrations up to the latest.
   A version newer than this program knows fails with "This project needs yukibana.json v3; this IDE reads up to v2",
   and the IDE offers to install the update now (§11). A missing `version` fails naming the field.
@@ -380,8 +387,12 @@ export const fromV1: Migration<V1, V2> = p => exact<V2>()({ ...p, $schema: '.../
   `config.releaseId`), `cli/src/commands/common.ts` (the default project), `cli/src/commands/collect.ts`
   (`claimedRelease`), `lib/yukibana.ts` (`starterConfig`, `sameStudentConfig`, `ALWAYS_EXCLUDED`, `NEVER_SUBMITTED`,
   `protectedPaths`), and in the IDE `theia-extensions/yukibana-cloud/src/browser/welcome/welcome-model.ts`
-  (`projectIdOf`) and `project-locations.ts`, which recognise a folder by its project id.
-- The IDE and the CLI read the same parsed `ProjectFile`.
+  (`projectIdOf`) and `project-locations.ts`, which recognise a folder by its project id, `cloud-service.ts` and
+  `yukibana-submission` (`submission-service.ts`, `submission-frontend-contribution.ts`), which submit for it.
+- The IDE and the CLI read the same parsed `ProjectFile`; the IDE's own parser
+  (`yukibana/src/common/yukibana-config.ts`) is deleted.
+- Whatever brings a newer release into a student's folder (the IDE's assignment updates) checks first that this IDE
+  reads that release's `yukibana.json` version, and otherwise offers the IDE update (§11).
 
 ### 7.4 JSON Schemas
 
@@ -495,7 +506,7 @@ graph, so `packages/api` and `packages/project-schema` count), and by hand (`wor
 - The release job runs `ide/scripts/release-version.mts "$V"`, which writes the version into `ide/electron`,
   `ide/browser` and `packages/cli` in the CI checkout only, before building. Nothing is committed.
 - **The IDE and the CLI always release together under one version.** One tag, one `minClient` number. The cost: CLI
-  versions also go up when only the IDE changed.
+  versions also go up when only the IDE changed, and a CLI-only fix ships as a whole release. Accepted.
 - Release notes: git-cliff from the conventional commits. No changelog file in git.
 - No prerelease channel for now.
 
@@ -538,7 +549,8 @@ publish ─ needs all jobs · environment "release"
   - `/updates/<file with version X>` → that exact file in release `vX` (deterministic, so a release published in
     between can't mix two versions);
   - `/download/windows|linux|macos-arm64|macos-x64` → the newest installer, for the website.
-  It finds the newest release through GitHub's API, cached for a few minutes.
+  It finds the newest release through GitHub's API with a read-only token, cached for a few minutes with the Cache
+  API (unauthenticated calls share 60 an hour per Cloudflare IP). If GitHub fails, it serves the last cached answer.
 - The `yukibana.isc-vs.ch` addresses and the `sed` edit go away.
 - Linux: AppImage only (the `.deb` can't auto-update).
 - macOS: two runners as today (native modules are copied from the host architecture: `nodeGypRebuild: false`,
@@ -634,7 +646,8 @@ updater extension to learn from).
 
 ## 17. Spikes and PR sequence
 
-Spikes first, each a throwaway branch:
+Spikes, each a throwaway branch, run before the PR they affect, not all up front. S2 and S5 gate PRs 1–5; S1 gates
+PR 5; S3 gates PR 7; S6 gates previews (PR 5's preview job can follow later); S4 gates PRs 10–11.
 
 - **S1** release age: Dependabot's pnpm resolution and `pnpm ci` with a too-young lockfile entry.
 - **S2** filtered install on pnpm 12 with the hoisted linker, the `{ide/**}...` selector, root devDependencies,
