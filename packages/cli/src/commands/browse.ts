@@ -1,7 +1,6 @@
 /** Reading the registry as yourself, and the roster writes an owner has. */
 
-import { behind } from '../lib/grading.js';
-import type { EditionRole, Project, Submission } from '../lib/wire.js';
+import { behind, type EditionRole, type Project, type Submission } from '@yukibana/client';
 import { bytes, clientFor, fail, print, projectOf, studentsOf, when, type Invocation } from './common.js';
 
 export async function editions(inv: Invocation): Promise<void> {

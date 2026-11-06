@@ -3,10 +3,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { YukibanaClient } from '../client.js';
-import { parseConfig, CONFIG_FILE } from '../lib/yukibana.js';
-import { tokenProvider, type SessionStore } from '../session.js';
-import { fileStore } from '../store.js';
+import { CONFIG_FILE, fileStore, parseConfig, type SessionStore, tokenProvider, YukibanaClient } from '@yukibana/client';
 
 /** The options, as `parseArgs` reads them for every command. */
 export interface Options {

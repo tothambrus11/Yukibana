@@ -1,28 +1,11 @@
 {
   "name": "@yukibana/cli",
   "version": "0.1.0",
-  "description": "Build, publish, submit, download and assemble Yukibana course projects: a command line tool, and the library the IDE extension uses.",
+  "description": "Build, publish, submit, download and assemble Yukibana course projects from a terminal: the `yukibana` command, over @yukibana/client.",
   "license": "MIT",
   "type": "module",
-  "main": "dist/library.js",
-  "types": "dist/library.d.ts",
   "exports": {
-    ".": {
-      "types": "./dist/library.d.ts",
-      "default": "./dist/library.js"
-    },
-    "./config": {
-      "types": "./dist/lib/yukibana.d.ts",
-      "default": "./dist/lib/yukibana.js"
-    },
     "./package.json": "./package.json"
-  },
-  "typesVersions": {
-    "*": {
-      "config": [
-        "dist/lib/yukibana.d.ts"
-      ]
-    }
   },
   "bin": {
     "yukibana": "dist/index.js"
@@ -34,12 +17,15 @@
     "node": ">=22.15"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc --build tsconfig.build.json",
     "prepack": "npm run build",
+    "build:client": "tsc --build ../client/tsconfig.build.json",
+    "pretest": "npm run build:client",
     "test": "vitest run",
+    "pretypecheck": "npm run build:client",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint --type-aware --deny-warnings",
-    "schema": "vitest run tests/schema.test.ts --update"
+    "prelint": "npm run build:client",
+    "lint": "oxlint --type-aware --deny-warnings"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",
@@ -49,9 +35,7 @@
     "vitest": "^5.0.4"
   },
   "dependencies": {
-    "ignore": "^7.0.13",
-    "modern-tar": "^0.8.6",
-    "uuid": "^14.0.3",
-    "zod": "^4.6.7"
+    "@yukibana/client": "file:../client",
+    "uuid": "^14.0.3"
   }
 }

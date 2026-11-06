@@ -1,6 +1,6 @@
 # Local development overrides for wrangler.jsonc, which holds production
 # values. A key here wins over the same key there; keys only there still
-# apply. `npm run dev:vars` writes the real file from the running stack.
+# apply. `node cloud/dev/scripts/dev-vars.mjs` writes the real file from the running stack.
 #
 # Copy to .dev.vars (gitignored) if you would rather fill it in by hand.
 
@@ -9,13 +9,13 @@
 SUPABASE_PUBLISHABLE_KEY=
 PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
 # The OAuth client the CLI and the IDE log in through: what
-# `node scripts/oauth-client.mjs` prints. Empty, they log in with GitHub
+# `node cloud/dev/scripts/oauth-client.mjs` prints. Empty, they log in with GitHub
 # directly, as before.
 SUPABASE_OAUTH_CLIENT_ID=
-# Auth's local site_url (supabase/config.toml), where `npm run dev` serves.
+# Auth's local site_url (cloud/db/supabase/config.toml), where `npm run dev` serves.
 SITE_URL=http://127.0.0.1:5173
 
-# RustFS, from dev/compose.yml. It wants a real region name; R2 says "auto".
+# RustFS, from cloud/dev/compose.yml. It wants a real region name; R2 says "auto".
 S3_ENDPOINT=http://127.0.0.1:9000
 S3_PUBLIC_ENDPOINT=http://localhost:9000
 S3_REGION=us-east-1

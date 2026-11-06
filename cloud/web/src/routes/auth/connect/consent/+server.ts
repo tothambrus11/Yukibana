@@ -4,7 +4,7 @@ import { consent, returnUrlOf, siteOrigin } from '#lib/server/connect.ts';
 import { workerConfig } from '#lib/server/worker.ts';
 
 /** "Continue" sends the browser here (Auth's `authorization_url_path` in
- *  supabase/config.toml) with the authorization it made. What happens is
+ *  cloud/db/supabase/config.toml) with the authorization it made. What happens is
  *  `consent`'s decision (#lib/server/connect): approve for whoever is
  *  signed in, and only the authorization this browser's connect cookie
  *  names, then straight to the loopback with the code. A GET because that

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cloud.yukibana.dev/schema/yukibana.json",
   "title": "yukibana.json",
-  "description": "A project's configuration: its build system, what the student's IDE shows, which files the student may not change, what the student never receives, and what a submission holds. Lives at the project root. docs/yukibana-json.md in yukibana-cloud is the prose.",
+  "description": "A project's configuration: its build system, what the student's IDE shows, which files the student may not change, what the student never receives, and what a submission holds. Lives at the project root. docs/cloud/yukibana-json.md in ISC-HEI/Yukibana is the prose.",
   "type": "object",
   "properties": {
     "$schema": {

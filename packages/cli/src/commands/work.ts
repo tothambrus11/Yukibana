@@ -5,9 +5,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { createSubmissionBundle, type SubmissionBundle } from '../bundle.js';
-import { unpackStarter } from '../extract.js';
-import { sha256Hex } from '../lib/bytes.js';
+import { createSubmissionBundle, sha256Hex, type SubmissionBundle, unpackStarter } from '@yukibana/client';
 import { bytes, clientFor, fail, projectOf, type Invocation } from './common.js';
 
 /** Runs `starter <project> [--out dir]`: unpacks the project's starter into

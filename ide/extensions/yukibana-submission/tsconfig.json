@@ -1,0 +1,20 @@
+{
+  "extends": "../../configs/base.tsconfig",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib",
+    "esModuleInterop": true
+  },
+  "include": ["src"],
+  "references": [
+    {
+      "path": "../yukibana"
+    },
+    {
+      "path": "../../common"
+    },
+    {
+      "path": "../../../packages/client/tsconfig.build.json"
+    }
+  ]
+}

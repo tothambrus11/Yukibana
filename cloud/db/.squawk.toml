@@ -1,5 +1,6 @@
-# squawk reads this from the repository root; `npm run db:lint` passes the
-# rest of its settings on the command line.
+# squawk reads this from the directory it runs in, cloud/db; the lint command
+# (`squawk --assume-in-transaction --exclude=require-concurrent-index-creation,prefer-robust-stmts
+# supabase/migrations/*.sql`, run there) passes the rest of its settings.
 
 # Migrations that were linted clean, pushed and applied before a newer squawk
 # grew a rule they break. A pushed migration is never edited (CLAUDE.md), so

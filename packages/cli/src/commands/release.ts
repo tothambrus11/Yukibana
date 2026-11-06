@@ -4,9 +4,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { build, commitOf, newReleaseId } from '../build.js';
-import { sha256Hex } from '../lib/bytes.js';
-import { isProjectId } from '../lib/yukibana.js';
-import { publish } from '../publish.js';
+import { isProjectId, publish, sha256Hex } from '@yukibana/client';
 import { accessTokenFor, fail, projectOf, registryUrl, type Invocation } from './common.js';
 
 /** `check`, `build` and `publish`: the same build, then nothing, a write,

@@ -1,0 +1,21 @@
+{
+  "extends": "../configs/base.tsconfig.json",
+  "include": [],
+  "compilerOptions": {
+    "composite": true
+  },
+  "references": [
+    {
+      "path": "../extensions/yukibana"
+    },
+    {
+      "path": "../extensions/yukibana-submission"
+    },
+    {
+      "path": "../extensions/yukibana-cloud"
+    },
+    {
+      "path": "../extensions/yukibana-telemetry"
+    }
+  ]
+}

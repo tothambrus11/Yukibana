@@ -32,10 +32,9 @@ export default {
     sveltekit({
       ...(name === undefined ? {} : { version: { name } }),
       adapter: adapter({
-        // The Worker's configuration lives at the repository root, so that
-        // Cloudflare's build and a plain `wrangler deploy` both work from
-        // there without a directory setting. Development reads the same file.
-        platformProxy: { configPath: '../wrangler.jsonc', persist: true },
+        // The Worker's configuration, beside this file, which `wrangler
+        // deploy` reads too. Development reads the same file.
+        platformProxy: { configPath: './wrangler.jsonc', persist: true },
       }),
     }),
   ],

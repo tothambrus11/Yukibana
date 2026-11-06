@@ -4,8 +4,7 @@ import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pack } from '../src/commands/work.js';
-import { readArchive } from '../src/extract.js';
-import { memoryStore } from '../src/session.js';
+import { memoryStore, readArchive } from '@yukibana/client';
 
 afterEach(() => vi.restoreAllMocks());
 

@@ -3,16 +3,15 @@
  */
 import { defineConfig } from 'vitest/config';
 
-/** The unit tests: every spec of the extensions and their libraries, run from the sources. */
+/** The IDE's unit tests: every spec of the extensions and their common library, run from the sources. */
 export default defineConfig({
     test: {
-        include: ['{packages,theia-extensions}/*/src/**/*.spec.ts'],
-        setupFiles: ['./configs/vitest.setup.ts'],
+        include: ['ide/{common,extensions/*}/src/**/*.spec.ts'],
+        setupFiles: ['./ide/configs/vitest.setup.ts'],
         coverage: {
             provider: 'v8',
-            include: ['{packages,theia-extensions}/*/src/**/*.{ts,tsx}'],
-            // packages/cli: imported from yukibana-cloud, tested with its own config until it joins the workspace.
-            exclude: ['**/*.spec.ts', '**/typings/**', 'packages/cli/**'],
+            include: ['ide/{common,extensions/*}/src/**/*.{ts,tsx}'],
+            exclude: ['**/*.spec.ts', '**/typings/**'],
             reporter: ['text', 'html', 'lcov'],
         },
     },

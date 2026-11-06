@@ -27,10 +27,11 @@ On Windows, the Visual Studio Build Tools also need the
    cd yukibana
    ```
 
-3. Install the dependencies, then build and start the app
+3. Install the IDE's dependencies (which also checks that every `@theia/*` package has the same version),
+   then build and start the app
 
    ```bash
-   pnpm install
+   pnpm setup:ide
    pnpm start
    ```
 
@@ -44,22 +45,22 @@ so only the ones that changed are recompiled.
 - `pnpm start [browser|electron]`: build in development mode, download the bundled
   plugins if needed, and start the app (Electron by default).
   Use `--prod` for a production build, and pass extra arguments to `theia start`
-  after `--`, e.g. `pnpm start electron -- --log-config=../log-config.json`
+  after `--`, e.g. `pnpm start electron -- --log-config=../log-config.json` (`ide/log-config.json`)
 - `pnpm build [browser|electron]`: build the extensions and the apps (both by default)
   in production mode, or in development mode with `--dev`
-- `pnpm package`: build and package the Electron app into `electron-app/dist`.
+- `pnpm package`: build and package the Electron app into `ide/electron/dist`.
   Use `--preview` for an unpacked directory
-- `pnpm download:plugins`: download the plugins listed in `theiaPlugins`, again whenever
-  that list changes (done automatically by `start` and `package`; delete `plugins` to download them again)
+- `pnpm download:plugins`: download the plugins listed in `theiaPlugins` (in `ide/package.json`) into `ide/plugins`,
+  again whenever that list changes (done automatically by `start` and `package`; delete `ide/plugins` to download them again)
 - `pnpm lint` / `pnpm lint:fix`: lint the whole project with oxlint
 - `pnpm format` / `pnpm format:check`: format the whole project with oxfmt, or only check it
 - `pnpm test`: run the unit tests (`*.spec.ts`) with Vitest, straight from the sources;
   `pnpm test:watch` reruns them on every change. What a spec imports from another extension
-  or library comes from its compiled `lib`, so rebuild that one after changing it (`pnpm install`
+  or library comes from its compiled `lib`, so rebuild that one after changing it (`pnpm setup:ide`
   compiles them all). Filter by file name and test name, e.g.
   `pnpm test config-provider -t "should reload"`
 - `pnpm test:e2e`: build both apps in development mode and run the Playwright end-to-end
-  tests ([tests/e2e](tests/e2e)) in each of them. Pick one app with `--project=browser` or
+  tests ([ide/e2e/e2e](ide/e2e/e2e)) in each of them. Pick one app with `--project=browser` or
   `--project=electron`, and filter like `pnpm test`: `pnpm test:e2e scala -g "language"`.
   Playwright's own options work too, e.g. `--headed`, `--debug` or `--ui`. Before the
   first run, install Playwright's Chromium: `pnpm --filter yukibana-tests exec playwright install chromium`
@@ -72,20 +73,30 @@ To recompile the extensions on every change, run `pnpm watch`, and to rebundle a
 
 ## Architecture
 
-The project is separated into 4 main parts:
-- the browser app ([browser-app](browser-app))
-- the Electron app ([electron-app](electron-app))
-- custom extensions ([theia-extensions](theia-extensions))
-- libraries shared by the extensions ([packages](packages))
+The IDE is in [ide](ide), separated into 4 main parts:
+- the browser app ([ide/browser](ide/browser))
+- the Electron app ([ide/electron](ide/electron))
+- custom extensions ([ide/extensions](ide/extensions))
+- helpers shared by the extensions ([ide/common](ide/common))
 
-Each part is its own workspace, and the end-to-end tests ([tests](tests)) are one too.
+Each part is its own workspace, and the end-to-end tests ([ide/e2e](ide/e2e)) are one too.
 The commands above, run from the root, build and start them.
+The extensions also use [@yukibana/client](packages/client), the library they share with the
+[CLI](packages/cli); the cloud the IDE talks to is in [cloud](cloud).
 
 Extensions that should be bundled with the IDE as builtin extensions
-must be added as dependencies of the application (both [browser-app](browser-app)
-and [electron-app](electron-app)).
+must be added as dependencies of the application (both [ide/browser](ide/browser)
+and [ide/electron](ide/electron)).
 
 More information can be found in [docs/architecture.md](docs/architecture.md).
+
+### The cloud and the CLI
+
+Until they join the pnpm workspace, [cloud/web](cloud/web) and [packages/cli](packages/cli) are installed with npm
+(`npm --prefix cloud/web ci`, `npm --prefix packages/cli ci`) and keep their own scripts (`build`, `test`, `typecheck`,
+`lint`). The CLI links [@yukibana/client](packages/client) as `file:../client`, and npm installs no dependencies for a
+link: run `pnpm --filter @yukibana/client install` (or `pnpm setup:ide`) at the root first. Their guide is
+[docs/cloud/CLAUDE.md](docs/cloud/CLAUDE.md).
 
 ## Troubleshooting
 

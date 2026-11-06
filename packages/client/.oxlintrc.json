@@ -1,0 +1,39 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "promise", "import"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error",
+    "pedantic": "off",
+    "restriction": "off",
+    "style": "off"
+  },
+  "rules": {
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/await-thenable": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-return": "error",
+    "eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+
+    /* The branded ids in ids.ts and the trust points named `trust*` are the
+       casts this rule cannot tell from careless ones. */
+    "typescript/no-unsafe-type-assertion": "off",
+    /* SvelteKit's `redirect()` and `error()` never return, and an action that
+       ends in one has no other return; the rule cannot see that. */
+    "typescript/consistent-return": "off",
+    /* `export {}` is how a .d.ts becomes a module, per SvelteKit's own template. */
+    "unicorn/require-module-specifiers": "off",
+    "typescript/no-unnecessary-type-parameters": "off",
+    "eslint/no-await-in-loop": "off",
+    "unicorn/no-null": "off",
+    "unicorn/consistent-function-scoping": "off",
+    "promise/always-return": "off",
+    "import/no-unassigned-import": "off"
+  },
+  "ignorePatterns": ["lib/**", "node_modules/**"]
+}

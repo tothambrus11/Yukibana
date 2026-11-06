@@ -1,9 +1,10 @@
 # The CLI and the library
 
-`cli/` is two things from one package, `@yukibana/cli`: the `yukibana`
-command, and the library the Theia extension imports (`cli/src/library.ts`
-is its whole surface). Every command is a thin layer over the library, so
-what the terminal does, the IDE can do the same way.
+`packages/cli/` (`@yukibana/cli`) is the `yukibana` command, and
+`packages/client/` (`@yukibana/client`) the library it and the IDE's Theia
+extensions share (`packages/client/src/library.ts` is its whole surface).
+Every command is a thin layer over the library, so what the terminal does,
+the IDE can do the same way.
 
 ## Logging in
 
@@ -19,7 +20,7 @@ session is stored in `~/.config/yukibana/session.json` (or under
 and refreshed as it is used. `yukibana logout` ends it at the server too.
 
 The Auth server only redirects to addresses on its allow list;
-`supabase/config.toml` allows `http://127.0.0.1:*/callback` locally and in
+`cloud/db/supabase/config.toml` allows `http://127.0.0.1:*/callback` locally and in
 production. Where no browser can reach the machine, `YUKIBANA_ACCESS_TOKEN`
 stands in for a login.
 
@@ -58,13 +59,13 @@ recorded on arrival.
 
 ## The library, for the IDE extension
 
-`docs/theia.md` is the full guide to embedding it, and `demo/electron` a
-working desktop client built on it.
+`docs/cloud/theia.md` is the full guide to embedding it, and
+`ide/extensions/yukibana-cloud` the IDE's use of it.
 
 ```ts
 import {
   createSubmissionBundle, YukibanaClient, startLogin, loginWithLoopback, tokenProvider, type SessionStore,
-} from '@yukibana/cli';
+} from '@yukibana/client';
 
 // Log in: either back to a listener on 127.0.0.1 (desktop Theia), with the
 // host opening the address and writing the page the browser lands on…
@@ -113,7 +114,7 @@ as it is now, so extending a deadline makes earlier late work on time.
 ## The HTTP API
 
 All JSON, all as the caller (a bearer access token, or the session cookie
-for reads). The shapes are `app/src/lib/api.ts`.
+for reads). The shapes are `cloud/web/src/lib/api.ts`.
 
 | | |
 | --- | --- |

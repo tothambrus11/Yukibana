@@ -18,5 +18,5 @@ export async function codeMailedTo(addr: string, since: number): Promise<string>
     }
     await new Promise(r => setTimeout(r, 100));
   }
-  throw new Error(`no mail reached ${addr} at ${mailUrl}: is [local_smtp] enabled in supabase/config.toml?`);
+  throw new Error(`no mail reached ${addr} at ${mailUrl}: is [local_smtp] enabled in cloud/db/supabase/config.toml?`);
 }

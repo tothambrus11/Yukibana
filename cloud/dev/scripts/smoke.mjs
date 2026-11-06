@@ -1,11 +1,12 @@
 // Proves the local stack is reachable from wherever this runs: Supabase's
-// API and edge runtime (and so the supabase/functions bind mount), and the
+// API and edge runtime (and so the cloud/db/supabase/functions bind mount), and the
 // bucket. Deliberately no app schema dependency.
 //
-//   npm run smoke
+//   node cloud/dev/scripts/smoke.mjs
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const s = JSON.parse(execFileSync('npx', ['--yes', 'supabase', 'status', '-o', 'json'], { encoding: 'utf8' }));
+const s = JSON.parse(execFileSync('npx', ['--yes', 'supabase', 'status', '-o', 'json', '--workdir', fileURLToPath(new URL('../../db', import.meta.url))], { encoding: 'utf8' }));
 const url = process.env.SUPABASE_URL ?? s.API_URL;
 const key = process.env.SUPABASE_ANON_KEY ?? s.PUBLISHABLE_KEY ?? s.ANON_KEY;
 const host = process.env.SUPABASE_SERVICES_HOSTNAME ?? '127.0.0.1';

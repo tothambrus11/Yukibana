@@ -1,5 +1,5 @@
 /** The local stack the integration suite runs against. Every value has the
- *  local default from wrangler.jsonc and dev/compose.yml; set them to point
+ *  local default from wrangler.jsonc and cloud/dev/compose.yml; set them to point
  *  elsewhere. `tests.uid` mirrors the seed's helper of the same name, so a
  *  test can be the seeded people. */
 import { createHash } from 'node:crypto';
@@ -17,7 +17,7 @@ export const config: Config = {
   // The key every local stack has unless told otherwise; CI passes what
   // `supabase status` reports, in case a CLI release changes it.
   supabasePublishableKey: env('SUPABASE_PUBLISHABLE_KEY', 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH'),
-  // Registered on the stack by `node scripts/oauth-client.mjs`, which CI
+  // Registered on the stack by `node cloud/dev/scripts/oauth-client.mjs`, which CI
   // runs before this suite; the connect tests say so when it is missing.
   oauthClientId: process.env['SUPABASE_OAUTH_CLIENT_ID'] ?? null,
   siteUrl: null,
@@ -33,7 +33,7 @@ export const config: Config = {
   releaseMaxBytes: 1024 * 1024,
 };
 
-/** The local stack's mail catcher (`[local_smtp]` in supabase/config.toml),
+/** The local stack's mail catcher (`[local_smtp]` in cloud/db/supabase/config.toml),
  *  where the login codes land. Mailpit, read over its HTTP API. */
 export const mailUrl = env('MAIL_URL', `http://${host}:54324`);
 

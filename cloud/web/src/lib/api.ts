@@ -1,5 +1,5 @@
 /** What the JSON API answers. The CLI and the IDE extension read these
- *  shapes (`cli/src/lib/wire.ts` decodes them, field for field), so a
+ *  shapes (`packages/client/src/lib/wire.ts` decodes them, field for field), so a
  *  change here is a change to a published contract: add a field, never
  *  rename or retype one. Times are ISO 8601 strings in UTC; ids are uuids;
  *  a null means what the field says it means.

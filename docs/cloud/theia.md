@@ -2,12 +2,12 @@
 
 What a student's IDE needs from Yukibana is four things: who the student is,
 which exercises are open to them, what a submission from their folder would
-hold, and a way to send it. All four are in `@yukibana/cli`'s library
-(`cli/src/library.ts`), whose dependencies are `modern-tar`, `uuid`, `ignore` and `zod` (none
+hold, and a way to send it. All four are in `@yukibana/client`
+(`packages/client/src/library.ts`), whose dependencies are `modern-tar`, `ignore` and `zod` (none
 with dependencies of its own), and which runs wherever Node 22.15
 or later does: a Theia backend, an Electron main process, a VS Code
-extension host. `demo/electron` is a complete, small client built on it;
-read it next to this page.
+extension host. `ide/extensions/yukibana-cloud` is the IDE's client built on
+it; read it next to this page.
 
 ## What the library is, and is not
 
@@ -19,7 +19,7 @@ login, every list, button and sentence on a screen: those belong to the host.
 Where a person must see something, the library takes a callback (`open`,
 `callbackPage`) or returns data for the host to render (`bundle.files`,
 `bundle.problems`, `RegistryError.status`). The CLI's choices are in
-`cli/src/commands/`, the demo's in `demo/electron/src/`; neither is exported.
+`packages/cli/src/commands/`, the IDE's in its extensions; neither is exported.
 
 ## The split
 
@@ -34,8 +34,8 @@ The frontend is a web page and is treated as one. The session, the client
 and every bundle live in the backend; the frontend asks for lists and
 verdicts over whatever RPC the host has (Theia's JSON-RPC service, Electron's
 IPC). In Theia that is a backend contribution exposing a service, and a
-frontend widget calling it. `demo/electron/src/bridge.ts` is that service's
-interface, and is a reasonable starting point for the Theia one.
+frontend widget calling it: the IDE's is `CloudService` in
+`ide/extensions/yukibana-cloud/src/common/cloud-protocol.ts`.
 
 ## Logging in
 
@@ -43,7 +43,7 @@ A login is three steps so the host decides how the browser is shown and where
 it comes back:
 
 ```ts
-import { startLogin, loginWithLoopback } from '@yukibana/cli';
+import { startLogin, loginWithLoopback } from '@yukibana/client';
 
 // Desktop (Electron Theia): back to a listener on 127.0.0.1 on a free port.
 // The host opens the address and writes the page the browser lands on.
@@ -81,7 +81,7 @@ A registry without an OAuth client (`/api/auth/config` says
 `oauthClientId: null`) and a redirect that is not the loopback (browser
 Theia's own route) log in the older way: OAuth with PKCE straight to GitHub
 through the Auth server. That redirect must be on the Auth server's allow
-list (`supabase/config.toml`, `additional_redirect_urls`, local and
+list (`cloud/db/supabase/config.toml`, `additional_redirect_urls`, local and
 production); a browser Theia's callback address has to be added there, and
 reaches production with the next deploy (`supabase config push`).
 
@@ -96,7 +96,7 @@ the IDE and Yukibana), skip all of this: hand its access token to the client.
 ## Keeping the session
 
 ```ts
-import { tokenProvider, YukibanaClient, type SessionStore } from '@yukibana/cli';
+import { tokenProvider, YukibanaClient, type SessionStore } from '@yukibana/client';
 
 const store: SessionStore = {
   load: async () => JSON.parse((await secrets.get('yukibana.session')) ?? 'null'),
@@ -108,8 +108,9 @@ const client = new YukibanaClient({ url: registry, accessToken: tokenProvider(st
 ```
 
 The session holds a refresh token: store it where the host keeps secrets
-(Theia's or VS Code's secret storage, Electron's `safeStorage` as in
-`demo/electron/src/safe-store.ts`), never in plain settings.
+(Theia's or VS Code's secret storage, as the IDE's
+`ide/extensions/yukibana-cloud/src/node/cloud-session-manager.ts` does, or
+Electron's `safeStorage`), never in plain settings.
 `tokenProvider` refreshes an hour-long access token before it expires and
 saves the rotated pair; it never runs two refreshes at once, because the
 second would find the refresh token spent. When it cannot refresh it throws
@@ -140,12 +141,12 @@ the deadline as it is now, so an extension granted later applies to work
 already handed in. A student still reads their own submissions after a
 project closes.
 
-How to word any of this is the host's. The demo's choices, with tests, are
-in `demo/electron/src/view.ts`; they are an example, not part of the library.
+How to word any of this is the host's; the IDE's choices are in its
+extensions, not part of the library.
 
 ## The workspace
 
-`@yukibana/cli/config` is the part that runs in a browser: `parseSettings`
+`@yukibana/client/config` is the part that runs in a browser: `parseSettings`
 reads a folder's `yukibana.json` with the defaults the IDE needs (a file
 without `version` or `kind` is fine, so any folder opens), and
 `DEFAULT_SETTINGS` is what a folder without one gets. It is the same
@@ -170,7 +171,7 @@ reports every change.
 ## Submitting: prepare, preview, send
 
 ```ts
-import { createSubmissionBundle } from '@yukibana/cli';
+import { createSubmissionBundle } from '@yukibana/client';
 
 const made = await createSubmissionBundle(workspaceRoot);
 if (!made.ok) return showProblems(made.problems);    // no or broken yukibana.json
@@ -193,9 +194,9 @@ the preview. Packing is the same function `yukibana submit` uses, which is
 the point: the IDE and the terminal cannot disagree about what a submission
 holds, and the assembly on the teacher's side sees the same files.
 
-Whether to offer the send button is the host's decision from that data: the
-demo offers it when there are no problems, the folder names a project, and
-that project is open to the student now (`sendable` in its `view.ts`).
+Whether to offer the send button is the host's decision from that data, for
+example when there are no problems, the folder names a project, and that
+project is open to the student now.
 
 ## Errors
 
@@ -208,10 +209,10 @@ large. `NotLoggedIn` means the session is gone.
 
 1. A backend contribution that owns a `YukibanaClient`, a `SessionStore` over
    Theia's secret storage, and the bundles; a frontend service interface
-   like `demo/electron/src/bridge.ts`.
+   like the IDE's `CloudService`.
 2. Login: `loginWithLoopback` in Electron Theia; `startLogin` with a backend
    route as the redirect in browser Theia, and that route's address added to
-   `supabase/config.toml`.
+   `cloud/db/supabase/config.toml`.
 3. An exercise view over `client.projects()`, a starter download into a new
    workspace, and a submissions view over `client.submissions()`.
 4. A submit command: make the bundle, show the file list with a preview of

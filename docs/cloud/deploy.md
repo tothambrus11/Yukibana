@@ -373,7 +373,7 @@ this is the date it started being true.
 
 Everything else is in the app. A teacher creates a course, an edition,
 enrols by address, and creates a project. Publishing a release is
-`docs/yukibana-json.md`: `yukibana build` and an upload, or a token and the
+`docs/cloud/yukibana-json.md`: `yukibana build` and an upload, or a token and the
 GitHub Action in the course repository.
 
 ## When something goes wrong

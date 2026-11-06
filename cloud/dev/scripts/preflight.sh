@@ -3,7 +3,7 @@
 # Docker daemon. Run it on a new machine, a CI runner or a cloud sandbox before
 # wondering why `supabase start` misbehaves.
 #
-#   ./scripts/preflight.sh [workspace-dir]     # defaults to $PWD
+#   cloud/dev/scripts/preflight.sh [workspace-dir]     # defaults to $PWD
 #
 # Exits 1 if the setup cannot work here, so CI can gate on it. Self-contained:
 # copy just this file into a sandbox and run it.

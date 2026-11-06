@@ -5,7 +5,7 @@ project root, and it is read by two programs: the student's IDE (our Theia
 fork), for how the workspace looks and which files are read-only, and the
 CLI, for what a student must never receive and what a submission holds.
 Its JSON Schema is generated from the parser's own schema into
-`docs/yukibana.schema.json` and served at
+`docs/cloud/yukibana.schema.json` and served at
 `https://cloud.yukibana.dev/schema/yukibana.json`; name it as `$schema` and
 an editor checks the file as you type.
 

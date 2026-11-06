@@ -119,7 +119,7 @@ export const connectCookie = (nonce: string): string => `${CONNECT_COOKIE_PREFIX
 /** Four characters the CLI prints and the website shows, so the person can
  *  see that the page asking them is the login they started. A courtesy,
  *  not a check: the state and the verifier are the checks. The CLI makes
- *  the same from the same state (`loginCode` in cli/src/lib/pkce.ts). */
+ *  the same from the same state (`loginCode` in packages/client/src/lib/pkce.ts). */
 export const loginCode = (state: string): string => state.slice(0, 4).toUpperCase();
 
 /** The relay a `state` names, or null if it is not one this module made. */

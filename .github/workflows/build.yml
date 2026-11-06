@@ -47,6 +47,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # The root package has no postinstall: the version check runs here, from the root, where every @theia/* package is.
+      - name: Check Theia versions
+        run: pnpm run check:theia
+
       - name: Lint
         run: pnpm run lint
 
@@ -95,9 +99,9 @@ jobs:
         with:
           # With the stamp that pnpm download:plugins compares the plugin list with.
           path: |
-            plugins
+            ide/plugins
             node_modules/.plugins-download-inputs
-          key: plugins-v2-${{ runner.os }}-${{ hashFiles('package.json') }}
+          key: plugins-v2-${{ runner.os }}-${{ hashFiles('ide/package.json') }}
 
       # Not cached, as Playwright recommends: restoring takes about as long as downloading.
       - name: Install Playwright Chromium
@@ -119,8 +123,8 @@ jobs:
         with:
           name: e2e-report-${{ matrix.app }}-${{ matrix.os }}
           path: |
-            tests/playwright-report/
-            tests/test-results/
+            ide/e2e/playwright-report/
+            ide/e2e/test-results/
           if-no-files-found: ignore
           retention-days: 5
 
@@ -165,9 +169,9 @@ jobs:
         with:
           # With the stamp that pnpm download:plugins compares the plugin list with.
           path: |
-            plugins
+            ide/plugins
             node_modules/.plugins-download-inputs
-          key: plugins-v2-${{ runner.os }}-${{ hashFiles('package.json') }}
+          key: plugins-v2-${{ runner.os }}-${{ hashFiles('ide/package.json') }}
 
       - name: Cache Electron / electron-builder downloads
         uses: actions/cache@v6
@@ -186,7 +190,7 @@ jobs:
       - name: Update electron-builder.yml for macos-15
         if: matrix.os == 'macos-15'
         run: |
-          sed -i '' 's|https://yukibana.isc-vs.ch/download/latest/macos|https://yukibana.isc-vs.ch/download/latest/macos-arm|g' electron-app/electron-builder.yml
+          sed -i '' 's|https://yukibana.isc-vs.ch/download/latest/macos|https://yukibana.isc-vs.ch/download/latest/macos-arm|g' ide/electron/electron-builder.yml
 
       - name: Build prod package
         shell: bash
@@ -200,10 +204,10 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: |
-            electron-app/dist/**
-            !electron-app/dist/*-unpacked/**
-            !electron-app/dist/mac/**
-            !electron-app/dist/mac-arm64/**
+            ide/electron/dist/**
+            !ide/electron/dist/*-unpacked/**
+            !ide/electron/dist/mac/**
+            !ide/electron/dist/mac-arm64/**
           compression-level: 0
           if-no-files-found: error
           retention-days: 1

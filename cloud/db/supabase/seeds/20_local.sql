@@ -1,12 +1,12 @@
 -- What a fresh local database contains, so the app has something to show
 -- after `supabase db reset`. Local only: seeds never run against a deployed
 -- database. Log in with GitHub or by email code, then make yourself the admin
--- with `npm run local:admin -- you@yukibana.local`. The people below log in
+-- with `node cloud/dev/scripts/local-admin.mjs you@yukibana.local`. The people below log in
 -- by code too: ask for one on the login page and read it in the local mail
 -- catcher, http://127.0.0.1:54324.
 
 -- The Worker's connection password, for local development only. In a
--- deployed environment ops/bootstrap.sql sets it from a secret.
+-- deployed environment cloud/db/ops/bootstrap.sql sets it from a secret.
 alter role yukibana_app password 'yukibana';
 
 -- A teacher, an assistant, two students, a course with one edition and one

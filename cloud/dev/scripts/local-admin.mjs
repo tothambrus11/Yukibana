@@ -2,12 +2,12 @@
 // has logged in once. Runs psql inside the database container, so it works
 // from the host and from the devcontainer alike, with nothing installed.
 //
-//   npm run local:admin -- you@example.com
+//   node cloud/dev/scripts/local-admin.mjs you@example.com
 import { execFileSync } from 'node:child_process';
 
 const addr = process.argv[2];
 if (!addr) {
-  console.error('usage: npm run local:admin -- <email>');
+  console.error('usage: node cloud/dev/scripts/local-admin.mjs <email>');
   process.exit(2);
 }
 const sql = `select app.bootstrap_admin('${addr.replace(/'/g, "''")}') as promoted`;

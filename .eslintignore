@@ -1,4 +1,6 @@
-# Read by oxlint. The cloud and CLI imported from yukibana-cloud keep their own lint setup until they join the
-# workspace; as directories here (not in .oxlintrc.json's ignorePatterns) so that oxlint skips their tsconfig.json too.
+# Read by oxlint. The cloud, the CLI and its library, imported from yukibana-cloud, keep their own lint setup until
+# they are converted to this one; as directories here (not in .oxlintrc.json's ignorePatterns) so that oxlint skips
+# their tsconfig.json too.
 /cloud
 /packages/cli
+/packages/client

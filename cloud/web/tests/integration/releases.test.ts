@@ -15,7 +15,7 @@ const ctx: Context = { config, sql, bucket };
 afterAll(() => sql.end({ timeout: 5 }));
 
 // Any two gzip files will do for the registry: it stores, it does not look inside.
-const archive = new Uint8Array(readFileSync(new URL('../../../cli/tests/fixtures/repo.tar.gz', import.meta.url)));
+const archive = new Uint8Array(readFileSync(new URL('../../../../packages/client/tests/fixtures/repo.tar.gz', import.meta.url)));
 const other = new Uint8Array([...archive, 0]);
 
 async function warmup(): Promise<ProjectId> {

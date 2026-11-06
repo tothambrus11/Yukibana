@@ -3,19 +3,18 @@
 
   // This file holds PRODUCTION values, because that is what gets deployed and
   // what must be reviewable in a diff. Local development overrides every one
-  // of them through .dev.vars beside it (written by `npm run dev:vars`, and
+  // of them through .dev.vars beside it (written by `node cloud/dev/scripts/dev-vars.mjs`, and
   // gitignored):
   // a key there wins over the same key here, and keys only here still apply.
   // The database's local override is `localConnectionString` below.
   // A key there wins over the same key here; keys only here still apply.
   "name": "yukibana-cloud",
-  // Paths are from the repository root, where this file lives so that a
-  // plain `wrangler deploy` works from a fresh clone and Cloudflare's build
-  // needs no directory configured by hand.
-  "main": "app/.svelte-kit/cloudflare/_worker.js",
+  // Paths are from cloud/web, where this file lives beside the app it
+  // deploys: `wrangler deploy` runs from there.
+  "main": ".svelte-kit/cloudflare/_worker.js",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
-  "assets": { "binding": "ASSETS", "directory": "app/.svelte-kit/cloudflare" },
+  "assets": { "binding": "ASSETS", "directory": ".svelte-kit/cloudflare" },
   "observability": { "enabled": true },
 
   // No CPU limit override: the Worker is a registry. Archives are built by
@@ -53,11 +52,11 @@
     "S3_REGION": "auto",
     // The registry's OAuth client on Supabase Auth, through which the CLI and
     // the IDE log in by way of the website (/auth/connect). Printed by
-    // `node scripts/oauth-client.mjs` (docs/deploy.md, step 7); not a secret.
+    // `node cloud/dev/scripts/oauth-client.mjs` (docs/cloud/deploy.md, step 7); not a secret.
     // Empty: they log in with GitHub directly, as before.
     "SUPABASE_OAUTH_CLIENT_ID": "5daf9a82-9cae-45ac-b84a-8e9481e1c8f7",
     // The site's canonical address, which must be Auth's site_url
-    // (supabase/config.toml): the IDE login works only there, so
+    // (cloud/db/supabase/config.toml): the IDE login works only there, so
     // /auth/connect moves to it, and the CLI is told it.
     "SITE_URL": "https://cloud.yukibana.dev",
     "SUBMISSION_MAX_BYTES": "33554432",

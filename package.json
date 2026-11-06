@@ -12,14 +12,15 @@
   },
   "packageManager": "pnpm@12.8.1",
   "scripts": {
-    "build": "node scripts/cli.mts build",
-    "start": "node scripts/cli.mts start",
-    "package": "node scripts/cli.mts package",
-    "download:plugins": "node scripts/cli.mts download:plugins",
-    "watch": "node scripts/cli.mts watch",
-    "new:ext": "node scripts/cli.mts new:ext",
+    "setup:ide": "pnpm --filter \"{ide/**}...\" install && pnpm run check:theia",
+    "check:theia": "node node_modules/@theia/cli/bin/theia.js check:theia-version",
+    "build": "node ide/scripts/cli.mts build",
+    "start": "node ide/scripts/cli.mts start",
+    "package": "node ide/scripts/cli.mts package",
+    "download:plugins": "node ide/scripts/cli.mts download:plugins",
+    "watch": "node ide/scripts/cli.mts watch",
+    "new:ext": "node ide/scripts/cli.mts new:ext",
     "clean": "pnpm -r --if-present run clean",
-    "postinstall": "theia check:theia-version",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "format": "oxfmt",
@@ -30,8 +31,6 @@
     "test:e2e": "pnpm --filter yukibana-tests exec playwright test"
   },
   "devDependencies": {
-    "@theia/cli": "catalog:",
-    "@theia/core": "catalog:",
     "@types/node": "catalog:",
     "@vitest/coverage-v8": "catalog:",
     "chai": "catalog:",
@@ -42,17 +41,5 @@
     "oxlint-tsgolint": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
-  },
-  "theiaPlugins": {
-    "vscode-builtin-extensions": "https://github.com/eclipse-theia/vscode-builtin-extensions/releases/download/1.108.2/vscode-builtin-extensions-1.108.2.tar.gz",
-    "vscjava.vscode-java-pack": "https://open-vsx.org/api/vscjava/vscode-java-pack/0.30.5/file/vscjava.vscode-java-pack-0.30.5.vsix",
-    "vscjava.vscode-java-dependency": "https://open-vsx.org/api/vscjava/vscode-java-dependency/0.27.0/file/vscjava.vscode-java-dependency-0.27.0.vsix",
-    "scalameta.metals": "https://open-vsx.org/api/scalameta/metals/1.70.0/file/scalameta.metals-1.70.0.vsix",
-    "ms-ceintl.vscode-language-pack-fr": "https://open-vsx.org/api/MS-CEINTL/vscode-language-pack-fr/1.131.0/file/MS-CEINTL.vscode-language-pack-fr-1.131.0.vsix"
-  },
-  "theiaPluginsExcludeIds": [
-    "ms-vscode.js-debug-companion",
-    "vscode.extension-editing",
-    "vscode.microsoft-authentication"
-  ]
+  }
 }

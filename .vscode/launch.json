@@ -8,13 +8,13 @@
       "type": "node",
       "request": "launch",
       "name": "Start Browser Backend",
-      "program": "${workspaceRoot}/browser-app/lib/backend/main.js",
+      "program": "${workspaceRoot}/ide/browser/lib/backend/main.js",
       "args": ["--loglevel=debug", "--port=3000", "--no-cluster"],
       "env": {
         "NODE_ENV": "development"
       },
       "sourceMaps": true,
-      "outFiles": ["${workspaceRoot}/node_modules/@theia/*/lib/**/*.js", "${workspaceRoot}/*/lib/**/*.js", "${workspaceRoot}/browser-app/lib/**/*.js"],
+      "outFiles": ["${workspaceRoot}/node_modules/@theia/*/lib/**/*.js", "${workspaceRoot}/ide/**/lib/**/*.js", "${workspaceRoot}/ide/browser/lib/**/*.js"],
       "smartStep": true,
       "internalConsoleOptions": "openOnSessionStart",
       "outputCapture": "std"
@@ -27,16 +27,16 @@
       "windows": {
         "runtimeExecutable": "${workspaceRoot}/node_modules/.bin/electron.cmd"
       },
-      "program": "${workspaceRoot}/electron-app/lib/backend/electron-main.js",
+      "program": "${workspaceRoot}/ide/electron/lib/backend/electron-main.js",
       "args": ["--loglevel=debug", "--hostname=localhost", "--no-cluster"],
       "env": {
         "NODE_ENV": "development"
       },
       "sourceMaps": true,
       "outFiles": [
-        "${workspaceRoot}/electron-app/lib/backend/electron-main.js",
-        "${workspaceRoot}/electron-app/lib/backend/main.js",
-        "${workspaceRoot}/*/lib/**/*.js",
+        "${workspaceRoot}/ide/electron/lib/backend/electron-main.js",
+        "${workspaceRoot}/ide/electron/lib/backend/main.js",
+        "${workspaceRoot}/ide/**/lib/**/*.js",
         "${workspaceRoot}/node_modules/@theia/*/lib/**/*.js"
       ],
       "smartStep": true,

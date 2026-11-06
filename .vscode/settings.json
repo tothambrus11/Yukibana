@@ -7,8 +7,8 @@
   },
   "json.schemas": [
     {
-      "fileMatch": ["electron-app/package.json", "browser-app/package.json"],
-      "url": "./theia-package-schema.json"
+      "fileMatch": ["ide/electron/package.json", "ide/browser/package.json"],
+      "url": "./ide/theia-package-schema.json"
     }
   ],
   "[typescript]": {

@@ -30,5 +30,5 @@
     "react/no-danger": "warn",
     "react/no-danger-with-children": "warn"
   },
-  "ignorePatterns": ["**/lib/**", "**/src-gen/**", "**/gen-webpack*", "plugins/**", "**/dist/**", "tests/playwright-report/**", "tests/test-results/**"]
+  "ignorePatterns": ["**/lib/**", "**/src-gen/**", "**/gen-webpack*", "ide/plugins/**", "**/dist/**", "ide/e2e/playwright-report/**", "ide/e2e/test-results/**"]
 }

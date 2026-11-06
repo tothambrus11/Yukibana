@@ -95,31 +95,39 @@ This project has the following layout
 
 ```bash
 Yukibana
-├── browser-app             # Browser-app specific config and resources
-├── configs                 # General dev config files (ESLint, Playwright, ...)
-├── electron-app            # Electron-app specific config and resources
-├── packages                # Libraries shared by the extensions (not extensions themselves)
-│   └── yukibana-common     # Helpers used across extensions
-├── tests                   # Unit and E2E tests
-└── theia-extensions        
-    ├── yukibana            # Main extension, where customization features are implemented
-    ├── yukibana-launcher   # Extension to create .desktop file and CLI command
-    ├── yukibana-product    # Extension to set window icon on Linux
-    └── yukibana-submission # Extension to manage submission (preparation and upload)
+├── ide
+│   ├── browser                 # Browser-app specific config and resources
+│   ├── common                  # Helpers used across extensions (not an extension itself)
+│   ├── configs                 # The IDE's TypeScript and Vitest configuration
+│   ├── e2e                     # E2E tests
+│   ├── electron                # Electron-app specific config and resources
+│   ├── extensions
+│   │   ├── yukibana            # Main extension, where customization features are implemented
+│   │   ├── yukibana-cloud      # Extension to log in to Yukibana Cloud and download and update projects
+│   │   ├── yukibana-launcher   # Extension to create .desktop file and CLI command
+│   │   ├── yukibana-product    # Extension to set window icon on Linux
+│   │   ├── yukibana-submission # Extension to manage submission (preparation and upload)
+│   │   ├── yukibana-telemetry  # Extension to report telemetry
+│   │   └── langs               # Language extensions (Scala)
+│   └── scripts                 # The root's build, start, package and download:plugins commands
+├── cloud                       # Yukibana Cloud: the web app (web), the database (db), local development (dev)
+└── packages
+    ├── client                  # The library the extensions and the CLI share (@yukibana/client)
+    └── cli                     # The yukibana command
 ```
 
 ### Configuration
 
 Multiple parts of the IDE can be configured at build-time:
 - Builtin VSCode extensions:
-  - defined in [`package.json`](../package.json)
+  - defined in [`ide/package.json`](../ide/package.json)
     thanks to `theiaPlugins` and `theiaPluginsExcludeIds`
 
-  - downloaded in the `plugins` folder by `yarn download:plugins`
+  - downloaded in the `ide/plugins` folder by `pnpm download:plugins`
 
 - Builtin Theia Plugins:
-  - added as node dependencies to [`browser-app/package.json`](../browser-app/package.json)
-    and [`electron-app/package.json`](../electron-app/package.json)
+  - added as node dependencies to [`ide/browser/package.json`](../ide/browser/package.json)
+    and [`ide/electron/package.json`](../ide/electron/package.json)
 
   - automatically built and loaded
 
@@ -127,4 +135,4 @@ Multiple parts of the IDE can be configured at build-time:
   - defined in each app's `package.json`, in the `theia` parameter
 
 - Electron build options:
-  - defined in [`electron-app/electron-builder.yml`](../electron-app/electron-builder.yml)
+  - defined in [`ide/electron/electron-builder.yml`](../ide/electron/electron-builder.yml)

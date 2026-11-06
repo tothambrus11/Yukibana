@@ -21,7 +21,7 @@ export type Refused = { readonly ok: false; readonly status: number; readonly me
  *  Anyone may ask: an account with no enrolment sees nothing, and an
  *  address that already has an account (from GitHub) gets a code for that
  *  one. A new account is unconfirmed until its code is verified
- *  (`enable_confirmations` in supabase/config.toml), so asking for a code
+ *  (`enable_confirmations` in cloud/db/supabase/config.toml), so asking for a code
  *  for someone else's address links nothing. `email` is from `addressOf`. */
 export async function sendCode(auth: CodeAuth, email: string): Promise<{ readonly ok: true } | Refused> {
   const { error } = await auth.signInWithOtp({ email, options: { shouldCreateUser: true } });

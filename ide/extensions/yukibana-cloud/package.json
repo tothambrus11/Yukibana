@@ -1,0 +1,47 @@
+{
+  "name": "yukibana-cloud-ext",
+  "keywords": [
+    "theia-extension"
+  ],
+  "version": "0.1.0",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "dependencies": {
+    "@theia/core": "catalog:",
+    "@theia/editor": "catalog:",
+    "@theia/filesystem": "catalog:",
+    "@theia/scm": "catalog:",
+    "@theia/telemetry": "catalog:",
+    "@theia/workspace": "catalog:",
+    "@yukibana/client": "catalog:",
+    "yukibana-common": "catalog:",
+    "yukibana-ext": "catalog:",
+    "yukibana-submission-ext": "catalog:"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "rimraf": "catalog:",
+    "typescript": "catalog:"
+  },
+  "scripts": {
+    "prepare": "tsc --build",
+    "clean": "rimraf lib tsconfig.tsbuildinfo"
+  },
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/cloud-frontend-module",
+      "backend": "lib/node/cloud-backend-module"
+    }
+  ],
+  "peerDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  }
+}

@@ -1,5 +1,5 @@
 {
-  "extends": "./configs/base.tsconfig.json",
+  "extends": "./ide/configs/base.tsconfig.json",
   "include": [],
   "compilerOptions": {
     "composite": true,
@@ -7,34 +7,37 @@
   },
   "references": [
     {
-      "path": "packages/yukibana-common"
+      "path": "packages/client/tsconfig.build.json"
     },
     {
-      "path": "theia-extensions/yukibana-launcher"
+      "path": "ide/common"
     },
     {
-      "path": "theia-extensions/yukibana-product"
+      "path": "ide/extensions/yukibana-launcher"
     },
     {
-      "path": "theia-extensions/yukibana"
+      "path": "ide/extensions/yukibana-product"
     },
     {
-      "path": "theia-extensions/yukibana-submission"
+      "path": "ide/extensions/yukibana"
     },
     {
-      "path": "theia-extensions/yukibana-cloud"
+      "path": "ide/extensions/yukibana-submission"
     },
     {
-      "path": "theia-extensions/yukibana-telemetry"
+      "path": "ide/extensions/yukibana-cloud"
     },
     {
-      "path": "theia-extensions/langs/scala"
+      "path": "ide/extensions/yukibana-telemetry"
     },
     {
-      "path": "electron-app"
+      "path": "ide/extensions/langs/scala"
     },
     {
-      "path": "browser-app"
+      "path": "ide/electron"
+    },
+    {
+      "path": "ide/browser"
     }
   ]
 }

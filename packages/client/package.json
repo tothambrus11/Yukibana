@@ -1,0 +1,53 @@
+{
+  "name": "@yukibana/client",
+  "private": true,
+  "version": "0.1.0",
+  "description": "The library the IDE and the CLI share: the registry client, login and sessions, packing, unpacking and assembly of Yukibana course projects.",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/library.js",
+  "types": "lib/library.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/library.d.ts",
+      "default": "./lib/library.js"
+    },
+    "./config": {
+      "types": "./lib/lib/yukibana.d.ts",
+      "default": "./lib/lib/yukibana.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "config": [
+        "lib/lib/yukibana.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "lib"
+  ],
+  "engines": {
+    "node": ">=22.15"
+  },
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint --type-aware --deny-warnings",
+    "schema": "vitest run tests/schema.test.ts --update"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "oxlint": "^1.89.0",
+    "oxlint-tsgolint": "^7.0.2001",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4"
+  },
+  "dependencies": {
+    "ignore": "^7.0.13",
+    "modern-tar": "^0.8.6",
+    "zod": "^4.6.7"
+  }
+}

@@ -4,15 +4,15 @@ Courses hold editions, editions hold projects, students submit to projects.
 The cloud is a registry: it holds identities, enrolment, released archives
 and submissions, and transforms nothing. The database decides who may do
 what; the Worker asks it, as the person asking; the pages show what came
-back. The CLI (`cli/`) is where a course repository becomes the two archives
+back. The CLI (`packages/cli/`) is where a course repository becomes the two archives
 a release is made of, on a teacher's machine or in their CI. `README.md`
-says how to run it, `docs/architecture.md` what the parts are and how they
-connect, and `docs/design.md` why the model is what it is.
+says how to run it, `docs/cloud/architecture.md` what the parts are and how they
+connect, and `docs/cloud/design.md` why the model is what it is.
 This file is how the code is written.
 
 ## The one rule about the database
 
-**The database changes only through a file in `supabase/migrations/`.** Not
+**The database changes only through a file in `cloud/db/supabase/migrations/`.** Not
 the dashboard, not the SQL editor, not `psql` against production, not a
 generated diff. A function, a policy, a grant, an index, a role: each is a
 migration, written by hand, reviewed like code, applied by the deploy
@@ -32,8 +32,8 @@ Consequences, so nobody has to rediscover them:
   change a policy, drop it and create it (pg-delta cannot follow `alter
   policy`, and neither can a reviewer). To remove a column, first stop reading
   it, deploy, then drop it in a later migration.
-* Passwords and per-environment values are not migrations: `ops/bootstrap.sql`
-  sets them at deploy time from secrets. Seeds (`supabase/seeds/`) run only on
+* Passwords and per-environment values are not migrations: `cloud/db/ops/bootstrap.sql`
+  sets them at deploy time from secrets. Seeds (`cloud/db/supabase/seeds/`) run only on
   `supabase db reset`, so they exist locally and in CI and nowhere else.
 * The first admin is `app.bootstrap_admin`, run by an operator, once. There is
   no way to become admin through the app.
@@ -46,7 +46,7 @@ function in a migration, and nowhere else: the Worker never re-decides it.
 
 * **The Worker connects as `yukibana_app`**, a role that owns nothing,
   inherits nothing and cannot bypass RLS. Every query runs inside
-  `asUser(sql, claims, …)` or `asPublisher(sql, …)` in `app/src/lib/server/db.ts`,
+  `asUser(sql, claims, …)` or `asPublisher(sql, …)` in `cloud/web/src/lib/server/db.ts`,
   which become `authenticated` (with the verified JWT's claims) or
   `yukibana_publisher` for the length of one transaction. A query outside
   them fails with "permission denied". That is the point. Which role the
@@ -78,7 +78,7 @@ function in a migration, and nowhere else: the Worker never re-decides it.
   project the token names and read nothing. A table grant for that role is
   a bug.
 
-Every policy has a pgTAP test in `supabase/tests/`, and the tests are written
+Every policy has a pgTAP test in `cloud/db/supabase/tests/`, and the tests are written
 as negatives: the student who cannot read a classmate's submission, the
 assistant who cannot enrol, the owner who cannot move a project to another
 edition. Negative tests are the only ones that catch a policy accidentally
@@ -87,7 +87,8 @@ every push, after rebuilding the database from empty.
 
 ## A sibling subdomain is another person's page
 
-Light, at light.yukibana.dev, runs programs people paste into it, and it is
+Light, at light.yukibana.dev (its own repository, not this one), runs
+programs people paste into it, and it is
 the same site as cloud.yukibana.dev: the browser sends the cloud's SameSite
 Lax cookies with every request a page there makes here, and that page can
 set cookies for the whole of yukibana.dev. Until Light moves to a domain of
@@ -106,19 +107,19 @@ its own, the cloud protects itself, by these rules:
   can cause in Auth counts: `tests.fingerprint()` covers Auth's OAuth tables
   so that the negatives see it.
 * **Cookie-authenticated writes are forms this site's pages submit, from its
-  own origin.** `forgery` in `app/src/lib/server/forgery.ts`, called first by
+  own origin.** `forgery` in `cloud/web/src/lib/server/forgery.ts`, called first by
   the hook, refuses any other non-GET request without a bearer: another
   Origin, none, a `Sec-Fetch-Site` other than `same-origin`, or a body that
   is not a form. SvelteKit's own origin check is not this rule: it lets a
   `text/plain` POST through, and it is off under `vite dev`.
 * **Every other write is bearer-only** (`requireBearer`).
 * **The session cookies are `__Host-` cookies** (`SESSION_COOKIE` in
-  `app/src/lib/session-cookie.ts`, used by both the Worker's and the page's
+  `cloud/web/src/lib/session-cookie.ts`, used by both the Worker's and the page's
   client): Secure, path `/`, no Domain, so nothing but this host can set one
   and a cookie tossed from a sibling is never read as a session. A new cookie
   that carries authority gets the prefix too.
 
-The negatives are `app/tests/integration/sibling.test.ts`: every route,
+The negatives are `cloud/web/tests/integration/sibling.test.ts`: every route,
 read from `src/routes`, sent what a light.yukibana.dev page can send, with a
 signed-in teacher's cookies, against the real app; nothing in the database
 or in Auth may change, nobody may be signed in or out, and a login in flight
@@ -126,7 +127,7 @@ may not be bound, approved or cancelled.
 
 ## Everything is TypeScript, and the types say what the code means
 
-`app/` is SvelteKit 3 on the oxc/rolldown toolchain (Vite 8, oxlint
+`cloud/web/` is SvelteKit 3 on the oxc/rolldown toolchain (Vite 8, oxlint
 type-aware, Vitest, svelte-check, TypeScript 6 `strict` with
 `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`), deployed as one
 Cloudflare Worker with `adapter-cloudflare`.
@@ -164,14 +165,14 @@ so; the bugs are the documentation people read.
 
 ## Everything is tested, and tested for real
 
-* `app/tests/` and `cli/tests/` are the unit suites, no services.
-* `app/tests/integration/` drives the real server modules against the local
+* `cloud/web/tests/`, `packages/client/tests/` and `packages/cli/tests/` are the unit suites, no services.
+* `cloud/web/tests/integration/` drives the real server modules against the local
   stack: Postgres through `yukibana_app`, the bucket over S3, releases by
   token and by owner, submissions. It runs with `npm run test:integration`
   and in CI.
-* `supabase/tests/` is pgTAP. `supabase/seeds/10_test_helpers.sql` gives it
+* `cloud/db/supabase/tests/` is pgTAP. `cloud/db/supabase/seeds/10_test_helpers.sql` gives it
   `tests.create_user`, `tests.authenticate` and lookups that see through RLS.
-* The fixture repository `cli/tests/fixtures/repo.tar.gz` is a real pax
+* The fixture repository `packages/client/tests/fixtures/repo.tar.gz` is a real pax
   tarball with a wrapper directory, a global header, a long path and a hidden
   test, because that is what `git archive` and GitHub produce. CI also
   unpacks it and runs `yukibana check` over it.
@@ -180,12 +181,12 @@ so; the bugs are the documentation people read.
 ## Before you push
 
 `npm run check` at the root: formatting, lint, typecheck, unit tests.
-`npm run format` formats everything but Markdown, the Svelte components and
-`light/` with oxfmt: single quotes (double only where they spare an escape),
+`npm run format` formats everything but Markdown and the Svelte components
+with oxfmt: single quotes (double only where they spare an escape),
 lines up to 180 characters. With the stack
 running: `npm run db:lint`, `npm run db:reset`, `npm run db:test`,
 `npm run test:integration`. CI runs all of it, plus the devcontainer build.
 On `main`, the database deploys only after CI is green (migrations,
 bootstrap, settings), but Cloudflare deploys the Worker on every push
 regardless, so nothing orders the two: a change that needs a migration ships
-in two pushes, migration first (`docs/deploy.md`).
+in two pushes, migration first (`docs/cloud/deploy.md`).

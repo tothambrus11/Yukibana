@@ -11,7 +11,7 @@ extra_search_path = ["public", "extensions"]
 max_rows = 1000
 # No grants by default: what an API role may read is what a migration granted
 # it, and nothing more. The app itself never uses the Data API (see
-# app/src/lib/server/db.ts); this keeps PostgREST honest for anyone who tries.
+# cloud/web/src/lib/server/db.ts); this keeps PostgREST honest for anyone who tries.
 auto_expose_new_tables = false
 
 [api.tls]
@@ -72,7 +72,7 @@ enabled = true
 site_url = "http://127.0.0.1:5173"
 # The CLI and a desktop IDE log in through the system browser and come back
 # to a listener on the loopback, on whatever port was free
-# (cli/src/loopback.ts). `*` matches the port. An IDE served from elsewhere
+# (packages/client/src/loopback.ts). `*` matches the port. An IDE served from elsewhere
 # that comes back to its own address needs that address here too.
 additional_redirect_urls = ["http://127.0.0.1:5173/auth/callback", "http://localhost:5173/auth/callback", "http://127.0.0.1:*/callback"]
 jwt_expiry = 3600
@@ -175,9 +175,9 @@ enabled = false
 
 # Auth as an OAuth 2.1 server, for one client: the registry's own, through
 # which the CLI and the IDE log in by way of the website (/auth/connect, see
-# app/src/lib/connect.ts). Auth sends the browser to site_url plus this path
+# cloud/web/src/lib/connect.ts). Auth sends the browser to site_url plus this path
 # with the authorization to approve. The client is registered once per
-# environment (`node scripts/oauth-client.mjs`, docs/deploy.md), not here:
+# environment (`node cloud/dev/scripts/oauth-client.mjs`, docs/cloud/deploy.md), not here:
 # clients are data, not settings. Nobody else may register one.
 [auth.oauth_server]
 enabled = true

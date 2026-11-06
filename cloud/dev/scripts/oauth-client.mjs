@@ -1,31 +1,32 @@
 // Registers the registry's OAuth client on Supabase Auth, once per
 // environment, and prints its id: the value of SUPABASE_OAUTH_CLIENT_ID.
 // Through it the CLI and the IDE log in by way of the website
-// (/auth/connect, app/src/lib/connect.ts). Idempotent: a client with this
+// (/auth/connect, cloud/web/src/lib/connect.ts). Idempotent: a client with this
 // name and this redirect URI already there is reused, not duplicated.
 //
-//   node scripts/oauth-client.mjs                      the local stack
-//   node scripts/oauth-client.mjs <auth url> <site>    another one; the
+//   node cloud/dev/scripts/oauth-client.mjs                      the local stack
+//   node cloud/dev/scripts/oauth-client.mjs <auth url> <site>    another one; the
 //       secret key is read from SUPABASE_SECRET_KEY, never an argument
 //
 // The client is public (no secret: a CLI cannot keep one), may use the
 // authorization code and refresh token grants, and has exactly one
 // redirect URI, the site's /auth/connect/return. Auth matches it exactly.
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const NAME = 'Yukibana IDE and CLI';
 
 let [authUrl, site] = process.argv.slice(2);
 let key = process.env.SUPABASE_SECRET_KEY;
 if (authUrl === undefined) {
-  const status = JSON.parse(execFileSync('npx', ['--yes', 'supabase', 'status', '-o', 'json'], { encoding: 'utf8', shell: process.platform === 'win32' }));
+  const status = JSON.parse(execFileSync('npx', ['--yes', 'supabase', 'status', '-o', 'json', '--workdir', fileURLToPath(new URL('../../db', import.meta.url))], { encoding: 'utf8', shell: process.platform === 'win32' }));
   authUrl = status.API_URL;
   key ??= status.SECRET_KEY ?? status.SERVICE_ROLE_KEY;
-  // The local site_url in supabase/config.toml, where `npm run dev` serves.
+  // The local site_url in cloud/db/supabase/config.toml, where `npm run dev` serves.
   site ??= 'http://127.0.0.1:5173';
 }
 if (site === undefined || key === undefined || key === '') {
-  console.error('usage: SUPABASE_SECRET_KEY=... node scripts/oauth-client.mjs <auth url> <site url>');
+  console.error('usage: SUPABASE_SECRET_KEY=... node cloud/dev/scripts/oauth-client.mjs <auth url> <site url>');
   process.exit(2);
 }
 
@@ -38,7 +39,7 @@ async function call(method, body) {
   const text = await res.text();
   if (!res.ok) {
     console.error(`${method} ${endpoint} answered ${res.status}: ${text}`);
-    console.error('Is [auth.oauth_server] enabled in supabase/config.toml, and the stack restarted since?');
+    console.error('Is [auth.oauth_server] enabled in cloud/db/supabase/config.toml, and the stack restarted since?');
     process.exit(1);
   }
   return JSON.parse(text);
@@ -54,7 +55,7 @@ for (let page = 1; page < 100; page++) {
   const res = await fetch(url, { headers });
   if (!res.ok) {
     console.error(`GET ${url} answered ${res.status}: ${await res.text()}`);
-    console.error('Is [auth.oauth_server] enabled in supabase/config.toml, and the stack restarted since?');
+    console.error('Is [auth.oauth_server] enabled in cloud/db/supabase/config.toml, and the stack restarted since?');
     process.exit(1);
   }
   const body = await res.json();

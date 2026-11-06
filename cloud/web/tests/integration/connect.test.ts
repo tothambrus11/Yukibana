@@ -15,13 +15,13 @@ import { codeMailedTo } from './mail.js';
 // tests/integration/sibling.test.ts sends the consent route what a page
 // elsewhere could.
 
-/** The local site_url (supabase/config.toml), where Auth sends the consent
+/** The local site_url (cloud/db/supabase/config.toml), where Auth sends the consent
  *  step and where the OAuth client's one redirect URI lives. */
 const SITE = 'http://127.0.0.1:5173';
 const RETURN = returnUrlOf(SITE);
 
 const clientId = (): string => {
-  if (config.oauthClientId === null) throw new Error('SUPABASE_OAUTH_CLIENT_ID is not set: run `node scripts/oauth-client.mjs` against the stack and export what it prints');
+  if (config.oauthClientId === null) throw new Error('SUPABASE_OAUTH_CLIENT_ID is not set: run `node cloud/dev/scripts/oauth-client.mjs` against the stack and export what it prints');
   return config.oauthClientId;
 };
 

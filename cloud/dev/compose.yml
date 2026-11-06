@@ -3,9 +3,9 @@
 # server was retired in 2026; its successor needs a per-machine licence file,
 # which is not something a local stack should ask for.) The app talks to it
 # exactly as it talks to R2 in production: over S3, through the one adapter in
-# app/src/lib/server/storage.ts.
+# cloud/web/src/lib/server/storage.ts.
 #
-#   docker compose -f dev/compose.yml up -d
+#   docker compose -f cloud/dev/compose.yml up -d
 services:
   rustfs:
     image: rustfs/rustfs:latest

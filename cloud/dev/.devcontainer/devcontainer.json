@@ -10,7 +10,7 @@
 
   // Mount the workspace at the SAME absolute path it has on the host. Load-bearing:
   // the Supabase CLI and docker compose run in here but drive the HOST daemon, so
-  // the bind mounts they request (supabase/functions -> edge runtime) are resolved
+  // the bind mounts they request (cloud/db/supabase/functions -> edge runtime) are resolved
   // against host paths. Change this and edge functions mount as an empty directory.
   "workspaceMount": "source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind",
   "workspaceFolder": "${localWorkspaceFolder}",
@@ -26,8 +26,8 @@
   },
 
   "remoteUser": "node",
-  "postCreateCommand": "npm run install:all",
-  "postStartCommand": ".devcontainer/setup.sh",
+  "postCreateCommand": "npm --prefix cloud/web ci && npm --prefix packages/cli ci",
+  "postStartCommand": "cloud/dev/.devcontainer/setup.sh",
 
   // No forwardPorts: the Supabase and RustFS ports are published by the host
   // daemon, so they are already on the host's localhost. The SvelteKit dev

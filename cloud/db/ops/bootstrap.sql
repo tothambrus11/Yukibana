@@ -2,7 +2,7 @@
 -- secrets or differ by environment. Idempotent: the deploy workflow runs it
 -- after every `supabase db push`.
 --
---   psql "$SUPABASE_DB_URL" -v app_password="$APP_DB_PASSWORD" -v admin_email="$FIRST_ADMIN_EMAIL" -f ops/bootstrap.sql
+--   psql "$SUPABASE_DB_URL" -v app_password="$APP_DB_PASSWORD" -v admin_email="$FIRST_ADMIN_EMAIL" -f cloud/db/ops/bootstrap.sql
 
 alter role yukibana_app password :'app_password';
 

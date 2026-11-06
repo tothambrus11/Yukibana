@@ -3,11 +3,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { v7 as uuidv7 } from 'uuid';
-import { gzip } from './lib/gzip.js';
-import { writeTar } from './lib/tar.js';
-import { planStarter, planTeacher } from './lib/starter.js';
-import type { Config } from './lib/yukibana.js';
-import { readTree } from './tree.js';
+import { type Config, gzip, planStarter, planTeacher, readTree, writeTar } from '@yukibana/client';
 
 export interface Built {
   /** gzipped tar of the starter, unpacking into `folder/`. */

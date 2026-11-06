@@ -4,8 +4,7 @@
  *  not exported. */
 
 import { spawn } from 'node:child_process';
-import type { CallbackOutcome } from '../loopback.js';
-import { loginCode } from '../lib/pkce.js';
+import { type CallbackOutcome, loginCode } from '@yukibana/client';
 
 /** Prints the address, in case no browser opens, and opens it in the
  *  system browser, best effort. */

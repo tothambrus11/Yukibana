@@ -3,15 +3,29 @@
 
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { assemble, submissionRoot, tampered, type Tampering } from '../lib/assemble.js';
-import { behind, chooseReleases, nameOf, wantedRelease, type Wanted } from '../lib/grading.js';
-import { sha256Hex } from '../lib/bytes.js';
-import { folderNames, stampOf } from '../lib/names.js';
-import type { Entry } from '../lib/tar.js';
-import type { Release, Submission } from '../lib/wire.js';
-import { CONFIG_FILE, parseConfig } from '../lib/yukibana.js';
-import { isEmptyDir, readArchive, writeEntries } from '../extract.js';
-import { readTree } from '../tree.js';
+import {
+  assemble,
+  behind,
+  chooseReleases,
+  CONFIG_FILE,
+  type Entry,
+  folderNames,
+  isEmptyDir,
+  nameOf,
+  parseConfig,
+  readArchive,
+  readTree,
+  type Release,
+  sha256Hex,
+  stampOf,
+  type Submission,
+  submissionRoot,
+  tampered,
+  type Tampering,
+  type Wanted,
+  wantedRelease,
+  writeEntries,
+} from '@yukibana/client';
 import { select } from './browse.js';
 import { clientFor, fail, projectOf, studentsOf, type Invocation } from './common.js';
 import { save } from './work.js';

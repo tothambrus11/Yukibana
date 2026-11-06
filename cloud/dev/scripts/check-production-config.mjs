@@ -3,7 +3,7 @@
 // with REPLACE_ME_PROJECT_REF in it would start, serve pages, and fail every
 // login with something that looks nothing like the cause.
 //
-//   node scripts/check-production-config.mjs
+//   node cloud/dev/scripts/check-production-config.mjs
 import { readFileSync } from 'node:fs';
 
 const WHERE = {
@@ -12,10 +12,11 @@ const WHERE = {
   REPLACE_ME_WORKERS_SUBDOMAIN: 'the workers.dev subdomain, or the custom domain the app is served on',
 };
 
-const files = ['wrangler.jsonc', 'supabase/config.toml'];
+// From the repository root.
+const files = ['cloud/web/wrangler.jsonc', 'cloud/db/supabase/config.toml'];
 const found = [];
 for (const file of files) {
-  const lines = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8').split('\n');
+  const lines = readFileSync(new URL(`../../../${file}`, import.meta.url), 'utf8').split('\n');
   lines.forEach((line, i) => {
     for (const name of Object.keys(WHERE)) {
       if (line.includes(name)) found.push({ file, line: i + 1, name });
@@ -34,5 +35,5 @@ for (const name of new Set(found.map(f => f.name))) {
   for (const f of found.filter(x => x.name === name)) console.error(`    at ${f.file}:${f.line}`);
   console.error('');
 }
-console.error('Fill them in and commit; docs/deploy.md says where each comes from.');
+console.error('Fill them in and commit; docs/cloud/deploy.md says where each comes from.');
 process.exit(1);

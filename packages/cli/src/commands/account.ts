@@ -1,8 +1,7 @@
 /** Logging in and out from a terminal, and asking who you are. */
 
-import { loginWithLoopback } from '../loopback.js';
+import { loginWithLoopback, logout } from '@yukibana/client';
 import { callbackPage, openInBrowser } from './browser.js';
-import { logout } from '../session.js';
 import { clientFor, registryUrl, type Invocation } from './common.js';
 
 export async function login(inv: Invocation): Promise<void> {

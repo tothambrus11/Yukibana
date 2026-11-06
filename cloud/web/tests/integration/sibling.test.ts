@@ -234,7 +234,7 @@ test('a page on a sibling subdomain that loads every route of this site changes 
 });
 
 test('a page on a sibling subdomain cannot have Auth bind or approve a login of its own as the person viewing it, nor cancel theirs', { timeout: 60_000 }, async () => {
-  if (config.oauthClientId === null) throw new Error('SUPABASE_OAUTH_CLIENT_ID is not set: run `node scripts/oauth-client.mjs` against the stack and export what it prints');
+  if (config.oauthClientId === null) throw new Error('SUPABASE_OAUTH_CLIENT_ID is not set: run `node cloud/dev/scripts/oauth-client.mjs` against the stack and export what it prints');
   // Two real authorizations for the registry's client, made the way
   // "Continue" makes them: the teacher's, whose id their connect cookie
   // holds, and one the sibling page made for itself. Both for the client's

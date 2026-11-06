@@ -13,12 +13,12 @@ is how the code inside them is written.
 
 | Element | What it is | Where it lives |
 | --- | --- | --- |
-| **The Worker** | The SvelteKit app in `app/`, built by `adapter-cloudflare` into one Cloudflare Worker. It serves the pages and the JSON API under `/api/`, and holds no state between requests. | `app/`, configured by `wrangler.jsonc` at the root |
-| **Postgres** | Supabase's database. The schema, every policy, every function that writes, the roles the Worker connects as, and the audit log. | `supabase/migrations/`, plus `ops/bootstrap.sql` for passwords |
-| **Supabase Auth** | Who someone is: an account per verified address, proved by GitHub (an OAuth App) or by a one-time code mailed through Resend. It issues the JWTs everything else trusts. | `supabase/config.toml`, pushed by the deploy |
+| **The Worker** | The SvelteKit app in `cloud/web/`, built by `adapter-cloudflare` into one Cloudflare Worker. It serves the pages and the JSON API under `/api/`, and holds no state between requests. | `cloud/web/`, configured by `cloud/web/wrangler.jsonc` |
+| **Postgres** | Supabase's database. The schema, every policy, every function that writes, the roles the Worker connects as, and the audit log. | `cloud/db/supabase/migrations/`, plus `cloud/db/ops/bootstrap.sql` for passwords |
+| **Supabase Auth** | Who someone is: an account per verified address, proved by GitHub (an OAuth App) or by a one-time code mailed through Resend. It issues the JWTs everything else trusts. | `cloud/db/supabase/config.toml`, pushed by the deploy |
 | **Supabase Realtime** | Private broadcast topics that tell open pages "this edition changed". It carries news, never data. | the `live_signals` migration, checked by `ops/realtime-policies.sql` |
 | **Hyperdrive** | Cloudflare's pool in front of Postgres. The Worker opens a client per request; Hyperdrive keeps the real connections. | the `hyperdrive` binding in `wrangler.jsonc` |
-| **The bucket** | The bytes: release archives and submissions. R2 in production, RustFS locally and in CI, both spoken to over S3. | `app/src/lib/server/storage.ts`, `dev/compose.yml` |
+| **The bucket** | The bytes: release archives and submissions. R2 in production, RustFS locally and in CI, both spoken to over S3. | `cloud/web/src/lib/server/storage.ts`, `cloud/dev/compose.yml` |
 
 ### What people use
 
@@ -26,7 +26,7 @@ is how the code inside them is written.
 | --- | --- | --- |
 | **The pages** | everyone | Browse editions and projects, enrol, set dates, publish a release by hand, download, submit by upload. Served by the Worker. |
 | **The CLI**, `yukibana` | teachers, students, CI | `check` and `build` turn a course repository into the two archives of a release; `publish`, `download` and `assemble` for staff; `login`, `projects`, `starter`, `submit` for students. |
-| **The library** | the IDE | `cli/src/library.ts`: the same login, API client and submission packing as the CLI, headless, for the Theia extension and `demo/electron`. |
+| **The library** | the IDE | `packages/client/src/library.ts`: the same login, API client and submission packing as the CLI, headless, for the Theia extensions. |
 | **The GitHub Action** | a course repository's CI | `action/action.yml`: builds the archives with the CLI and publishes them with a project token. |
 
 ### What is stored
@@ -48,7 +48,7 @@ holds **projects**, a project has **releases** and **submissions**.
 
 Object keys are `starters/<project>/<uuid>.tar.gz`,
 `teacher/<project>/<uuid>.tar.gz` and `submissions/<submission>.tar.gz`
-(`app/src/lib/ids.ts`).
+(`cloud/web/src/lib/ids.ts`).
 
 ### Inside the Worker
 
@@ -70,7 +70,7 @@ Object keys are `starters/<project>/<uuid>.tar.gz`,
 | Element | When | Does |
 | --- | --- | --- |
 | **CI** (`ci.yml`, `ci-devcontainer.yml`) | every push and pull request | lint, typecheck, unit tests, a build; the whole stack from empty migrations, pgTAP, integration tests; the devcontainer. |
-| **Database** (`database.yml`) | after CI succeeds on `main`, or by hand | migrations, `ops/bootstrap.sql`, Supabase settings. |
+| **Database** (`database.yml`) | after CI succeeds on `main`, or by hand | migrations, `cloud/db/ops/bootstrap.sql`, Supabase settings. |
 | **Cloudflare Workers Builds** | every push | builds the Worker; deploys it on `main`, uploads a preview version elsewhere. |
 | **Drift** (`drift.yml`) | nightly | fails if production differs from the migrations. |
 
@@ -141,7 +141,7 @@ Object keys are `starters/<project>/<uuid>.tar.gz`,
   join. A page that hears one reruns its loads through the Worker, under the
   same policies as the first load.
 * **The CLI and the registry share nothing but the HTTP API.** The archives
-  are made by the CLI before they arrive, by pure functions in `cli/src/lib`;
+  are made by the CLI before they arrive, by pure functions in `packages/client/src/lib`;
   the registry checks they are gzip and under a cap, and stores them
   without opening them. Every archive is a `.tar.gz`.
 
@@ -194,12 +194,12 @@ The same elements exist three times, wired the same way.
 | | Local | CI | Production |
 | --- | --- | --- | --- |
 | Postgres, Auth, Realtime | `supabase start` | `supabase start` on the runner | a Supabase project |
-| Bucket | RustFS, `dev/compose.yml` | RustFS | R2 bucket `yukibana-cloud` |
+| Bucket | RustFS, `cloud/dev/compose.yml` | RustFS | R2 bucket `yukibana-cloud` |
 | Worker | `npm run dev`, configured by `.dev.vars` | a production build, and the integration suite against the server modules | Workers Builds, `wrangler.jsonc` |
 | Database connection | `localConnectionString` in `wrangler.jsonc` | the same | Hyperdrive, as `yukibana_app` |
 | Mail | the stack's catcher at :54324 | none | Resend |
 
-`wrangler.jsonc` and `[remotes.production]` in `supabase/config.toml` hold
+`wrangler.jsonc` and `[remotes.production]` in `cloud/db/supabase/config.toml` hold
 production's values, because that is what is deployed and what a diff
 should show; `.dev.vars` and the rest of `config.toml` override them
 locally.

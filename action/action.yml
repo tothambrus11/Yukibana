@@ -36,19 +36,24 @@ inputs:
 runs:
   using: composite
   steps:
+    # 24: the repository's pnpm workspace refuses an older Node.
     - uses: actions/setup-node@v4
       with:
-        node-version: 22
+        node-version: 24
 
     # The CLI is built from this action's own checkout, so a course
     # repository needs nothing published to npm.
     - name: Build the CLI
       shell: bash
       run: |
+        # The CLI (npm) links @yukibana/client (pnpm workspace) as file:../client,
+        # and npm installs nothing for a link: the workspace installs the
+        # client's dependencies. The pnpm version is the root's packageManager.
+        npx --yes pnpm@12.8.1 --dir "${{ github.action_path }}/.." --filter @yukibana/client install --frozen-lockfile
         # Flags before the command. `npm run build --prefix x` is ambiguous:
         # npm may hand the flag to the script instead of reading it itself.
-        npm --prefix "${{ github.action_path }}/../cli" ci
-        npm --prefix "${{ github.action_path }}/../cli" run build
+        npm --prefix "${{ github.action_path }}/../packages/cli" ci
+        npm --prefix "${{ github.action_path }}/../packages/cli" run build
 
     - name: Publish
       shell: bash
@@ -61,4 +66,4 @@ runs:
         if [ -z "$folder" ]; then folder="${GITHUB_REPOSITORY##*/}"; folder="$(echo "$folder" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-\n' '-')"; fi
         label="${{ inputs.label }}"
         if [ -z "$label" ]; then label="${GITHUB_SHA::12}"; fi
-        node "${{ github.action_path }}/../cli/dist/index.js" publish "${{ inputs.directory }}" --folder "$folder" --label "$label"
+        node "${{ github.action_path }}/../packages/cli/dist/index.js" publish "${{ inputs.directory }}" --folder "$folder" --label "$label"
