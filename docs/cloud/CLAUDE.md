@@ -26,7 +26,7 @@ Consequences, so nobody has to rediscover them:
   from the migrations. Anything it prints is either reverted or written down.
 * A migration is a plain SQL file whose comments say why, not what. It runs
   inside one transaction, starts by bounding `lock_timeout` and
-  `statement_timeout`, and is linted by squawk (`npm run db:lint`) before it
+  `statement_timeout`, and is linted by squawk (run from `cloud/db`, as its `.squawk.toml` says) before it
   runs anywhere.
 * Migrations only ever add. To change a function, `create or replace` it. To
   change a policy, drop it and create it (pg-delta cannot follow `alter
@@ -82,7 +82,7 @@ Every policy has a pgTAP test in `cloud/db/supabase/tests/`, and the tests are w
 as negatives: the student who cannot read a classmate's submission, the
 assistant who cannot enrol, the owner who cannot move a project to another
 edition. Negative tests are the only ones that catch a policy accidentally
-widened. `npm run db:test` runs them against the local stack; CI runs them on
+widened. `npx --yes supabase test db --workdir cloud/db` runs them against the local stack; CI runs them on
 every push, after rebuilding the database from empty.
 
 ## A sibling subdomain is another person's page
@@ -168,7 +168,7 @@ so; the bugs are the documentation people read.
 * `cloud/web/tests/`, `packages/client/tests/` and `packages/cli/tests/` are the unit suites, no services.
 * `cloud/web/tests/integration/` drives the real server modules against the local
   stack: Postgres through `yukibana_app`, the bucket over S3, releases by
-  token and by owner, submissions. It runs with `npm run test:integration`
+  token and by owner, submissions. It runs with `npm --prefix cloud/web run test:integration`
   and in CI.
 * `cloud/db/supabase/tests/` is pgTAP. `cloud/db/supabase/seeds/10_test_helpers.sql` gives it
   `tests.create_user`, `tests.authenticate` and lookups that see through RLS.
@@ -180,12 +180,15 @@ so; the bugs are the documentation people read.
 
 ## Before you push
 
-`npm run check` at the root: formatting, lint, typecheck, unit tests.
-`npm run format` formats everything but Markdown and the Svelte components
-with oxfmt: single quotes (double only where they spare an escape),
-lines up to 180 characters. With the stack
-running: `npm run db:lint`, `npm run db:reset`, `npm run db:test`,
-`npm run test:integration`. CI runs all of it, plus the devcontainer build.
+Until the cloud and the CLI join the pnpm workspace, each area is checked
+with its own scripts: `npm --prefix cloud/web run lint`, `typecheck`, `test`
+and `build`; the same four for `packages/cli` (whose `pretest` builds the
+client); and `pnpm --filter @yukibana/client run typecheck`, `lint` and
+`test`. Formatting follows the old repository's oxfmt settings: single quotes
+(double only where they spare an escape), lines up to 180 characters. With
+the stack running: squawk from `cloud/db` (see its `.squawk.toml`),
+`npx --yes supabase db reset --workdir cloud/db`, `npx --yes supabase test db
+--workdir cloud/db`, and `npm --prefix cloud/web run test:integration`.
 On `main`, the database deploys only after CI is green (migrations,
 bootstrap, settings), but Cloudflare deploys the Worker on every push
 regardless, so nothing orders the two: a change that needs a migration ships

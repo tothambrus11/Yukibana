@@ -195,7 +195,7 @@ The same elements exist three times, wired the same way.
 | --- | --- | --- | --- |
 | Postgres, Auth, Realtime | `supabase start` | `supabase start` on the runner | a Supabase project |
 | Bucket | RustFS, `cloud/dev/compose.yml` | RustFS | R2 bucket `yukibana-cloud` |
-| Worker | `npm run dev`, configured by `.dev.vars` | a production build, and the integration suite against the server modules | Workers Builds, `wrangler.jsonc` |
+| Worker | `npm --prefix cloud/web run dev`, configured by `cloud/web/.dev.vars` | a production build, and the integration suite against the server modules | Workers Builds, `wrangler.jsonc` |
 | Database connection | `localConnectionString` in `wrangler.jsonc` | the same | Hyperdrive, as `yukibana_app` |
 | Mail | the stack's catcher at :54324 | none | Resend |
 

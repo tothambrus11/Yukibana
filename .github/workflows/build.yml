@@ -71,6 +71,19 @@ jobs:
           npm --prefix packages/cli run typecheck
           npm --prefix packages/cli run lint
           npm --prefix packages/cli test
+          npm --prefix packages/cli run build
+          mkdir -p "$RUNNER_TEMP/fixture"
+          tar -xzf packages/client/tests/fixtures/repo.tar.gz -C "$RUNNER_TEMP/fixture" --strip-components=1
+          node packages/cli/dist/index.js check "$RUNNER_TEMP/fixture" --folder calc
+
+      # The cloud's Worker, with the old repository's npm scripts until PR 3; PR 5's per-package CI replaces this step.
+      - name: Check the cloud web app
+        run: |
+          npm --prefix cloud/web ci
+          npm --prefix cloud/web run typecheck
+          npm --prefix cloud/web run lint
+          npm --prefix cloud/web test
+          npm --prefix cloud/web run build
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v7

@@ -95,7 +95,8 @@ More information can be found in [docs/architecture.md](docs/architecture.md).
 Until they join the pnpm workspace, [cloud/web](cloud/web) and [packages/cli](packages/cli) are installed with npm
 (`npm --prefix cloud/web ci`, `npm --prefix packages/cli ci`) and keep their own scripts (`build`, `test`, `typecheck`,
 `lint`). The CLI links [@yukibana/client](packages/client) as `file:../client`, and npm installs no dependencies for a
-link: run `pnpm --filter @yukibana/client install` (or `pnpm setup:ide`) at the root first. Their guide is
+link: run `pnpm --filter @yukibana/client install` (or `pnpm setup:ide`) at the root first, on Node 24 as the root's
+`devEngines` requires (the cloud's devcontainer, `cloud/dev/.devcontainer`, does both). Their guide is
 [docs/cloud/CLAUDE.md](docs/cloud/CLAUDE.md).
 
 The cloud's devcontainer is not where editors look for one (`.devcontainer/` at the root), so start it from the root

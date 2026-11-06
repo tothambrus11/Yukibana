@@ -16,9 +16,9 @@
     in
     {
       devShells = forAllSystems (pkgs: {
-        # Node 22, as in CI and the CLI's `engines`; npm comes with it.
+        # Node 24, as the root's devEngines requires; npm comes with it.
         default = pkgs.mkShell {
-          packages = [ pkgs.nodejs_22 ];
+          packages = [ pkgs.nodejs_24 ];
         };
       });
     };

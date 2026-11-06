@@ -11,15 +11,11 @@
   "bin": {
     "yukibana": "dist/index.js"
   },
-  "files": [
-    "dist"
-  ],
   "engines": {
-    "node": ">=22.15"
+    "node": ">=24"
   },
   "scripts": {
     "build": "tsc --build tsconfig.build.json",
-    "prepack": "npm run build",
     "build:client": "tsc --build ../client/tsconfig.build.json",
     "pretest": "npm run build:client",
     "test": "vitest run",

@@ -171,7 +171,7 @@ Postgres falls back to text equality without a word, and a role change for
 A release is two archives: the **starter** students download and the
 **teacher archive**, the whole project with the hidden tests, for staff.
 Both are made by `yukibana build` from a checkout, by the same pure
-functions (`cli/src/lib`): a tar reader and writer, a glob matcher, and a
+functions (`packages/client/src/lib`): a tar reader and writer, a glob matcher, and a
 plan per archive, tested against a fixture that is a real pax tarball. The
 registry stores what it is given, checks that each is gzip and under a cap,
 records sizes and SHA-256s, and serves the newest starter to students whose
@@ -205,7 +205,7 @@ which widgets show, which files open, which are read-only. `readOnly` and
 `hidden` are the two lists that matter to grading. A student receives the
 starter (no hidden files); what they send back is the folder minus `.git`,
 `.theia`, build output and what the file excludes. Packing is one library
-function in `cli/`, called by `yukibana submit` and by the IDE extension
+function in `packages/client`, called by `yukibana submit` and by the IDE extension
 alike, so the two cannot disagree about which files a submission holds.
 
 A teacher grades an **assembly**: the submission with `yukibana.json`, every
@@ -257,7 +257,7 @@ integration suite, squawk over migrations, the deploy and drift workflows.
   through the website (`/auth/connect`), so by GitHub or by code, as the
   account the person confirms there, by way of Supabase Auth's OAuth 2.1
   server. A registry without the OAuth client still sends them straight to
-  GitHub (`authorizeUrl` in `cli/src/lib/pkce.ts`).
+  GitHub (`authorizeUrl` in `packages/client/src/lib/pkce.ts`).
 * **Retention.** Addresses and submission bodies are personal data. Cascading
   deletes from `auth.users` would erase graded work; the schema restricts
   instead, and bucket lifecycle rules must agree with whatever the database

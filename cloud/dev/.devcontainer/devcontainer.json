@@ -1,6 +1,6 @@
 {
   "name": "yukibana-cloud",
-  "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:24",
 
   "features": {
     // moby:false is required - the base image is Debian trixie, which has no
@@ -26,7 +26,12 @@
   },
 
   "remoteUser": "node",
-  "postCreateCommand": "npm --prefix cloud/web ci && npm --prefix packages/cli ci",
+  // The CLI links @yukibana/client as file:../client, for which npm installs
+  // nothing, so the client's dependencies come from the pnpm workspace first
+  // (the same line action/action.yml runs). The root's devEngines refuses any
+  // Node below 24, hence the image. Becomes one `pnpm install` once the cloud
+  // and the CLI are workspace packages.
+  "postCreateCommand": "npx --yes \"$(node -p \"require('./package.json').packageManager\")\" --filter @yukibana/client install --frozen-lockfile && npm --prefix cloud/web ci && npm --prefix packages/cli ci",
   "postStartCommand": "cloud/dev/.devcontainer/setup.sh",
 
   // No forwardPorts: the Supabase and RustFS ports are published by the host
