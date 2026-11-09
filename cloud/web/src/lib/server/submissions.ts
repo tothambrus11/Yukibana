@@ -1,4 +1,4 @@
-/** Accepting a submission and handing out downloads. Shared by the API
+/** Accepting, removing and handing out submissions. Shared by the API
  *  routes (what an IDE extension calls) and the page's upload form, so both
  *  make exactly the same decisions.
  */
@@ -132,8 +132,8 @@ async function reason(ctx: Context, claims: Claims, project: ProjectId): Promise
     }
 }
 
-/** Deletes the object of a submission whose row was refused, reporting
- *  rather than throwing when it cannot. */
+/** Deletes the object of a submission whose row was refused or removed,
+ *  reporting rather than throwing when it cannot. */
 async function forget(ctx: Context, key: ObjectKey): Promise<void> {
     try {
         await ctx.bucket.delete(key);
@@ -191,6 +191,35 @@ export async function submissionObject(ctx: Context, claims: Claims, submission:
 export async function submissionUrl(ctx: Context, claims: Claims, submission: SubmissionId): Promise<URL> {
     const o = await submissionObject(ctx, claims, submission);
     return ctx.bucket.presignGet(o.key, 60, o.filename);
+}
+
+/** Removes `submission` for the caller, if they may, and then its archive
+ *  from the bucket. `app.remove_submission` decides who may (staff of the
+ *  edition, owners and assistants, at any time; never a student, not even
+ *  the author) and writes the audit row. It raises P0002 for a submission
+ *  the caller cannot read and 42501, with the reason, for one they may not
+ *  remove (a student's own); this throws them as a 404 or a 403 with the
+ *  database's sentence. Anything else is a 500 with a fixed sentence,
+ *  reported (`failed`).
+ *
+ *  The row first, then the object: once the row is gone nothing hands the
+ *  archive out, and a bucket that fails to delete it leaves an orphan that
+ *  is reported, never a row without a body. The removal stands either way,
+ *  so a failed object delete does not fail the call. */
+export async function removeSubmission(ctx: Context, claims: Claims, submission: SubmissionId): Promise<void> {
+    let key: ObjectKey;
+    try {
+        key = await asUser(ctx.sql, claims, async tx => {
+            const [r] = await tx<{ key: string }[]>`select app.remove_submission(${submission}) as key`;
+            if (r === undefined) throw new Error('app.remove_submission answered no row');
+            return trustKey(r.key);
+        });
+    } catch (e) {
+        const { status, message } = statusOf(e);
+        if (!isHttpError(e) && (status === 403 || status === 404)) error(status, message);
+        failed(e);
+    }
+    await forget(ctx, key);
 }
 
 /** Returns a presigned URL, valid for 60 seconds, for the caller to

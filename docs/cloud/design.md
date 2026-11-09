@@ -42,7 +42,13 @@ grading integrations would later have to fight:
 4. **A roster feed is the forcing function.** Every table is judged by how
    cleanly a school's SIS could later drive it. `enrollment.source` says
    which rows a sync owns.
-5. **Submissions are append-only.** No update or delete path exists.
+5. **Submissions are never rewritten.** No update path exists. Removing one
+   is a single `security definer` function, `app.remove_submission`, for
+   staff of the edition (owners and assistants) at any time, and never for a
+   student, who replaces a wrong hand-in by submitting again. It deletes the row (the Worker then the archive) and
+   leaves an `audit_log` row with what was removed. Until 2026-11 no delete
+   path existed either, which left staff holding a test upload or a
+   misplaced hand-in nothing to do but bury it.
 6. **The schema changes only through migrations.** See `cloud/CLAUDE.md`.
 
 ## The model

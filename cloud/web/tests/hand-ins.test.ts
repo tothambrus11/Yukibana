@@ -12,6 +12,7 @@ const handIn = (author: UserId, at: string, late = false, base: HandIn['base'] =
     byteSize: 2048,
     sha256: '0'.repeat(64),
     late,
+    removable: false,
     base,
     fullName: null,
     githubLogin: null,

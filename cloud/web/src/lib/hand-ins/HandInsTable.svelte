@@ -7,6 +7,7 @@
   import { downloadAll as saveAll, downloadOne, findings, type ToAssemble } from './assembled';
   import BaseNote from './BaseNote.svelte';
   import StandingChip from './StandingChip.svelte';
+  import { confirmRemoval } from './removal';
 
   /** The staff's Submissions tab: one table row per student, with a
    *  search box over names, logins and addresses that forgives missing
@@ -19,8 +20,12 @@
    *  as `yukibana download --assemble` does (./assembled), and says under
    *  the row what the assembly changed. The arrow beside it downloads the
    *  archive as sent. Download all does the same for every student's latest
-   *  submission, whatever the search shows, into one archive. */
-  let { lines, releases, slug }: { lines: readonly StudentHandIns[]; releases: readonly Release[]; slug: string } = $props();
+   *  submission, whatever the search shows, into one archive.
+   *
+   *  Remove, drawn only for a submission the database says the viewer may
+   *  remove (staff, owners and assistants), posts the shown submission to `removeAction`, the
+   *  page's form action, after the browser asks to confirm. */
+  let { lines, releases, slug, removeAction }: { lines: readonly StudentHandIns[]; releases: readonly Release[]; slug: string; removeAction: string } = $props();
   const newest = $derived<Base | null>(releases[0] === undefined ? null : { ...releases[0], version: releases.length, latest: true });
 
   type Fetching = { readonly state: 'busy' } | { readonly state: 'done'; readonly findings: readonly string[] } | { readonly state: 'failed'; readonly why: string };
@@ -126,6 +131,12 @@
                         <div class="menu-items"><a href={raw} download>Download without assembly</a></div>
                       </details>
                     </div>
+                  {/if}
+                  {#if s.removable}
+                    <form method="POST" action={removeAction} class="inline" onsubmit={confirmRemoval}>
+                      <input type="hidden" name="submission_id" value={s.submissionId} />
+                      <button class="quiet" title="Delete this submission and its archive for good">Remove</button>
+                    </form>
                   {/if}
                 </div>
               {/if}

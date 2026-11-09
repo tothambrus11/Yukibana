@@ -147,12 +147,13 @@
   {/if}
 {:else if tab === 'submissions'}
   {#if data.staff}
+    {#if form?.removed}<p class="ok" role="status">Submission removed.</p>{/if}
     <section>
       <h2>Submissions</h2>
       {#if lines.length === 0}
         <p class="empty">Nobody is enrolled as a student yet.</p>
       {:else}
-        <HandInsTable {lines} releases={data.allReleases} slug={p.slug} />
+        <HandInsTable {lines} releases={data.allReleases} slug={p.slug} removeAction={actionIn('submissions', 'removeSubmission')} />
       {/if}
     </section>
   {:else}

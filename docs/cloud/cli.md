@@ -129,6 +129,7 @@ for reads). The shapes are `cloud/web/src/lib/api.ts`.
 | `GET /api/projects/{id}` | |
 | `GET /api/projects/{id}/submissions[?latest=true&author=]` | |
 | `POST /api/projects/{id}/submissions` | the `.tar.gz` as the body |
+| `DELETE /api/submissions/{id}` | staff of the edition (owners and assistants); bearer only |
 | `GET /api/projects/{id}/releases` | |
 | `POST /api/projects/{id}/releases` | multipart; a project token or a person's bearer |
 | `GET /api/projects/{id}/starter`, `/api/submissions/{id}`, `/api/releases/{id}/{starter,teacher}` | a redirect to a presigned URL good for a minute |

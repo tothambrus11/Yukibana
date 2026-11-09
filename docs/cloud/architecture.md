@@ -42,8 +42,10 @@ holds **projects**, a project has **releases** and **submissions**.
   and a `position` for ordering.
 * `project_release` is a pair of object keys (starter, teacher archive) with
   sizes and SHA-256s; `project_token` is a hash of a publishing secret.
-* `submission` is one append-only row per version handed in, pointing at one
-  object.
+* `submission` is one row per version handed in, pointing at one object.
+  Rows are never changed; `app.remove_submission` is the only way one
+  leaves (staff of the edition, owners and assistants; never a student),
+  and it leaves an `audit_log` row behind.
 * `audit_log` is a row for every write a `security definer` function made.
 
 Object keys are `starters/<project>/<uuid>.tar.gz`,

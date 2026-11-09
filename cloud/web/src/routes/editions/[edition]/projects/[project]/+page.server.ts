@@ -5,7 +5,7 @@ import type { EnrolledStudent, HandIn, Release } from '#lib/hand-ins.ts';
 import { asUser, refusalOf } from '#lib/server/db.ts';
 import { text } from '#lib/server/form.ts';
 import { requireClaims, withContext } from '#lib/server/context.ts';
-import { acceptSubmission } from '#lib/server/submissions.ts';
+import { acceptSubmission, removeSubmission } from '#lib/server/submissions.ts';
 import { instantOf, isZone, type Reading } from '#lib/wall-time.ts';
 
 interface ProjectRow {
@@ -36,6 +36,8 @@ interface SubmissionRow {
     full_name: string | null;
     github_login: string | null;
     late: boolean;
+    /** app.may_remove_submission: whether to draw a remove button. */
+    removable: boolean;
     /** The release the registry recorded the submission as started from,
      *  or null when it said none. */
     base_id: string | null;
@@ -61,6 +63,7 @@ function handInOf(r: SubmissionRow, releases: readonly Release[]): HandIn {
         byteSize: r.byte_size,
         sha256: r.sha256,
         late: r.late,
+        removable: r.removable,
         base: found === undefined ? null : { ...found, version: releases.length - at, latest: at === 0 },
         fullName: r.full_name,
         githubLogin: r.github_login,
@@ -123,7 +126,8 @@ export const load: PageServerLoad = async event => {
             const owner = p.role === 'owner';
             const rows = await tx<SubmissionRow[]>`
         select s.submission_id, s.submitted_at, s.byte_size, encode(s.sha256, 'hex') as sha256, s.author_id, u.full_name, u.github_login,
-               coalesce(s.submitted_at > ${p.deadline}::timestamptz, false) as late, s.base_release_id as base_id
+               coalesce(s.submitted_at > ${p.deadline}::timestamptz, false) as late, s.base_release_id as base_id,
+               app.may_remove_submission(s.submission_id) as removable
         from submission s
         left join app_user u on u.user_id = s.author_id
         where s.project_id = ${project}
@@ -215,8 +219,8 @@ function timesOf(form: FormData): { ok: true; availableAfter: Date | null; deadl
  *  sentence, reported and not shown (`refusalOf`).
  *
  *  Of the actions, only `update` checks that the project is in the edition the address
- *  names. `submit`, `createToken` and `revokeToken` check only that the
- *  `edition` parameter is a uuid and act on the project (or token) by its
+ *  names. `submit`, `removeSubmission`, `createToken` and `revokeToken` check only that the
+ *  `edition` parameter is a uuid and act on the project (or submission, or token) by its
  *  own id, so under another edition's address they do what they would do
  *  under the right one; `load` answers that address with a 404. Nothing is
  *  widened by it: the database decides by the project, not the address. */
@@ -238,6 +242,25 @@ export const actions: Actions = {
         } catch (e) {
             return httpFailing(e);
         }
+    },
+    /** A remove button: the submission `submission_id`, through
+     *  `removeSubmission`, which asks the database whether the caller may
+     *  (staff only) and then deletes the archive. The staff's Submissions
+     *  tab posts here. An id that is not a uuid is a
+     *  404. Answers `{ removed: true }`, or a `fail` with the status and
+     *  sentence `removeSubmission` threw. */
+    removeSubmission: async event => {
+        const claims = requireClaims(event);
+        ids(event.params);
+        const form = await event.request.formData();
+        const submission = uuidOf<SubmissionId>(text(form, 'submission_id'));
+        if (submission === null) return fail(404, { error: 'No such submission.' });
+        try {
+            await withContext(ctx => removeSubmission(ctx, claims, submission));
+        } catch (e) {
+            return httpFailing(e);
+        }
+        return { removed: true };
     },
     /** The Settings form: the title and the three times (`timesOf`). Under
      *  the project policy, which lets only those who may edit the edition's

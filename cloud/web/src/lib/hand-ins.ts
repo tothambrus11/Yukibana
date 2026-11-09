@@ -40,6 +40,11 @@ export interface HandIn {
     /** Whether it arrived after the project's deadline, as the database
      *  compared them. A project without a deadline has no late work. */
     readonly late: boolean;
+    /** Whether the caller may remove it, as `app.may_remove_submission`
+     *  answered: true for staff of the edition, false for a student, their
+     *  own submissions included. Decides only whether
+     *  the page draws a remove button; the removal asks the database again. */
+    readonly removable: boolean;
     /** The release the student's folder said it started from, or null when
      *  it said none (an upload through the page, a folder from before
      *  starters carried their release) or named a release that is not this
