@@ -8,7 +8,7 @@ why, so that nobody has to rerun them to learn it.
 | --- | --- |
 | `tokens/base.tokens.json` | Every token, in the [W3C Design Tokens format](https://www.designtokens.org/tr/2025.10/format/), with the light theme's colours. |
 | `tokens/dark.tokens.json` | The dark theme: colours only, each overriding the token of the same path. |
-| `css/tokens.css` | Generated: custom properties `--yk-*`, colours as `light-dark()`. Committed, so Light (in its own repository) can copy it. |
+| `css/tokens.css` | Generated: custom properties `--yk-*`, colours as `light-dark()`. Committed, like `base.css`, so installing the package builds nothing. |
 | `css/base/*.css` | The shared components, `yk-` classes, drawn from the tokens only: one file per component (`buttons.css`, `fields.css`, `toast.css`, …), and `core.css` for the page and the focus ring. Edit these. |
 | `css/base.css` | Generated: the parts in `css/base/` joined into one file, in the order `src/base.ts` lists them. Committed, and the file apps import. |
 | `css/fonts.css` | `@font-face` for the three typefaces, under the names `tokens.css` uses, from `fonts/`. Optional. |
@@ -105,6 +105,85 @@ which means the cloud keeps deleted rows for a while instead of removing them.
 coming shows skeleton rows. A spinner appears only inside a button that is working, never next to a skeleton.
 
 **Motion and icons.** 120ms fades, no movement, no bounce. Thin outline icons, stroke 1.5, Lucide style.
+
+## Using the package from another repository
+
+Everything the package ships is committed, the generated CSS included, so another repository uses it straight from
+git, pinned to one commit, with nothing to build and no install script. The pinned commit is the version: there is no
+other stamp in the files. What it exports:
+
+| Import | File |
+| --- | --- |
+| `@yukibana/design/tokens.css` | `css/tokens.css` |
+| `@yukibana/design/base.css` | `css/base.css` |
+| `@yukibana/design/fonts.css` | `css/fonts.css` |
+| `@yukibana/design/css/*` | any file in `css/`, such as one part, `css/base/segmented.css` |
+| `@yukibana/design/fonts/*` | the font files and their licences |
+| `@yukibana/design/tokens/*` | the token files, for tools |
+
+In CSS, after installing it either way below:
+
+```css
+@import '@yukibana/design/tokens.css';
+@import '@yukibana/design/fonts.css';
+@import '@yukibana/design/base.css' layer(components);
+```
+
+`fonts.css` names its files by relative URL, so the bundler (Vite) copies them from the package into the build.
+
+### A pnpm git dependency (the website)
+
+In `package.json`, the full 40-character hash of a commit on `main`:
+
+```json
+"dependencies": {
+    "@yukibana/design": "github:tothambrus11/Yukibana#<commit>&path:packages/design"
+}
+```
+
+pnpm fetches that commit, takes `packages/design` and installs only what the package's `files` lists (`css`, `fonts`,
+`tokens`, the README). It does not install the package's devDependencies, so their `catalog:` versions, which only
+mean something inside this repository, never matter there.
+
+To move to a newer commit, once the change is merged:
+
+```sh
+pnpm add "github:tothambrus11/Yukibana#<new commit>&path:packages/design"
+```
+
+or change the hash in `package.json` and run `pnpm install`. Commit `package.json` and `pnpm-lock.yaml` together.
+
+### A git submodule and a `file:` dependency (Light)
+
+Check this repository out inside the app's repository, at the commit to use, and depend on the package's directory:
+
+```sh
+git submodule add https://github.com/tothambrus11/Yukibana vendor/yukibana
+git -C vendor/yukibana checkout <commit>
+git add .gitmodules vendor/yukibana
+```
+
+```json
+"dependencies": {
+    "@yukibana/design": "file:../vendor/yukibana/packages/design"
+}
+```
+
+The `file:` path is relative to that `package.json`. npm links the directory rather than copying it, so the whole
+package directory is visible and `files` does not apply; nothing is built either way. A fresh clone needs
+`git clone --recurse-submodules` (or `git submodule update --init`) before `npm install`. If the submodule lies
+outside the Vite project's root, Vite's dev server must be allowed to read it (`server.fs.allow`).
+
+To move to a newer commit:
+
+```sh
+git -C vendor/yukibana fetch origin
+git -C vendor/yukibana checkout <new commit>
+git add vendor/yukibana
+npm install
+```
+
+and commit the submodule's new commit (and `package-lock.json`, if it changed).
 
 ## Still to do
 
