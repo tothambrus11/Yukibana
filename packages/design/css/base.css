@@ -697,9 +697,14 @@
         background: var(--yk-surface);
     }
 }
+/* Every child stays on the first row. With the <nav> hidden, the brand and the end fill the two columns; a header with
+   another middle child (the cloud's is an empty <div>) gets a third, auto column for the end instead of a second row. */
 @media (max-width: 759.98px) {
     .yk-header {
         grid-template-columns: auto 1fr;
+    }
+    .yk-header > * {
+        grid-row: 1;
     }
     .yk-header nav,
     .yk-header .yk-search {
