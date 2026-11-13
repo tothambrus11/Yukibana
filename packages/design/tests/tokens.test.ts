@@ -62,6 +62,9 @@ const UI: [string, string][] = [
     ['accent', 'surface'],
     ['accent', 'code.bg'],
     ['ink', 'bg'],
+    // The focus ring inside a message pill is the pill's text colour.
+    ['on-toast', 'toast'],
+    ['on-accent', 'danger'],
     ['ok', 'surface'],
     ['ok', 'bg'],
 ];

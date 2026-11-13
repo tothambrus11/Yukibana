@@ -462,6 +462,11 @@
     text-decoration: underline;
     text-underline-offset: 2px;
 }
+/* The ink ring would vanish on the success pill, which is ink, and is faint on the red one: here the ring is the pill's
+   own text colour, which reads on it by construction. The pill's padding leaves room for it. */
+.yk-toast :focus-visible {
+    outline-color: currentColor;
+}
 
 /* Waiting: skeleton rows where content is coming. The spinner only ever sits inside a button that is working, in the
    button's own colour; a page or a panel never shows both. */
