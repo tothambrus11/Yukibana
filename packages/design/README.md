@@ -42,8 +42,8 @@ empty list's patch. Never behind text, never in a header, and no colour stripe a
 
 **Header.** One row of three columns: the logo and "Yukibana" (Bricolage 650, 16px) on the left, the sections (Docs,
 Playground, Embed) centred, and search (a field-like button with Ctrl K), the filled GitHub mark and Sign in on the right.
-Docs and cloud: a full-width square bar, sticky, with blur and a hairline, the sections as plain links. The landing page:
-the same bar lifted off the edge, rounded (16px), at most 1000px wide, with a soft shadow, the sections in a grey tray.
+The landing page and the docs: the bar lifted off the edge, rounded (16px), exactly as wide as the content, with a soft
+shadow, the sections in a grey tray. The cloud: a full-width square bar, sticky, with blur and a hairline.
 No section is ever drawn as selected, because some lead to other sites. Below 760px there is no room around it: it
 becomes the full-width bar with the brand, the GitHub mark and Sign in. No "Get started" and no Docs call to action in
 any header: the landing hero carries the one call to action (Download). The cloud's bar holds only the course switcher
