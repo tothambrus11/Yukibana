@@ -1,0 +1,47 @@
+{
+  "$description": "The dark theme: only colours, each overriding the token of the same path in base.tokens.json. A path that base.tokens.json lacks is an error, so the two cannot drift apart silently.",
+  "color": {
+    "$type": "color",
+    "bg": { "$value": { "colorSpace": "oklch", "components": [0.165, 0.0144, 260] } },
+    "surface": { "$value": { "colorSpace": "oklch", "components": [0.2, 0.0162, 260] } },
+    "sunken": { "$value": { "colorSpace": "oklch", "components": [0.25, 0.0171, 260] } },
+    "rail": { "$value": { "colorSpace": "oklch", "components": [0.185, 0.0153, 260] } },
+    "ink": { "$value": { "colorSpace": "oklch", "components": [0.94, 0.0072, 260] } },
+    "soft": { "$value": { "colorSpace": "oklch", "components": [0.73, 0.0144, 260] } },
+    "line": { "$value": { "colorSpace": "oklch", "components": [0.29, 0.018, 260] } },
+    "line-strong": { "$value": { "colorSpace": "oklch", "components": [0.54, 0.0216, 260] } },
+    "lattice": { "$value": { "colorSpace": "oklch", "components": [0.8, 0.03, 260], "alpha": 0.16 } },
+    "accent": { "$value": { "colorSpace": "oklch", "components": [0.74, 0.0863, 162] } },
+    "accent-strong": { "$value": { "colorSpace": "oklch", "components": [0.84, 0.0633, 162] } },
+    "accent-bg": { "$value": { "colorSpace": "oklch", "components": [0.28, 0.055, 162] } },
+    "on-accent": { "$value": { "colorSpace": "oklch", "components": [0.17, 0.018, 260] } },
+    "ok": { "$value": { "colorSpace": "oklch", "components": [0.8, 0.11, 165] } },
+    "danger": { "$value": { "colorSpace": "oklch", "components": [0.74, 0.13, 25] } },
+    "danger-bg": { "$value": { "colorSpace": "oklch", "components": [0.27, 0.05, 25] } },
+    "warn": { "$value": { "colorSpace": "oklch", "components": [0.82, 0.11, 80] } },
+    "warn-bg": { "$value": { "colorSpace": "oklch", "components": [0.28, 0.045, 75] } },
+    "info": { "$value": { "colorSpace": "oklch", "components": [0.8, 0.09, 240] } },
+    "info-bg": { "$value": { "colorSpace": "oklch", "components": [0.27, 0.04, 245] } },
+    "toast": { "$value": { "colorSpace": "oklch", "components": [0.94, 0.0072, 260] } },
+    "on-toast": { "$value": { "colorSpace": "oklch", "components": [0.165, 0.0144, 260] } },
+    "code": {
+      "bg": { "$value": { "colorSpace": "oklch", "components": [0.18, 0.0153, 260] } },
+      "ink": { "$value": { "colorSpace": "oklch", "components": [0.92, 0.009, 260] } },
+      "bar": { "$value": { "colorSpace": "oklch", "components": [0.15, 0.0135, 260] } },
+      "keyword": { "$value": { "colorSpace": "oklch", "components": [0.78, 0.12, 305] } },
+      "function": { "$value": { "colorSpace": "oklch", "components": [0.8, 0.1, 240] } },
+      "string": { "$value": { "colorSpace": "oklch", "components": [0.82, 0.1, 165] } },
+      "number": { "$value": { "colorSpace": "oklch", "components": [0.82, 0.11, 65] } },
+      "comment": { "$value": { "colorSpace": "oklch", "components": [0.68, 0.0144, 260] } }
+    },
+    "chip": {
+      "blue": { "bg": { "$value": { "colorSpace": "oklch", "components": [0.3, 0.06, 238] } }, "fg": { "$value": { "colorSpace": "oklch", "components": [0.88, 0.07, 238] } } },
+      "violet": { "bg": { "$value": { "colorSpace": "oklch", "components": [0.3, 0.06, 300] } }, "fg": { "$value": { "colorSpace": "oklch", "components": [0.88, 0.07, 300] } } },
+      "pink": { "bg": { "$value": { "colorSpace": "oklch", "components": [0.3, 0.06, 355] } }, "fg": { "$value": { "colorSpace": "oklch", "components": [0.88, 0.07, 355] } } },
+      "teal": { "bg": { "$value": { "colorSpace": "oklch", "components": [0.3, 0.06, 178] } }, "fg": { "$value": { "colorSpace": "oklch", "components": [0.88, 0.07, 178] } } },
+      "yellow": { "bg": { "$value": { "colorSpace": "oklch", "components": [0.3, 0.06, 80] } }, "fg": { "$value": { "colorSpace": "oklch", "components": [0.88, 0.07, 80] } } },
+      "green": { "bg": { "$value": { "colorSpace": "oklch", "components": [0.3, 0.06, 160] } }, "fg": { "$value": { "colorSpace": "oklch", "components": [0.88, 0.07, 160] } } },
+      "grey": { "bg": { "$value": { "colorSpace": "oklch", "components": [0.3, 0.008, 260] } }, "fg": { "$value": { "colorSpace": "oklch", "components": [0.88, 0.01, 260] } } }
+    }
+  }
+}

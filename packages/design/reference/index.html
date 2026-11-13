@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en" class="yk-root">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Yukibana design system</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link
+            rel="stylesheet"
+            href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=JetBrains+Mono:wght@400;700&display=swap"
+        />
+        <link rel="stylesheet" href="../css/tokens.css" />
+        <link rel="stylesheet" href="../css/base.css" />
+        <style>
+            body {
+                margin: 0;
+            }
+            main {
+                max-width: 1040px;
+                margin: 0 auto;
+                padding: 24px 16px 80px;
+                display: grid;
+                gap: 36px;
+            }
+            section {
+                display: grid;
+                gap: 12px;
+            }
+            section > h2 {
+                margin: 0;
+                font-size: var(--yk-font-size-xl);
+            }
+            section > p {
+                margin: 0;
+                color: var(--yk-soft);
+                max-width: 70ch;
+            }
+            .row {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                align-items: center;
+            }
+            .grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+                gap: 10px;
+            }
+            .sw {
+                border: 1px solid var(--yk-line);
+                border-radius: var(--yk-radius-md);
+                overflow: hidden;
+                background: var(--yk-surface);
+                font-size: var(--yk-font-size-xs);
+            }
+            .sw i {
+                display: block;
+                height: 44px;
+                border-bottom: 1px solid var(--yk-line);
+            }
+            .sw span {
+                display: block;
+                padding: 6px 8px;
+                font-family: var(--yk-font-family-mono);
+            }
+            .panel {
+                background: var(--yk-surface);
+                border: 1px solid var(--yk-line);
+                border-radius: var(--yk-radius-lg);
+                padding: 16px;
+                display: grid;
+                gap: 12px;
+            }
+            .rails {
+                display: grid;
+                grid-template-columns: 48px 1fr 48px;
+                border: 1px solid var(--yk-line);
+                border-radius: var(--yk-radius-lg);
+                overflow: hidden;
+                min-height: 120px;
+            }
+            .rails > div:nth-child(2) {
+                background: var(--yk-bg);
+                padding: 16px;
+            }
+            .toast-demo {
+                position: relative;
+                height: 70px;
+            }
+            .toast-demo .yk-toast {
+                position: absolute;
+            }
+            .theme {
+                margin-left: auto;
+            }
+        </style>
+    </head>
+    <body>
+        <header class="yk-header">
+            <b style="font-family: var(--yk-font-family-heading); font-size: 17px">Yukibana</b>
+            <nav aria-label="Sections"><a href="#colour">Colour</a><a href="#controls">Controls</a><a href="#docs">Docs</a><a href="#states">States</a></nav>
+            <button class="yk-btn yk-btn--secondary theme" type="button" id="theme">Dark theme</button>
+        </header>
+        <main>
+            <section>
+                <h1 style="margin: 0; font-size: var(--yk-font-size-2xl)">Yukibana design system</h1>
+                <p>
+                    Everything here is drawn from <code>css/tokens.css</code>, compiled from the W3C token files in <code>tokens/</code>, and <code>css/base.css</code>. Open this
+                    file from the package (it loads both by relative path). The why behind each choice is in the package's README.
+                </p>
+            </section>
+
+            <section id="colour">
+                <h2>Colour</h2>
+                <p>Cool blue-grey, and Light's green as the one accent. Every pair of text and background below is tested for 4.5:1 in both themes.</p>
+                <div class="grid" id="swatches"></div>
+                <div class="row">
+                    <span class="yk-chip yk-chip--blue">C++</span><span class="yk-chip yk-chip--violet">Haskell</span><span class="yk-chip yk-chip--pink">Rust</span
+                    ><span class="yk-chip yk-chip--teal">Python</span><span class="yk-chip yk-chip--yellow">○ Open</span
+                    ><span class="yk-chip yk-chip--green"
+                        ><svg class="yk-icon" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10" /></svg>Graded</span
+                    ><span class="yk-chip">Draft</span>
+                </div>
+            </section>
+
+            <section id="controls">
+                <h2>Controls</h2>
+                <div class="row">
+                    <button class="yk-btn yk-btn--primary" type="button">Publish</button><button class="yk-btn yk-btn--secondary" type="button">Extend deadline</button
+                    ><button class="yk-btn yk-btn--ghost" type="button">Cancel</button><button class="yk-btn yk-btn--danger" type="button">Delete</button
+                    ><button class="yk-btn yk-btn--primary" type="button" id="done-demo">Save</button>
+                    <button class="yk-icon-btn" type="button" aria-label="Copy">
+                        <svg class="yk-icon" viewBox="0 0 24 24">
+                            <rect x="8" y="8" width="12" height="12" rx="2" />
+                            <path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="panel">
+                    <div class="yk-field"><label for="f1">Project name</label><input class="yk-input" id="f1" value="Linked lists" /><small>Students see this name.</small></div>
+                    <div class="yk-field" data-invalid>
+                        <label for="f2">Due date</label><input class="yk-input" id="f2" value="31.02.2026" aria-describedby="f2e" /><small id="f2e">February has no 31st.</small>
+                    </div>
+                    <div class="yk-field yk-field--beside">
+                        <label for="f3">Late penalty</label><input class="yk-input" id="f3" value="10 % a day" /><small>Settings pages may put the label beside.</small>
+                    </div>
+                </div>
+                <nav class="yk-tabs" aria-label="Edition">
+                    <a href="#controls" data-label="Projects" aria-current="page">Projects</a><a href="#controls" data-label="Students">Students</a
+                    ><a href="#controls" data-label="Staff">Staff</a><a href="#controls" data-label="Settings">Settings</a>
+                </nav>
+                <div>
+                    <div class="yk-bulk">
+                        <b>1 selected</b><button class="yk-btn yk-btn--secondary" type="button">Publish</button><span style="flex: 1"></span
+                        ><button class="yk-btn yk-btn--ghost" type="button">Clear</button>
+                    </div>
+                    <table class="yk-table">
+                        <thead>
+                            <tr>
+                                <th><input class="yk-check" type="checkbox" aria-label="Select all" /></th>
+                                <th>Project</th>
+                                <th>Due</th>
+                                <th>State</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><input class="yk-check" type="checkbox" aria-label="Select Linked lists" /></td>
+                                <td>Linked lists</td>
+                                <td>18 Nov</td>
+                                <td><span class="yk-chip yk-chip--yellow">○ Open</span></td>
+                            </tr>
+                            <tr>
+                                <td><input class="yk-check" type="checkbox" checked aria-label="Select Binary search" /></td>
+                                <td>Binary search</td>
+                                <td>4 Nov</td>
+                                <td><span class="yk-chip yk-chip--green">✓ Graded</span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section id="docs">
+                <h2>Docs</h2>
+                <div class="yk-callout">
+                    <svg class="yk-icon" viewBox="0 0 24 24">
+                        <circle cx="12" cy="12" r="9" />
+                        <path d="M12 11v6M12 7.5v.5" />
+                    </svg>
+                    <div><b>Note</b> Students only see a release once its start date has passed.</div>
+                </div>
+                <div class="yk-callout yk-callout--warn">
+                    <svg class="yk-icon" viewBox="0 0 24 24"><path d="M12 3 2 20h20zM12 10v4M12 17v.5" /></svg>
+                    <div><b>Careful</b> Publishing again replaces the starter files of students who have not started.</div>
+                </div>
+                <div class="yk-code">
+                    <div class="yk-dock" role="tablist" data-focused>
+                        <button class="yk-dock-tab" role="tab" aria-selected="true" type="button">list.hpp</button
+                        ><button class="yk-dock-tab" role="tab" aria-selected="false" type="button">tests.cpp</button>
+                        <span class="yk-dock-actions"
+                            ><button class="yk-icon-btn" type="button" aria-label="Copy">
+                                <svg class="yk-icon" viewBox="0 0 24 24">
+                                    <rect x="8" y="8" width="12" height="12" rx="2" />
+                                    <path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3" />
+                                </svg></button
+                            ><button class="yk-icon-btn" type="button" aria-label="Run in Light">
+                                <svg class="yk-icon" viewBox="0 0 24 24"><path d="M7 4v16l13-8z" /></svg></button
+                        ></span>
+                    </div>
+                    <pre><span><span class="tok-k">template</span> &lt;<span class="tok-k">typename</span> T&gt;</span><span><span class="tok-k">void</span> List&lt;T&gt;::<span class="tok-f">push_front</span>(T x) {</span><span class="del">    head = <span class="tok-k">new</span> Node{x};</span><span class="ins">    head = <span class="tok-k">new</span> Node{x, head};</span><span class="mark">    ++size;  <span class="tok-c">// the test checks this</span></span><span>}</span></pre>
+                </div>
+                <div class="yk-code yk-code--terminal">
+                    <button class="yk-icon-btn" type="button" aria-label="Copy">
+                        <svg class="yk-icon" viewBox="0 0 24 24">
+                            <rect x="8" y="8" width="12" height="12" rx="2" />
+                            <path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3" />
+                        </svg>
+                    </button>
+                    <pre><span><span class="tok-prompt">$ </span>yukibana publish</span><span class="tok-c">Packed starter.tar (12 files) and grading.tar (3 hidden tests)</span></pre>
+                </div>
+                <div class="rails">
+                    <div class="yk-lattice"></div>
+                    <div>Rails and gutters carry the lattice; the reading column never does.</div>
+                    <div class="yk-lattice"></div>
+                </div>
+                <nav class="yk-sidenav panel" aria-label="Docs" style="max-width: 240px">
+                    <a href="#docs">Introduction</a><a href="#docs" aria-current="page">Releases</a><a href="#docs">Grading</a>
+                </nav>
+            </section>
+
+            <section id="states">
+                <h2>States</h2>
+                <div class="panel">
+                    <div class="yk-skeleton" style="width: 70%"></div>
+                    <div class="yk-skeleton"></div>
+                    <div class="yk-spinner" role="status" aria-label="Loading"></div>
+                </div>
+                <div class="panel yk-empty">
+                    <b style="font-family: var(--yk-font-family-heading); font-size: var(--yk-font-size-lg)">No projects yet</b>
+                    <p>A project is one exercise: starter code, tests and a due date.</p>
+                    <button class="yk-btn yk-btn--primary" type="button">New project</button>
+                </div>
+                <div class="toast-demo">
+                    <div class="yk-toast" role="status" style="left: 25%">
+                        <svg class="yk-icon" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10" /></svg>Release 3 published
+                    </div>
+                    <div class="yk-toast yk-toast--error" role="alert" style="left: 72%">
+                        <svg class="yk-icon" viewBox="0 0 24 24"><path d="M12 3 2 20h20zM12 10v4M12 17v.5" /></svg>Upload failed<button type="button">Retry</button
+                        ><button type="button" aria-label="Dismiss" style="text-decoration: none">×</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+        <script>
+            const COLOURS = [
+                'bg',
+                'surface',
+                'sunken',
+                'rail',
+                'ink',
+                'soft',
+                'line',
+                'line-strong',
+                'accent',
+                'accent-strong',
+                'accent-bg',
+                'ok',
+                'danger',
+                'warn',
+                'info',
+                'code-bg',
+                'code-bar',
+            ];
+            const host = document.getElementById('swatches');
+            for (const c of COLOURS) {
+                const sw = document.createElement('div');
+                sw.className = 'sw';
+                sw.innerHTML = `<i style="background: var(--yk-${c})"></i><span>--yk-${c}</span>`;
+                host.append(sw);
+            }
+            const btn = document.getElementById('theme');
+            const isDark = () =>
+                document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+            btn.textContent = isDark() ? 'Light theme' : 'Dark theme';
+            btn.addEventListener('click', () => {
+                const dark = !isDark();
+                document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+                btn.textContent = dark ? 'Light theme' : 'Dark theme';
+            });
+            const done = document.getElementById('done-demo');
+            done.addEventListener('click', () => {
+                done.dataset.done = '';
+                done.textContent = '✓ Saved';
+                setTimeout(() => {
+                    delete done.dataset.done;
+                    done.textContent = 'Save';
+                }, 2000);
+            });
+        </script>
+    </body>
+</html>

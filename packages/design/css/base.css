@@ -1,0 +1,629 @@
+/* Yukibana's shared components, drawn from the tokens in tokens.css only. Load tokens.css first.
+ *
+ * Every class starts with `yk-` so an app can adopt them one at a time next to its own styles. The rules each block
+ * follows were chosen in the design rounds of November 2026; the comments say why where the why is not obvious. Fonts are
+ * named, not loaded: the page loads Bricolage Grotesque, Atkinson Hyperlegible Next and JetBrains Mono itself.
+ */
+
+/* Base */
+.yk-root,
+.yk-root body {
+    background: var(--yk-bg);
+    color: var(--yk-ink);
+    font: var(--yk-font-weight-regular) var(--yk-font-size-md) / 1.55 var(--yk-font-family-body);
+}
+.yk-root :is(h1, h2, h3, h4) {
+    font-family: var(--yk-font-family-heading);
+    font-weight: var(--yk-font-weight-heading);
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+}
+.yk-root :is(code, kbd, pre, samp) {
+    font-family: var(--yk-font-family-mono);
+    font-variant-ligatures: none;
+}
+.yk-root a {
+    color: var(--yk-accent-strong);
+    text-underline-offset: 2px;
+}
+/* The ink ring: black in the light theme, white in the dark, with a gap so it never merges with a border. Green stays
+   for actions, and a green ring on a green button would vanish. */
+.yk-root :focus-visible {
+    outline: var(--yk-focus-width) solid var(--yk-ink);
+    outline-offset: var(--yk-focus-offset);
+}
+.yk-root svg.yk-icon {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: var(--yk-icon-stroke);
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    flex: none;
+}
+
+/* Buttons: small flat pills. One primary (green) per view; no 3D, no glow, no offset shadows. */
+.yk-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font: var(--yk-font-weight-bold) var(--yk-font-size-sm) / 1.2 var(--yk-font-family-body);
+    padding: 6px 13px;
+    border-radius: var(--yk-radius-pill);
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--yk-ink);
+    white-space: nowrap;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background-color var(--yk-motion-fast) var(--yk-motion-ease);
+}
+.yk-btn--primary {
+    background: var(--yk-accent);
+    color: var(--yk-on-accent);
+}
+.yk-btn--primary:hover {
+    background: var(--yk-accent-strong);
+}
+.yk-btn--secondary {
+    background: var(--yk-surface);
+    border-color: var(--yk-line-strong);
+}
+.yk-btn--secondary:hover,
+.yk-btn--ghost:hover {
+    background: var(--yk-sunken);
+}
+.yk-btn--ghost {
+    color: var(--yk-soft);
+}
+.yk-btn--danger {
+    background: var(--yk-danger);
+    color: var(--yk-on-accent);
+}
+.yk-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+/* "It worked", said by the button itself for two seconds where it can: nothing else to look for. */
+.yk-btn[data-done] {
+    background: var(--yk-accent-bg);
+    color: var(--yk-accent-strong);
+}
+.yk-icon-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: var(--yk-radius-sm);
+    background: transparent;
+    color: var(--yk-soft);
+    cursor: pointer;
+}
+.yk-icon-btn:hover {
+    background: var(--yk-sunken);
+    color: var(--yk-ink);
+}
+
+/* Chips: a pale tint and a dark label of one hue. A status chip carries an icon too, never colour alone. */
+.yk-chip {
+    --yk-chip-bg: var(--yk-chip-grey-bg);
+    --yk-chip-fg: var(--yk-chip-grey-fg);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px;
+    border-radius: var(--yk-radius-pill);
+    background: var(--yk-chip-bg);
+    color: var(--yk-chip-fg);
+    font-size: var(--yk-font-size-xs);
+    font-weight: var(--yk-font-weight-bold);
+    white-space: nowrap;
+}
+.yk-chip svg {
+    width: 11px;
+    height: 11px;
+    stroke-width: 2.6;
+}
+.yk-chip--blue {
+    --yk-chip-bg: var(--yk-chip-blue-bg);
+    --yk-chip-fg: var(--yk-chip-blue-fg);
+}
+.yk-chip--violet {
+    --yk-chip-bg: var(--yk-chip-violet-bg);
+    --yk-chip-fg: var(--yk-chip-violet-fg);
+}
+.yk-chip--pink {
+    --yk-chip-bg: var(--yk-chip-pink-bg);
+    --yk-chip-fg: var(--yk-chip-pink-fg);
+}
+.yk-chip--teal {
+    --yk-chip-bg: var(--yk-chip-teal-bg);
+    --yk-chip-fg: var(--yk-chip-teal-fg);
+}
+.yk-chip--yellow {
+    --yk-chip-bg: var(--yk-chip-yellow-bg);
+    --yk-chip-fg: var(--yk-chip-yellow-fg);
+}
+.yk-chip--green {
+    --yk-chip-bg: var(--yk-chip-green-bg);
+    --yk-chip-fg: var(--yk-chip-green-fg);
+}
+
+/* Fields: outlined, label on top, never fully round (long text looks cramped in a pill). On a wide settings page the
+   label may sit beside the field; it moves back on top on a phone. */
+.yk-field {
+    display: grid;
+    gap: 4px;
+}
+.yk-field > label {
+    font-size: var(--yk-font-size-sm);
+    font-weight: var(--yk-font-weight-bold);
+}
+.yk-field > small {
+    font-size: var(--yk-font-size-xs);
+    color: var(--yk-soft);
+}
+.yk-input {
+    font: inherit;
+    color: var(--yk-ink);
+    background: var(--yk-surface);
+    border: 1px solid var(--yk-line-strong);
+    border-radius: var(--yk-radius-md);
+    padding: 7px 11px;
+    min-width: 0;
+}
+.yk-input:focus-visible {
+    outline: none;
+    border-color: var(--yk-accent);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--yk-accent) 22%, transparent);
+}
+.yk-field[data-invalid] .yk-input {
+    border-color: var(--yk-danger);
+}
+.yk-field[data-invalid] > small {
+    color: var(--yk-danger);
+}
+@media (min-width: 720px) {
+    .yk-field--beside {
+        grid-template-columns: 10rem minmax(0, 1fr);
+        column-gap: 12px;
+        align-items: center;
+    }
+    .yk-field--beside > label {
+        text-align: right;
+    }
+    .yk-field--beside > small {
+        grid-column: 2;
+    }
+}
+
+/* Checkboxes are drawn, not native: a native one follows the page's colour scheme, and inside a light panel on a dark
+   page it came out dark grey. */
+.yk-check {
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    border: 1px solid var(--yk-line-strong);
+    border-radius: 4px;
+    background: var(--yk-surface);
+    display: inline-grid;
+    place-items: center;
+    vertical-align: middle;
+    cursor: pointer;
+    transition:
+        background-color var(--yk-motion-fast),
+        border-color var(--yk-motion-fast);
+}
+.yk-check:hover {
+    border-color: var(--yk-ink);
+}
+.yk-check:is(:checked, :indeterminate) {
+    background: var(--yk-accent);
+    border-color: var(--yk-accent);
+}
+.yk-check:checked::after {
+    content: '';
+    width: 9px;
+    height: 5px;
+    border: solid var(--yk-on-accent);
+    border-width: 0 0 2px 2px;
+    transform: translateY(-1px) rotate(-45deg);
+}
+.yk-check:indeterminate::after {
+    content: '';
+    width: 8px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--yk-on-accent);
+}
+
+/* Notes and warnings in the docs: a tinted box with the icon in its own column. Blue and amber, never green. */
+.yk-callout {
+    --yk-callout-fg: var(--yk-info);
+    --yk-callout-bg: var(--yk-info-bg);
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: var(--yk-radius-lg);
+    background: var(--yk-callout-bg);
+}
+.yk-callout > svg {
+    color: var(--yk-callout-fg);
+    margin-top: 3px;
+}
+.yk-callout b:first-child {
+    color: var(--yk-callout-fg);
+}
+.yk-callout--warn {
+    --yk-callout-fg: var(--yk-warn);
+    --yk-callout-bg: var(--yk-warn-bg);
+}
+
+/* Page tabs: an underline under the current one. Labels turn bold in place: each reserves the width of its bold self
+   (data-label holds the text), so switching tabs moves nothing. */
+.yk-tabs {
+    display: flex;
+    gap: 20px;
+    box-shadow: inset 0 -1px 0 var(--yk-line);
+}
+.yk-tabs > a {
+    display: inline-grid;
+    padding: 8px 0;
+    color: var(--yk-soft);
+    text-decoration: none;
+}
+.yk-tabs > a::after {
+    content: attr(data-label);
+    font-weight: var(--yk-font-weight-bold);
+    height: 0;
+    visibility: hidden;
+    overflow: hidden;
+}
+.yk-tabs > a:hover {
+    color: var(--yk-ink);
+}
+.yk-tabs > a[aria-current] {
+    color: var(--yk-ink);
+    font-weight: var(--yk-font-weight-bold);
+    box-shadow: inset 0 -2px 0 var(--yk-accent);
+}
+
+/* Light's dock tab bar, also above code in the docs: a bar a little darker than the editor, short dividers, the current
+   tab filled with the editor's colour and a full 2px line, green in the focused group and grey in the others. */
+.yk-dock {
+    display: flex;
+    align-items: stretch;
+    min-height: 34px;
+    background: var(--yk-code-bar);
+    box-shadow: inset 0 -1px 0 var(--yk-line);
+    font-size: var(--yk-font-size-sm);
+}
+.yk-dock > .yk-dock-tab {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 14px;
+    color: var(--yk-soft);
+    border: 0;
+    background: transparent;
+    font: inherit;
+    cursor: pointer;
+}
+.yk-dock > .yk-dock-tab + .yk-dock-tab::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 9px;
+    bottom: 9px;
+    width: 1px;
+    background: var(--yk-line);
+}
+.yk-dock > .yk-dock-tab[aria-selected='true'] {
+    background: var(--yk-code-bg);
+    color: var(--yk-ink);
+    box-shadow: inset 0 -2px 0 var(--yk-line-strong);
+}
+.yk-dock[data-focused] > .yk-dock-tab[aria-selected='true'] {
+    box-shadow: inset 0 -2px 0 var(--yk-accent);
+}
+.yk-dock > .yk-dock-tab[aria-selected='true']::before,
+.yk-dock > .yk-dock-tab[aria-selected='true'] + .yk-dock-tab::before {
+    opacity: 0;
+}
+.yk-dock > .yk-dock-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 6px;
+}
+
+/* Code blocks in the docs, as Expressive Code frames: the dock bar for files, none for the terminal; Copy and Run in
+   Light are icon buttons with room around them. Marked, inserted and deleted lines carry a bar and a sign, not colour
+   alone. */
+.yk-code {
+    border: 1px solid var(--yk-line);
+    border-radius: var(--yk-radius-md);
+    overflow: hidden;
+    background: var(--yk-code-bg);
+    position: relative;
+}
+.yk-code > pre {
+    margin: 0;
+    padding: 10px 0;
+    overflow-x: auto;
+    color: var(--yk-code-ink);
+    font-size: var(--yk-font-size-sm);
+    line-height: 1.65;
+}
+.yk-code > pre > span {
+    display: block;
+    padding: 0 16px;
+    border-left: 2px solid transparent;
+}
+.yk-code > pre > .mark {
+    background: color-mix(in oklch, var(--yk-info) 12%, transparent);
+    border-left-color: var(--yk-info);
+}
+.yk-code > pre > .ins {
+    background: color-mix(in oklch, var(--yk-ok) 13%, transparent);
+    border-left-color: var(--yk-ok);
+}
+.yk-code > pre > .del {
+    background: color-mix(in oklch, var(--yk-danger) 11%, transparent);
+    border-left-color: var(--yk-danger);
+}
+.yk-code > pre > :is(.ins, .del)::before {
+    display: inline-block;
+    width: 10px;
+    margin-left: -10px;
+}
+.yk-code > pre > .ins::before {
+    content: '+';
+    color: var(--yk-ok);
+}
+.yk-code > pre > .del::before {
+    content: '-';
+    color: var(--yk-danger);
+}
+.yk-code .tok-k {
+    color: var(--yk-code-keyword);
+}
+.yk-code .tok-f {
+    color: var(--yk-code-function);
+}
+.yk-code .tok-s {
+    color: var(--yk-code-string);
+}
+.yk-code .tok-n {
+    color: var(--yk-code-number);
+}
+.yk-code .tok-c,
+.yk-code .tok-prompt {
+    color: var(--yk-code-comment);
+}
+.yk-code .tok-prompt {
+    user-select: none;
+}
+.yk-code--terminal > .yk-icon-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    opacity: 0;
+    transition: opacity var(--yk-motion-fast);
+}
+.yk-code--terminal:hover > .yk-icon-btn,
+.yk-code--terminal > .yk-icon-btn:focus-visible {
+    opacity: 1;
+}
+
+/* Messages: one family. Success is the dark pill and fades after --yk-motion-toast; an error is the same pill in red and
+   stays until it is retried or dismissed. One line, bottom centre. */
+.yk-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 20px;
+    translate: -50% 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: max-content;
+    max-width: calc(100vw - 32px);
+    padding: 8px 14px 8px 16px;
+    border-radius: var(--yk-radius-pill);
+    background: var(--yk-toast);
+    color: var(--yk-on-toast);
+    font-size: var(--yk-font-size-sm);
+    font-weight: var(--yk-font-weight-bold);
+    white-space: nowrap;
+    box-shadow: 0 12px 30px -16px oklch(0% 0 0 / 0.6);
+}
+.yk-toast--error {
+    background: var(--yk-danger);
+    color: var(--yk-on-accent);
+}
+.yk-toast button {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+/* Waiting: skeleton rows for content that is coming, a spinner for something small such as a button or one panel. */
+.yk-skeleton {
+    height: 12px;
+    border-radius: 6px;
+    background: linear-gradient(90deg, var(--yk-sunken) 40%, color-mix(in oklch, var(--yk-sunken) 40%, var(--yk-surface)) 50%, var(--yk-sunken) 60%) 0 0 / 300% 100%;
+    animation: yk-shimmer 1.4s linear infinite;
+}
+.yk-spinner {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 2.5px solid var(--yk-line);
+    border-top-color: var(--yk-accent);
+    animation: yk-turn 0.8s linear infinite;
+}
+@keyframes yk-shimmer {
+    from {
+        background-position: 100% 0;
+    }
+    to {
+        background-position: 0 0;
+    }
+}
+@keyframes yk-turn {
+    to {
+        rotate: 1turn;
+    }
+}
+
+/* The triangles lattice: on the plain page colour, only in rails, gutters, the landing hero and an empty state's patch;
+   never behind text, never in a header. */
+.yk-lattice {
+    background-color: var(--yk-rail);
+}
+.yk-lattice,
+.yk-empty::before {
+    background-image:
+        linear-gradient(60deg, transparent 49.3%, var(--yk-lattice) 49.3% 50.7%, transparent 50.7%),
+        linear-gradient(-60deg, transparent 49.3%, var(--yk-lattice) 49.3% 50.7%, transparent 50.7%),
+        linear-gradient(0deg, transparent 48%, var(--yk-lattice) 48% 52%, transparent 52%);
+    background-size: 28px 48.5px;
+}
+
+/* An empty list: centred, a small fading patch of the lattice, a title, one sentence and the one button. */
+.yk-empty {
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    padding: 32px 16px;
+    text-align: center;
+}
+.yk-empty::before {
+    content: '';
+    width: 160px;
+    height: 44px;
+    mask: radial-gradient(closest-side, #000, transparent);
+}
+.yk-empty > p {
+    margin: 0;
+    color: var(--yk-soft);
+}
+
+/* The header. Full width and square in the docs and the cloud, with blur and a hairline. On the landing page it floats
+   as a rounded bar of at most --yk-layout-header-max until the window is too narrow to leave room around it. Its
+   sections are plain links: some lead to other sites, so none is drawn as the selected segment. */
+.yk-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 16px;
+    background: color-mix(in oklch, var(--yk-surface) 82%, transparent);
+    backdrop-filter: blur(14px) saturate(1.4);
+    box-shadow: inset 0 -1px 0 var(--yk-line);
+}
+.yk-header nav {
+    display: flex;
+    gap: 4px;
+    margin-inline: auto;
+}
+.yk-header nav a {
+    padding: 4px 10px;
+    border-radius: 7px;
+    color: var(--yk-soft);
+    text-decoration: none;
+}
+.yk-header nav a:hover {
+    color: var(--yk-ink);
+    background: var(--yk-sunken);
+}
+@media (min-width: 760px) {
+    .yk-header--float {
+        top: 12px;
+        max-width: var(--yk-layout-header-max);
+        margin: 12px auto 0;
+        border: 1px solid var(--yk-line);
+        border-radius: var(--yk-radius-xl);
+        box-shadow: 0 10px 30px -18px oklch(20% 0.03 260 / 0.45);
+    }
+}
+
+/* Tables: every row is a link; a drawn checkbox on the left selects it for the bulk bar, which keeps a gap above the list. */
+.yk-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    background: var(--yk-surface);
+    border: 1px solid var(--yk-line);
+    border-radius: var(--yk-radius-lg);
+    overflow: hidden;
+}
+.yk-table :is(th, td) {
+    padding: 9px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--yk-line);
+}
+.yk-table tr:last-child td {
+    border-bottom: 0;
+}
+.yk-table :is(th, td):has(> .yk-check) {
+    width: 1%;
+    padding-right: 0;
+}
+.yk-table th {
+    font-size: var(--yk-font-size-xs);
+    color: var(--yk-soft);
+}
+.yk-table tbody tr:hover {
+    background: var(--yk-sunken);
+    cursor: pointer;
+}
+.yk-table tbody tr:has(.yk-check:checked) {
+    background: var(--yk-accent-bg);
+}
+.yk-bulk {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 6px 8px 6px 14px;
+    border: 1px solid var(--yk-line-strong);
+    border-radius: var(--yk-radius-pill);
+    background: var(--yk-surface);
+}
+
+/* The docs' sidebar: the current page is a grey fill, not a coloured bar. */
+.yk-sidenav a {
+    display: block;
+    padding: 4px 10px;
+    border-radius: var(--yk-radius-md);
+    color: var(--yk-ink);
+    text-decoration: none;
+}
+.yk-sidenav a:hover {
+    background: var(--yk-sunken);
+}
+.yk-sidenav a[aria-current] {
+    background: var(--yk-sunken);
+    font-weight: var(--yk-font-weight-bold);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .yk-skeleton,
+    .yk-spinner {
+        animation-duration: 0s;
+    }
+}

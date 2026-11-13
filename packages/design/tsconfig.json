@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.strict.json",
+  // The build script is TypeScript that Node runs as it is, so it imports with the .ts extension.
+  "compilerOptions": { "allowImportingTsExtensions": true },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"]
+}

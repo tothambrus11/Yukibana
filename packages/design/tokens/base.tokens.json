@@ -1,0 +1,136 @@
+{
+  "$description": "Yukibana's design tokens, in the W3C Design Tokens format (2025.10). This file holds every token and the light theme's colours; dark.tokens.json overrides the colours for the dark theme and nothing else. scripts/build.ts compiles both into css/tokens.css.",
+  "color": {
+    "$type": "color",
+    "$description": "Greys are cool blue-grey (hue 260, chroma 0.009 per step). Green (hue 162) is the one accent: primary buttons, links, current-tab lines and nothing else, so success states carry an icon and never rely on green alone.",
+    "bg": { "$value": { "colorSpace": "oklch", "components": [0.976, 0.0045, 260] }, "$description": "The page behind everything." },
+    "surface": { "$value": { "colorSpace": "oklch", "components": [1, 0, 0] }, "$description": "Cards, tables, fields, the header bar." },
+    "sunken": {
+      "$value": { "colorSpace": "oklch", "components": [0.948, 0.0081, 260] },
+      "$description": "Inside a surface: the current sidebar item, a hovered row, a segmented track."
+    },
+    "rail": { "$value": { "colorSpace": "oklch", "components": [0.964, 0.0054, 260] }, "$description": "The side rails and gutters that carry the triangles lattice." },
+    "ink": { "$value": { "colorSpace": "oklch", "components": [0.22, 0.0225, 260] }, "$description": "Body text and headings. Also the focus ring." },
+    "soft": {
+      "$value": { "colorSpace": "oklch", "components": [0.47, 0.018, 260] },
+      "$description": "Secondary text: hints, metadata, inactive tabs. Passes 4.5:1 on bg, surface and sunken."
+    },
+    "line": { "$value": { "colorSpace": "oklch", "components": [0.9, 0.009, 260] }, "$description": "Hairlines that separate, never the only sign of a control." },
+    "line-strong": {
+      "$value": { "colorSpace": "oklch", "components": [0.63, 0.0135, 260] },
+      "$description": "Borders of controls: fields, secondary buttons, checkboxes. 3:1 against surface."
+    },
+    "lattice": {
+      "$value": { "colorSpace": "oklch", "components": [0.5, 0.03, 260], "alpha": 0.28 },
+      "$description": "The triangles lattice's lines. Only in rails, gutters and the landing hero; never behind text or in a header."
+    },
+    "accent": {
+      "$value": { "colorSpace": "oklch", "components": [0.5, 0.115, 162] },
+      "$description": "Light's green: the primary button, the current tab's line in the focused group."
+    },
+    "accent-strong": { "$value": { "colorSpace": "oklch", "components": [0.44, 0.115, 162] }, "$description": "Green as text: links, the label of a selected tinted control." },
+    "accent-bg": { "$value": { "colorSpace": "oklch", "components": [0.95, 0.03, 162] }, "$description": "A green tint behind accent-strong text." },
+    "on-accent": { "$value": { "colorSpace": "oklch", "components": [0.99, 0, 0] }, "$description": "Text on accent and on danger." },
+    "ok": { "$value": { "colorSpace": "oklch", "components": [0.46, 0.1, 165] }, "$description": "The check icon of a success. Always with the icon." },
+    "danger": { "$value": { "colorSpace": "oklch", "components": [0.52, 0.17, 25] }, "$description": "Errors and destructive buttons." },
+    "danger-bg": { "$value": { "colorSpace": "oklch", "components": [0.955, 0.025, 25] } },
+    "warn": { "$value": { "colorSpace": "oklch", "components": [0.5, 0.11, 70] }, "$description": "Warnings in the docs. Amber, never green." },
+    "warn-bg": { "$value": { "colorSpace": "oklch", "components": [0.96, 0.035, 85] } },
+    "info": { "$value": { "colorSpace": "oklch", "components": [0.5, 0.11, 245] }, "$description": "Notes in the docs, marked lines in code." },
+    "info-bg": { "$value": { "colorSpace": "oklch", "components": [0.955, 0.02, 245] } },
+    "toast": { "$value": { "colorSpace": "oklch", "components": [0.22, 0.0225, 260] }, "$description": "The success message pill: dark in both themes' sense of 'ink'." },
+    "on-toast": { "$value": { "colorSpace": "oklch", "components": [0.976, 0.0045, 260] } },
+    "code": {
+      "bg": { "$value": { "colorSpace": "oklch", "components": [0.966, 0.0063, 260] }, "$description": "Code blocks and the editor in the docs." },
+      "ink": { "$value": { "colorSpace": "oklch", "components": [0.25, 0.0225, 260] } },
+      "bar": {
+        "$value": { "colorSpace": "oklch", "components": [0.935, 0.009, 260] },
+        "$description": "The tab bar above code: Light's dock strip, slightly darker than the code."
+      },
+      "keyword": { "$value": { "colorSpace": "oklch", "components": [0.48, 0.16, 300] } },
+      "function": { "$value": { "colorSpace": "oklch", "components": [0.46, 0.13, 245] } },
+      "string": { "$value": { "colorSpace": "oklch", "components": [0.46, 0.1, 165] } },
+      "number": { "$value": { "colorSpace": "oklch", "components": [0.52, 0.13, 55] } },
+      "comment": { "$value": { "colorSpace": "oklch", "components": [0.47, 0.018, 260] } }
+    },
+    "chip": {
+      "$description": "Tinted chips: a pale fill and a dark label of one hue. A status chip also carries an icon (check for Graded, circle for Open, pencil for Draft).",
+      "blue": { "bg": { "$value": { "colorSpace": "oklch", "components": [0.935, 0.045, 238] } }, "fg": { "$value": { "colorSpace": "oklch", "components": [0.38, 0.1, 238] } } },
+      "violet": { "bg": { "$value": { "colorSpace": "oklch", "components": [0.935, 0.045, 300] } }, "fg": { "$value": { "colorSpace": "oklch", "components": [0.38, 0.1, 300] } } },
+      "pink": { "bg": { "$value": { "colorSpace": "oklch", "components": [0.935, 0.045, 355] } }, "fg": { "$value": { "colorSpace": "oklch", "components": [0.38, 0.1, 355] } } },
+      "teal": { "bg": { "$value": { "colorSpace": "oklch", "components": [0.935, 0.045, 178] } }, "fg": { "$value": { "colorSpace": "oklch", "components": [0.38, 0.1, 178] } } },
+      "yellow": { "bg": { "$value": { "colorSpace": "oklch", "components": [0.935, 0.045, 80] } }, "fg": { "$value": { "colorSpace": "oklch", "components": [0.38, 0.1, 80] } } },
+      "green": { "bg": { "$value": { "colorSpace": "oklch", "components": [0.935, 0.045, 160] } }, "fg": { "$value": { "colorSpace": "oklch", "components": [0.38, 0.1, 160] } } },
+      "grey": { "bg": { "$value": { "colorSpace": "oklch", "components": [0.935, 0.006, 260] } }, "fg": { "$value": { "colorSpace": "oklch", "components": [0.38, 0.01, 260] } } }
+    }
+  },
+  "font": {
+    "family": {
+      "$type": "fontFamily",
+      "heading": { "$value": ["Bricolage Grotesque", "ui-sans-serif", "system-ui", "sans-serif"] },
+      "body": { "$value": ["Atkinson Hyperlegible Next", "ui-sans-serif", "system-ui", "sans-serif"] },
+      "mono": { "$value": ["JetBrains Mono", "ui-monospace", "monospace"], "$description": "With ligatures off: font-variant-ligatures: none." }
+    },
+    "size": {
+      "$type": "dimension",
+      "xs": { "$value": { "value": 12, "unit": "px" } },
+      "sm": { "$value": { "value": 13, "unit": "px" } },
+      "md": { "$value": { "value": 15, "unit": "px" }, "$description": "Body text." },
+      "lg": { "$value": { "value": 18, "unit": "px" } },
+      "xl": { "$value": { "value": 24, "unit": "px" } },
+      "2xl": { "$value": { "value": 32, "unit": "px" } },
+      "hero": { "$value": { "value": 52, "unit": "px" } }
+    },
+    "weight": {
+      "$type": "fontWeight",
+      "regular": { "$value": 400 },
+      "bold": { "$value": 700 },
+      "heading": { "$value": 750 }
+    }
+  },
+  "radius": {
+    "$type": "dimension",
+    "sm": { "$value": { "value": 6, "unit": "px" }, "$description": "Icon buttons, tabs inside a bar." },
+    "md": { "$value": { "value": 8, "unit": "px" }, "$description": "Fields and code blocks. Fields are never fully round." },
+    "lg": { "$value": { "value": 12, "unit": "px" }, "$description": "Cards, dialogs, callouts." },
+    "xl": { "$value": { "value": 16, "unit": "px" }, "$description": "The floating landing header." },
+    "pill": { "$value": { "value": 999, "unit": "px" }, "$description": "Buttons, chips, the message pill." }
+  },
+  "space": {
+    "$type": "dimension",
+    "1": { "$value": { "value": 4, "unit": "px" } },
+    "2": { "$value": { "value": 8, "unit": "px" } },
+    "3": { "$value": { "value": 12, "unit": "px" } },
+    "4": { "$value": { "value": 16, "unit": "px" } },
+    "6": { "$value": { "value": 24, "unit": "px" } },
+    "8": { "$value": { "value": 32, "unit": "px" } }
+  },
+  "focus": {
+    "width": {
+      "$type": "dimension",
+      "$value": { "value": 2, "unit": "px" },
+      "$description": "The ink ring, with a gap of the same width: black in the light theme, white in the dark."
+    },
+    "offset": { "$type": "dimension", "$value": { "value": 2, "unit": "px" } }
+  },
+  "icon": {
+    "stroke": { "$type": "number", "$value": 1.5, "$description": "Thin outline icons, Lucide style." }
+  },
+  "motion": {
+    "fast": { "$type": "duration", "$value": { "value": 120, "unit": "ms" }, "$description": "Every transition: fades only, no movement, no bounce." },
+    "ease": { "$type": "cubicBezier", "$value": [0.2, 0, 0, 1] },
+    "toast": {
+      "$type": "duration",
+      "$value": { "value": 3000, "unit": "ms" },
+      "$description": "How long a success message stays. An error stays until it is retried or dismissed."
+    }
+  },
+  "layout": {
+    "header-max": {
+      "$type": "dimension",
+      "$value": { "value": 1000, "unit": "px" },
+      "$description": "The landing page's floating header bar. Below header-float it becomes the full-width bar, as the docs always use."
+    },
+    "header-float": { "$type": "dimension", "$value": { "value": 760, "unit": "px" } }
+  }
+}

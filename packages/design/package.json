@@ -1,0 +1,25 @@
+{
+  "private": true,
+  "name": "@yukibana/design",
+  "description": "Yukibana's design system: W3C design tokens compiled to CSS custom properties, the base styles of the shared components, and a reference page that shows them.",
+  "version": "0.0.0-dev",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./tokens.css": "./css/tokens.css",
+    "./base.css": "./css/base.css",
+    "./tokens/*": "./tokens/*",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "node scripts/build.ts",
+    "test": "node scripts/build.ts --check && vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint --type-aware --deny-warnings"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
