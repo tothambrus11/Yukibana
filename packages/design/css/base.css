@@ -22,7 +22,8 @@
     font-family: var(--yk-font-family-mono);
     font-variant-ligatures: none;
 }
-.yk-root a {
+/* Links in running text. A link drawn as something else (a button, a tab, the brand) has a class and keeps its own colour. */
+.yk-root :where(a:not([class])) {
     color: var(--yk-accent-strong);
     text-underline-offset: 2px;
 }
@@ -458,7 +459,8 @@
     text-underline-offset: 2px;
 }
 
-/* Waiting: skeleton rows for content that is coming, a spinner for something small such as a button or one panel. */
+/* Waiting: skeleton rows where content is coming. The spinner only ever sits inside a button that is working, in the
+   button's own colour; a page or a panel never shows both. */
 .yk-skeleton {
     height: 12px;
     border-radius: 6px;
@@ -472,6 +474,13 @@
     border: 2.5px solid var(--yk-line);
     border-top-color: var(--yk-accent);
     animation: yk-turn 0.8s linear infinite;
+}
+.yk-btn .yk-spinner {
+    width: 13px;
+    height: 13px;
+    border-width: 2px;
+    border-color: color-mix(in oklch, currentColor 30%, transparent);
+    border-top-color: currentColor;
 }
 @keyframes yk-shimmer {
     from {
@@ -520,25 +529,44 @@
     color: var(--yk-soft);
 }
 
-/* The header. Full width and square in the docs and the cloud, with blur and a hairline. On the landing page it floats
-   as a rounded bar of at most --yk-layout-header-max until the window is too narrow to leave room around it. Its
-   sections are plain links: some lead to other sites, so none is drawn as the selected segment. */
+/* The header: brand on the left, the sections in the middle, search, the GitHub mark and Sign in on the right, one row of
+   three columns so the sections stay centred whatever the ends hold. In the docs and the cloud it is full width and
+   square, with blur and a hairline, and its sections are plain links: some lead to other sites, so none is drawn as the
+   selected one. On the landing page (--float) it is the same bar lifted off the edge, rounded, at most
+   --yk-layout-header-max wide, its sections in a grey tray. Below 760px there is no room around it, so it becomes the
+   full-width bar and keeps only the brand, the GitHub mark and Sign in. */
 .yk-header {
     position: sticky;
     top: 0;
     z-index: 10;
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    gap: 16px;
+    gap: 14px;
     padding: 8px 16px;
     background: color-mix(in oklch, var(--yk-surface) 82%, transparent);
     backdrop-filter: blur(14px) saturate(1.4);
-    box-shadow: inset 0 -1px 0 var(--yk-line);
+    border-bottom: 1px solid var(--yk-line);
+    font-family: var(--yk-font-family-body);
+}
+.yk-header__brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    color: var(--yk-ink);
+    text-decoration: none;
+    font: 650 16px/1.5 var(--yk-font-family-heading);
+    letter-spacing: -0.02em;
+}
+.yk-header__brand img {
+    width: 24px;
+    height: 24px;
 }
 .yk-header nav {
     display: flex;
     gap: 4px;
-    margin-inline: auto;
+    font-size: 13.5px;
 }
 .yk-header nav a {
     padding: 4px 10px;
@@ -550,14 +578,86 @@
     color: var(--yk-ink);
     background: var(--yk-sunken);
 }
+.yk-header__end {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    min-width: 0;
+}
+.yk-header .yk-icon-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+}
+.yk-header .yk-icon-btn svg {
+    width: 17px;
+    height: 17px;
+}
+/* The search box opens the search dialog; it is a button that looks like a field, with its shortcut. */
+.yk-search {
+    display: flex;
+    flex: 0 1 200px;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 5px 10px;
+    border: 1px solid var(--yk-line);
+    border-radius: 10px;
+    background: var(--yk-sunken);
+    color: var(--yk-soft);
+    font: 13px/1.4 var(--yk-font-family-body);
+    cursor: pointer;
+}
+.yk-search svg {
+    width: 15px;
+    height: 15px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: var(--yk-icon-stroke);
+}
+.yk-search kbd {
+    margin-left: auto;
+    padding: 0 5px;
+    border: 1px solid var(--yk-line);
+    border-radius: 5px;
+    background: var(--yk-surface);
+    font: 11px/1.5 var(--yk-font-family-mono);
+    font-variant-ligatures: none;
+}
 @media (min-width: 760px) {
     .yk-header--float {
         top: 12px;
         max-width: var(--yk-layout-header-max);
         margin: 12px auto 0;
+        padding: 8px 10px 8px 14px;
         border: 1px solid var(--yk-line);
         border-radius: var(--yk-radius-xl);
-        box-shadow: 0 10px 30px -18px oklch(20% 0.03 260 / 0.45);
+        box-shadow:
+            inset 0 1px 0 color-mix(in oklch, var(--yk-surface) 60%, transparent),
+            0 10px 30px -18px oklch(20% 0.03 260 / 0.45);
+    }
+    .yk-header--float nav {
+        gap: 2px;
+        padding: 3px;
+        border-radius: 10px;
+        background: var(--yk-sunken);
+    }
+    .yk-header--float nav a {
+        padding: 3px 12px;
+    }
+    .yk-header--float nav a:hover {
+        background: var(--yk-surface);
+    }
+}
+@media (max-width: 759.98px) {
+    .yk-header {
+        grid-template-columns: auto 1fr;
+    }
+    .yk-header nav,
+    .yk-header .yk-search {
+        display: none;
     }
 }
 

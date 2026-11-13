@@ -40,11 +40,14 @@ cramped in a pill). No 3D, glow or offset shadows.
 **Signature.** The triangles lattice on the plain page colour, only in side rails, gutters, the landing hero and an
 empty list's patch. Never behind text, never in a header, and no colour stripe along the top.
 
-**Header.** Docs and cloud: a full-width square bar, sticky, with blur and a hairline. The landing page: the same bar
-floating, rounded, at most 1000px wide; below 760px it becomes the full-width bar. Sections (Docs, Playground, Embed)
-are plain links, because some lead to other sites; none is drawn as a selected segment. Actions: search, the GitHub
-mark, Sign in. No "Get started" and no Docs call to action in any header: the landing hero carries the one call to action
-(Download). The cloud's bar holds only the course switcher and the avatar.
+**Header.** One row of three columns: the logo and "Yukibana" (Bricolage 650, 16px) on the left, the sections (Docs,
+Playground, Embed) centred, and search (a field-like button with Ctrl K), the filled GitHub mark and Sign in on the right.
+Docs and cloud: a full-width square bar, sticky, with blur and a hairline, the sections as plain links. The landing page:
+the same bar lifted off the edge, rounded (16px), at most 1000px wide, with a soft shadow, the sections in a grey tray.
+No section is ever drawn as selected, because some lead to other sites. Below 760px there is no room around it: it
+becomes the full-width bar with the brand, the GitHub mark and Sign in. No "Get started" and no Docs call to action in
+any header: the landing hero carries the one call to action (Download). The cloud's bar holds only the course switcher
+and the avatar.
 
 **Tabs.** Underline for moving between pages; labels turn bold without shifting anything. Light's dock tabs: short
 dividers, the current tab filled with the editor's colour on a slightly darker bar, a full 2px line, green in the group
@@ -67,7 +70,7 @@ pill was chosen over a bar along the bottom of a panel because it works on every
 which means the cloud keeps deleted rows for a while instead of removing them.
 
 **Empty and waiting.** An empty list: centred, the lattice patch, a title, one sentence, one button. Content that is
-coming shows skeleton rows; something small shows a spinner.
+coming shows skeleton rows. A spinner appears only inside a button that is working, never next to a skeleton.
 
 **Motion and icons.** 120ms fades, no movement, no bounce. Thin outline icons, stroke 1.5, Lucide style.
 
