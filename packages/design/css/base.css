@@ -93,10 +93,13 @@
     opacity: 0.45;
     cursor: not-allowed;
 }
-/* "It worked", said by the button itself for two seconds where it can: nothing else to look for. */
+/* "It worked", said by the button itself for two seconds where it can: nothing else to look for. A tick and the label
+   in the success colour on a plain button, whatever the button was: green fill is for actions, and a done button has
+   none left to offer. The label carries the tick ("✓ Saved"), so the colour is never alone. */
 .yk-btn[data-done] {
-    background: var(--yk-accent-bg);
-    color: var(--yk-accent-strong);
+    background: var(--yk-surface);
+    border-color: var(--yk-line-strong);
+    color: var(--yk-ok);
 }
 .yk-icon-btn {
     display: inline-grid;
@@ -499,7 +502,7 @@
 }
 
 /* Waiting: skeleton rows where content is coming. The spinner only ever sits inside a button that is working, in the
-   button's own colour; a page or a panel never shows both. */
+   button's own colour; a page or a panel never shows both. On its own it is ink: green is for actions, not progress. */
 .yk-skeleton {
     height: 12px;
     border-radius: 6px;
@@ -511,7 +514,7 @@
     height: 20px;
     border-radius: 50%;
     border: 2.5px solid var(--yk-line);
-    border-top-color: var(--yk-accent);
+    border-top-color: var(--yk-ink);
     animation: yk-turn 0.8s linear infinite;
 }
 .yk-btn .yk-spinner {

@@ -26,12 +26,12 @@
     },
     "accent": {
       "$value": { "colorSpace": "oklch", "components": [0.5, 0.115, 162] },
-      "$description": "Light's green: the primary button, the current tab's line in the focused group."
+      "$description": "Light's green, for exactly these: primary buttons, links, the current tab's line, the checkbox fill and selected rows. Never a tick, a status, a spinner, progress or focus."
     },
-    "accent-strong": { "$value": { "colorSpace": "oklch", "components": [0.44, 0.115, 162] }, "$description": "Green as text: links, the label of a selected tinted control." },
-    "accent-bg": { "$value": { "colorSpace": "oklch", "components": [0.95, 0.03, 162] }, "$description": "A green tint behind accent-strong text." },
+    "accent-strong": { "$value": { "colorSpace": "oklch", "components": [0.44, 0.115, 162] }, "$description": "Green as text: links, and the hover of a primary button." },
+    "accent-bg": { "$value": { "colorSpace": "oklch", "components": [0.95, 0.03, 162] }, "$description": "The green tint of a selected row." },
     "on-accent": { "$value": { "colorSpace": "oklch", "components": [0.99, 0, 0] }, "$description": "Text on accent and on danger." },
-    "ok": { "$value": { "colorSpace": "oklch", "components": [0.46, 0.1, 165] }, "$description": "The check icon of a success. Always with the icon." },
+    "ok": { "$value": { "colorSpace": "oklch", "components": [0.46, 0.1, 165] }, "$description": "Success: ticks and status, always next to a symbol (a check), never colour alone. Not the accent: the accent is for actions." },
     "danger": { "$value": { "colorSpace": "oklch", "components": [0.52, 0.17, 25] }, "$description": "Errors and destructive buttons." },
     "danger-bg": { "$value": { "colorSpace": "oklch", "components": [0.955, 0.025, 25] } },
     "warn": { "$value": { "colorSpace": "oklch", "components": [0.5, 0.11, 70] }, "$description": "Warnings in the docs. Amber, never green." },

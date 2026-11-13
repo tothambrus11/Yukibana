@@ -39,6 +39,10 @@ const TEXT: [string, string][] = [
     ['accent-strong', 'bg'],
     ['accent-strong', 'surface'],
     ['accent-strong', 'accent-bg'],
+    // A selected row: its text on the green tint.
+    ['ink', 'accent-bg'],
+    // A done button's label ("✓ Saved").
+    ['ok', 'surface'],
     ['on-accent', 'accent'],
     ['on-accent', 'danger'],
     ['danger', 'surface'],
