@@ -1,0 +1,13 @@
+/* The triangles lattice: on the plain page colour, only in rails, gutters, the landing hero and an empty state's patch;
+   never behind text, never in a header. */
+.yk-lattice {
+    background-color: var(--yk-rail);
+}
+.yk-lattice,
+.yk-empty::before {
+    background-image:
+        linear-gradient(60deg, transparent 49.3%, var(--yk-lattice) 49.3% 50.7%, transparent 50.7%),
+        linear-gradient(-60deg, transparent 49.3%, var(--yk-lattice) 49.3% 50.7%, transparent 50.7%),
+        linear-gradient(0deg, transparent 48%, var(--yk-lattice) 48% 52%, transparent 52%);
+    background-size: 28px 48.5px;
+}

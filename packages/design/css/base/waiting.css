@@ -1,0 +1,53 @@
+/* Waiting: skeleton rows where content is coming. The spinner only ever sits inside a button that is working, in the
+   button's own colour; a page or a panel never shows both. On its own it is ink: green is for actions, not progress. */
+.yk-skeleton {
+    height: 12px;
+    border-radius: 6px;
+    background: linear-gradient(90deg, var(--yk-sunken) 40%, color-mix(in oklch, var(--yk-sunken) 40%, var(--yk-surface)) 50%, var(--yk-sunken) 60%) 0 0 / 300% 100%;
+    animation: yk-shimmer 1.4s linear infinite;
+}
+.yk-spinner {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    color: var(--yk-ink);
+    border: 2.5px solid var(--yk-line);
+    border-top-color: currentColor;
+    animation: yk-turn 0.8s linear infinite;
+}
+.yk-btn .yk-spinner {
+    color: inherit;
+    width: 13px;
+    height: 13px;
+    border-width: 2px;
+    border-color: color-mix(in oklch, currentColor 30%, transparent);
+    border-top-color: currentColor;
+}
+@keyframes yk-shimmer {
+    from {
+        background-position: 100% 0;
+    }
+    to {
+        background-position: 0 0;
+    }
+}
+@keyframes yk-turn {
+    to {
+        rotate: 1turn;
+    }
+}
+
+/* No movement: the skeleton is a still fill, and the spinner stands still as three quarters of a ring with no track,
+   which still reads as "working"; a whole ring would look finished. */
+@media (prefers-reduced-motion: reduce) {
+    .yk-skeleton {
+        animation: none;
+        background: var(--yk-sunken);
+    }
+    .yk-spinner,
+    .yk-btn .yk-spinner {
+        animation: none;
+        border-color: currentColor;
+        border-left-color: transparent;
+    }
+}

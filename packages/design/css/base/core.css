@@ -1,0 +1,54 @@
+/* Yukibana's shared components, drawn from the tokens in tokens.css only. Load tokens.css first.
+ *
+ * Every class starts with `yk-` so an app can adopt them one at a time next to its own styles. The rules each block
+ * follows were chosen in the design rounds of November 2026; the comments say why where the why is not obvious. Fonts are
+ * named, not loaded: the page loads Bricolage Grotesque, Atkinson Hyperlegible Next and JetBrains Mono itself.
+ */
+
+/* Base, in two parts.
+ *
+ * Anywhere: the focus ring and the stroke of .yk-icon. They sit inside :where(), so their specificity is zero: a
+ * component used outside .yk-root still gets them, and any rule of the app's own still wins over them.
+ *
+ * The page, only under .yk-root, which an app puts on <html>: the page's background and text colour, the body font,
+ * the heading and code fonts, and the colour of links in running text. These change elements the app did not mark, so
+ * the app opts in. */
+
+/* The ink ring: black in the light theme, white in the dark, with a gap so it never merges with a border. Green stays
+   for actions, and a green ring on a green button would vanish. */
+:where(:focus-visible) {
+    outline: var(--yk-focus-width) solid var(--yk-ink);
+    outline-offset: var(--yk-focus-offset);
+}
+:where(svg.yk-icon) {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: var(--yk-icon-stroke);
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    flex: none;
+}
+
+.yk-root,
+.yk-root body {
+    background: var(--yk-bg);
+    color: var(--yk-ink);
+    font: var(--yk-font-weight-regular) var(--yk-font-size-md) / 1.55 var(--yk-font-family-body);
+}
+.yk-root :is(h1, h2, h3, h4) {
+    font-family: var(--yk-font-family-heading);
+    font-weight: var(--yk-font-weight-heading);
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+}
+.yk-root :is(code, kbd, pre, samp) {
+    font-family: var(--yk-font-family-mono);
+    font-variant-ligatures: none;
+}
+/* Links in running text. A link drawn as something else (a button, a tab, the brand) has a class and keeps its own colour. */
+.yk-root :where(a:not([class])) {
+    color: var(--yk-accent-strong);
+    text-underline-offset: 2px;
+}

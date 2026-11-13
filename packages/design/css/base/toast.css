@@ -1,0 +1,53 @@
+/* Messages: one family. Success is the dark pill and fades after --yk-motion-toast; an error is the same pill in red and
+   stays until it is retried or dismissed. One line, bottom centre. The text goes in a <span>: on a narrow screen it is
+   the part that gives way, ending in an ellipsis, so the icon and the buttons always stay. The pill is at most the
+   viewport less 16px each side, padding included. */
+.yk-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 20px;
+    translate: -50% 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    box-sizing: border-box;
+    width: max-content;
+    max-width: calc(100vw - 32px);
+    padding: 8px 14px 8px 16px;
+    border-radius: var(--yk-radius-pill);
+    background: var(--yk-toast);
+    color: var(--yk-on-toast);
+    font-size: var(--yk-font-size-sm);
+    font-weight: var(--yk-font-weight-bold);
+    white-space: nowrap;
+    box-shadow: 0 12px 30px -16px oklch(0% 0 0 / 0.6);
+}
+.yk-toast > :is(svg, button) {
+    flex: none;
+}
+.yk-toast > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.yk-toast--error {
+    background: var(--yk-danger);
+    color: var(--yk-on-accent);
+}
+/* A plain button in the pill (Retry, Dismiss) is drawn as underlined text. A .yk-btn or .yk-icon-btn placed there keeps
+   its own look: this rule leaves them out rather than competing with them on specificity. */
+:where(.yk-toast) button:not(.yk-btn, .yk-icon-btn) {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+/* The ink ring would vanish on the success pill, which is ink, and is faint on the red one: here the ring is the pill's
+   own text colour, which reads on it by construction. The pill's padding leaves room for it. */
+.yk-toast :focus-visible {
+    outline-color: currentColor;
+}

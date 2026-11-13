@@ -1,0 +1,23 @@
+/* Notes and warnings in the docs: a tinted box with the icon in its own column. Blue and amber, never green. */
+.yk-callout {
+    --yk-callout-fg: var(--yk-info);
+    --yk-callout-bg: var(--yk-info-bg);
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: var(--yk-radius-lg);
+    background: var(--yk-callout-bg);
+}
+.yk-callout > svg {
+    color: var(--yk-callout-fg);
+    margin-top: 3px;
+}
+/* The title: a <b> that opens the callout's text, and only there, not one deeper in it. */
+.yk-callout > * > b:first-child {
+    color: var(--yk-callout-fg);
+}
+.yk-callout--warn {
+    --yk-callout-fg: var(--yk-warn);
+    --yk-callout-bg: var(--yk-warn-bg);
+}

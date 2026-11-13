@@ -1,0 +1,43 @@
+/* Fields: outlined, label on top, never fully round (long text looks cramped in a pill). On a wide settings page the
+   label may sit beside the field; it moves back on top on a phone. Focus is the ink ring, as everywhere: a green border
+   was too small a change to see (1.6:1 from the unfocused border in the light theme). */
+.yk-field {
+    display: grid;
+    gap: 4px;
+}
+.yk-field > label {
+    font-size: var(--yk-font-size-sm);
+    font-weight: var(--yk-font-weight-bold);
+}
+.yk-field > small {
+    font-size: var(--yk-font-size-xs);
+    color: var(--yk-soft);
+}
+.yk-input {
+    font: inherit;
+    color: var(--yk-ink);
+    background: var(--yk-surface);
+    border: 1px solid var(--yk-line-strong);
+    border-radius: var(--yk-radius-md);
+    padding: 7px 11px;
+    min-width: 0;
+}
+.yk-field[data-invalid] .yk-input {
+    border-color: var(--yk-danger);
+}
+.yk-field[data-invalid] > small {
+    color: var(--yk-danger);
+}
+@media (min-width: 720px) {
+    .yk-field--beside {
+        grid-template-columns: 10rem minmax(0, 1fr);
+        column-gap: 12px;
+        align-items: center;
+    }
+    .yk-field--beside > label {
+        text-align: right;
+    }
+    .yk-field--beside > small {
+        grid-column: 2;
+    }
+}

@@ -1,0 +1,34 @@
+/* Page tabs: an underline under the current one. Labels turn bold in place: each reserves the width of its bold self
+   (data-label holds the text), so switching tabs moves nothing. */
+.yk-tabs {
+    display: flex;
+    gap: 20px;
+    box-shadow: inset 0 -1px 0 var(--yk-line);
+}
+.yk-tabs > a {
+    display: inline-grid;
+    padding: 8px 0;
+    color: var(--yk-soft);
+    text-decoration: none;
+}
+.yk-tabs > a::after {
+    content: attr(data-label);
+    font-weight: var(--yk-font-weight-bold);
+    height: 0;
+    visibility: hidden;
+    overflow: hidden;
+}
+.yk-tabs > a:hover {
+    color: var(--yk-ink);
+}
+/* aria-current="false" is a valid way to say "not the current one", so it is excluded. */
+.yk-tabs > a[aria-current]:not([aria-current='false']) {
+    color: var(--yk-ink);
+    font-weight: var(--yk-font-weight-bold);
+    box-shadow: inset 0 -2px 0 var(--yk-accent);
+}
+/* The ring goes inside the tab: an app may let the row scroll sideways (the cloud does on a phone), and a scrolling box
+   cuts off whatever sticks out of it. */
+.yk-tabs > a:focus-visible {
+    outline-offset: calc(-1 * var(--yk-focus-width));
+}

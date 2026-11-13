@@ -1,0 +1,43 @@
+/* Tables: every row is a link; a drawn checkbox on the left selects it for the bulk bar, which keeps a gap above the list. */
+.yk-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    background: var(--yk-surface);
+    border: 1px solid var(--yk-line);
+    border-radius: var(--yk-radius-lg);
+    overflow: hidden;
+}
+.yk-table :is(th, td) {
+    padding: 9px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--yk-line);
+}
+.yk-table tr:last-child td {
+    border-bottom: 0;
+}
+.yk-table :is(th, td):has(> .yk-check) {
+    width: 1%;
+    padding-right: 0;
+}
+.yk-table th {
+    font-size: var(--yk-font-size-xs);
+    color: var(--yk-soft);
+}
+.yk-table tbody tr:hover {
+    background: var(--yk-sunken);
+    cursor: pointer;
+}
+.yk-table tbody tr:has(.yk-check:checked) {
+    background: var(--yk-accent-bg);
+}
+.yk-bulk {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 6px 8px 6px 14px;
+    border: 1px solid var(--yk-line-strong);
+    border-radius: var(--yk-radius-pill);
+    background: var(--yk-surface);
+}

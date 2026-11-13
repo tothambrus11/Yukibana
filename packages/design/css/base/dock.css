@@ -1,0 +1,54 @@
+/* Light's dock tab bar, also above code in the docs: a bar a little darker than the editor, short dividers, the current
+   tab filled with the editor's colour and a full 2px line, green in the focused group and grey in the others. */
+.yk-dock {
+    display: flex;
+    align-items: stretch;
+    min-height: 34px;
+    background: var(--yk-code-bar);
+    box-shadow: inset 0 -1px 0 var(--yk-line);
+    font-size: var(--yk-font-size-sm);
+}
+.yk-dock > .yk-dock-tab {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 14px;
+    color: var(--yk-soft);
+    border: 0;
+    background: transparent;
+    font: inherit;
+    cursor: pointer;
+}
+.yk-dock > .yk-dock-tab + .yk-dock-tab::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 9px;
+    bottom: 9px;
+    width: 1px;
+    background: var(--yk-line);
+}
+.yk-dock > .yk-dock-tab[aria-selected='true'] {
+    background: var(--yk-code-bg);
+    color: var(--yk-ink);
+    box-shadow: inset 0 -2px 0 var(--yk-line-strong);
+}
+.yk-dock[data-focused] > .yk-dock-tab[aria-selected='true'] {
+    box-shadow: inset 0 -2px 0 var(--yk-accent);
+}
+.yk-dock > .yk-dock-tab[aria-selected='true']::before,
+.yk-dock > .yk-dock-tab[aria-selected='true'] + .yk-dock-tab::before {
+    opacity: 0;
+}
+/* Inside the tab, since .yk-code clips what sticks out of its rounded frame. */
+.yk-dock > .yk-dock-tab:focus-visible {
+    outline-offset: calc(-2 * var(--yk-focus-width));
+}
+.yk-dock > .yk-dock-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 6px;
+}

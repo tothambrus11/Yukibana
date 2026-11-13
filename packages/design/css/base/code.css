@@ -1,0 +1,87 @@
+/* Code blocks in the docs, as Expressive Code frames: the dock bar for files, none for the terminal; Copy and Run in
+   Light are icon buttons with room around them. Marked, inserted and deleted lines carry a bar and a sign, not colour
+   alone. */
+.yk-code {
+    border: 1px solid var(--yk-line);
+    border-radius: var(--yk-radius-md);
+    overflow: hidden;
+    background: var(--yk-code-bg);
+    position: relative;
+}
+.yk-code > pre {
+    margin: 0;
+    padding: 10px 0;
+    overflow-x: auto;
+    color: var(--yk-code-ink);
+    font-size: var(--yk-font-size-sm);
+    line-height: 1.65;
+}
+.yk-code > pre > span {
+    display: block;
+    padding: 0 16px;
+    border-left: 2px solid transparent;
+}
+.yk-code > pre > .mark {
+    background: color-mix(in oklch, var(--yk-info) 12%, transparent);
+    border-left-color: var(--yk-info);
+}
+.yk-code > pre > .ins {
+    background: color-mix(in oklch, var(--yk-ok) 13%, transparent);
+    border-left-color: var(--yk-ok);
+}
+.yk-code > pre > .del {
+    background: color-mix(in oklch, var(--yk-danger) 11%, transparent);
+    border-left-color: var(--yk-danger);
+}
+.yk-code > pre > :is(.ins, .del)::before {
+    display: inline-block;
+    width: 10px;
+    margin-left: -10px;
+}
+.yk-code > pre > .ins::before {
+    content: '+';
+    color: var(--yk-ok);
+}
+.yk-code > pre > .del::before {
+    content: '-';
+    color: var(--yk-danger);
+}
+.yk-code .tok-k {
+    color: var(--yk-code-keyword);
+}
+.yk-code .tok-f {
+    color: var(--yk-code-function);
+}
+.yk-code .tok-s {
+    color: var(--yk-code-string);
+}
+.yk-code .tok-n {
+    color: var(--yk-code-number);
+}
+.yk-code .tok-c,
+.yk-code .tok-prompt {
+    color: var(--yk-code-comment);
+}
+.yk-code .tok-prompt {
+    user-select: none;
+}
+/* Above the code whatever the markup order: highlighters give each line position: relative, and a button placed
+   before the <pre> was painted over, so hovering its icon hovered a line of code instead (docs, 2026-11-13). */
+.yk-code--terminal > .yk-icon-btn {
+    position: absolute;
+    z-index: 1;
+    top: 6px;
+    right: 6px;
+    opacity: 0;
+    transition: opacity var(--yk-motion-fast);
+}
+/* Shown on hover, while the keyboard is in the block, and always on a touch screen, which has no hover to reveal it. */
+.yk-code--terminal:hover > .yk-icon-btn,
+.yk-code--terminal:focus-within > .yk-icon-btn {
+    opacity: 1;
+}
+@media (hover: none) {
+    .yk-code--terminal > .yk-icon-btn {
+        opacity: 1;
+    }
+}

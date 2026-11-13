@@ -9,12 +9,13 @@ why, so that nobody has to rerun them to learn it.
 | `tokens/base.tokens.json` | Every token, in the [W3C Design Tokens format](https://www.designtokens.org/tr/2025.10/format/), with the light theme's colours. |
 | `tokens/dark.tokens.json` | The dark theme: colours only, each overriding the token of the same path. |
 | `css/tokens.css` | Generated: custom properties `--yk-*`, colours as `light-dark()`. Committed, so Light (in its own repository) can copy it. |
-| `css/base.css` | The shared components, `yk-` classes, drawn from the tokens only. |
+| `css/base/*.css` | The shared components, `yk-` classes, drawn from the tokens only: one file per component (`buttons.css`, `fields.css`, `toast.css`, …), and `core.css` for the page and the focus ring. Edit these. |
+| `css/base.css` | Generated: the parts in `css/base/` joined into one file, in the order `src/base.ts` lists them. Committed, and the file apps import. |
 | `reference/index.html` | The living reference. Open it from this directory. |
 
 ```sh
-pnpm --filter @yukibana/design build   # tokens → css/tokens.css
-pnpm --filter @yukibana/design test    # the CSS is up to date, every colour pair passes WCAG, the compiler's tables
+pnpm --filter @yukibana/design build   # tokens → css/tokens.css, css/base/*.css → css/base.css
+pnpm --filter @yukibana/design test    # both generated files are up to date, every colour pair passes WCAG, the compiler's tables
 ```
 
 A page loads `tokens.css` first, then `base.css`, and puts `class="yk-root"` on its `<html>`:

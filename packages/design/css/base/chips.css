@@ -1,0 +1,44 @@
+/* Chips: a pale tint and a dark label of one hue. A status chip carries an icon too, never colour alone. */
+.yk-chip {
+    --yk-chip-bg: var(--yk-chip-grey-bg);
+    --yk-chip-fg: var(--yk-chip-grey-fg);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px;
+    border-radius: var(--yk-radius-pill);
+    background: var(--yk-chip-bg);
+    color: var(--yk-chip-fg);
+    font-size: var(--yk-font-size-xs);
+    font-weight: var(--yk-font-weight-bold);
+    white-space: nowrap;
+}
+.yk-chip svg {
+    width: 11px;
+    height: 11px;
+    stroke-width: 2.6;
+}
+.yk-chip--blue {
+    --yk-chip-bg: var(--yk-chip-blue-bg);
+    --yk-chip-fg: var(--yk-chip-blue-fg);
+}
+.yk-chip--violet {
+    --yk-chip-bg: var(--yk-chip-violet-bg);
+    --yk-chip-fg: var(--yk-chip-violet-fg);
+}
+.yk-chip--pink {
+    --yk-chip-bg: var(--yk-chip-pink-bg);
+    --yk-chip-fg: var(--yk-chip-pink-fg);
+}
+.yk-chip--teal {
+    --yk-chip-bg: var(--yk-chip-teal-bg);
+    --yk-chip-fg: var(--yk-chip-teal-fg);
+}
+.yk-chip--yellow {
+    --yk-chip-bg: var(--yk-chip-yellow-bg);
+    --yk-chip-fg: var(--yk-chip-yellow-fg);
+}
+.yk-chip--green {
+    --yk-chip-bg: var(--yk-chip-green-bg);
+    --yk-chip-fg: var(--yk-chip-green-fg);
+}

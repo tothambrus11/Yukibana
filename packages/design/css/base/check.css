@@ -1,0 +1,42 @@
+/* Checkboxes are drawn, not native: a native one follows the page's colour scheme, and inside a light panel on a dark
+   page it came out dark grey. */
+.yk-check {
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    border: 1px solid var(--yk-line-strong);
+    border-radius: 4px;
+    background: var(--yk-surface);
+    display: inline-grid;
+    place-items: center;
+    vertical-align: middle;
+    cursor: pointer;
+    transition:
+        background-color var(--yk-motion-fast),
+        border-color var(--yk-motion-fast);
+}
+.yk-check:hover {
+    border-color: var(--yk-ink);
+}
+.yk-check:is(:checked, :indeterminate) {
+    background: var(--yk-accent);
+    border-color: var(--yk-accent);
+}
+/* A box can be checked and indeterminate at once (a script sets both); the dash wins, so the tick is drawn only when the
+   box is not indeterminate. */
+.yk-check:checked:not(:indeterminate)::after {
+    content: '';
+    width: 9px;
+    height: 5px;
+    border: solid var(--yk-on-accent);
+    border-width: 0 0 2px 2px;
+    transform: translateY(-1px) rotate(-45deg);
+}
+.yk-check:indeterminate::after {
+    content: '';
+    width: 8px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--yk-on-accent);
+}

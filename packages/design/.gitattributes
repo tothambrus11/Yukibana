@@ -1,3 +1,4 @@
-# The compiled tokens are compared byte for byte with what the build writes, and the build writes LF. Without this,
-# a Windows checkout (core.autocrlf) gets CRLF and the package's up-to-date test fails on an unchanged file.
-css/tokens.css text eol=lf
+# The generated stylesheets are compared byte for byte with what the build writes, and the build writes LF. Without
+# this, a Windows checkout (core.autocrlf) gets CRLF and the package's up-to-date test fails on an unchanged file. The
+# parts of base.css are kept LF too, so that a part and the generated file show the same text.
+css/**/*.css text eol=lf

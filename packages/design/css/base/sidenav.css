@@ -1,0 +1,15 @@
+/* The docs' sidebar: the current page is a grey fill, not a coloured bar. */
+.yk-sidenav a {
+    display: block;
+    padding: 4px 10px;
+    border-radius: var(--yk-radius-md);
+    color: var(--yk-ink);
+    text-decoration: none;
+}
+.yk-sidenav a:hover {
+    background: var(--yk-sunken);
+}
+.yk-sidenav a[aria-current]:not([aria-current='false']) {
+    background: var(--yk-sunken);
+    font-weight: var(--yk-font-weight-bold);
+}

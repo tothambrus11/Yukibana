@@ -1,0 +1,72 @@
+/* Buttons: small and flat, with a 6px corner (chosen over pills in context, 2026-11-13). One primary (green) per view;
+   no 3D, no glow, no offset shadows. */
+.yk-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font: var(--yk-font-weight-semibold) var(--yk-font-size-sm) / 1.2 var(--yk-font-family-body);
+    padding: 6px 12px;
+    border-radius: var(--yk-radius-sm);
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--yk-ink);
+    white-space: nowrap;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background-color var(--yk-motion-fast) var(--yk-motion-ease);
+}
+.yk-btn--primary {
+    background: var(--yk-accent);
+    color: var(--yk-on-accent);
+}
+/* Hover only where a click would do something: a disabled button stays as it is. */
+.yk-btn--primary:hover:not(:disabled) {
+    background: var(--yk-accent-strong);
+}
+.yk-btn--secondary {
+    background: var(--yk-surface);
+    border-color: var(--yk-line-strong);
+}
+.yk-btn--secondary:hover:not(:disabled),
+.yk-btn--ghost:hover:not(:disabled) {
+    background: var(--yk-sunken);
+}
+.yk-btn--ghost {
+    color: var(--yk-soft);
+}
+.yk-btn--danger {
+    background: var(--yk-danger);
+    color: var(--yk-on-accent);
+}
+/* No token of its own: the red moves a step towards ink, darker in the light theme and lighter in the dark, as the
+   primary's hover does, so its label only gains contrast. Mixed in OKLab, where mixing in a grey does not turn the hue. */
+.yk-btn--danger:hover:not(:disabled) {
+    background: color-mix(in oklab, var(--yk-danger) 85%, var(--yk-ink));
+}
+.yk-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+/* "It worked", said by the button itself for two seconds where it can: nothing else to look for. A tick and the label
+   in the success colour on a plain button, whatever the button was: green fill is for actions, and a done button has
+   none left to offer. The label carries the tick ("✓ Saved"), so the colour is never alone. */
+.yk-btn[data-done] {
+    background: var(--yk-surface);
+    border-color: var(--yk-line-strong);
+    color: var(--yk-ok);
+}
+.yk-icon-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: var(--yk-radius-sm);
+    background: transparent;
+    color: var(--yk-soft);
+    cursor: pointer;
+}
+.yk-icon-btn:hover {
+    background: var(--yk-sunken);
+    color: var(--yk-ink);
+}
