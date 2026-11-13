@@ -63,6 +63,8 @@ const TEXT: [string, string][] = [
 const UI: [string, string][] = [
     ['line-strong', 'surface'],
     ['line-strong', 'bg'],
+    // The search button's border on its own fill, and a checkbox in a hovered row.
+    ['line-strong', 'sunken'],
     ['accent', 'surface'],
     ['accent', 'code.bg'],
     ['ink', 'bg'],
