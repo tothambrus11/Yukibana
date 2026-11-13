@@ -226,7 +226,9 @@
     background: var(--yk-accent);
     border-color: var(--yk-accent);
 }
-.yk-check:checked::after {
+/* A box can be checked and indeterminate at once (a script sets both); the dash wins, so the tick is drawn only when the
+   box is not indeterminate. */
+.yk-check:checked:not(:indeterminate)::after {
     content: '';
     width: 9px;
     height: 5px;
