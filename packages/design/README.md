@@ -11,6 +11,8 @@ why, so that nobody has to rerun them to learn it.
 | `css/tokens.css` | Generated: custom properties `--yk-*`, colours as `light-dark()`. Committed, so Light (in its own repository) can copy it. |
 | `css/base/*.css` | The shared components, `yk-` classes, drawn from the tokens only: one file per component (`buttons.css`, `fields.css`, `toast.css`, …), and `core.css` for the page and the focus ring. Edit these. |
 | `css/base.css` | Generated: the parts in `css/base/` joined into one file, in the order `src/base.ts` lists them. Committed, and the file apps import. |
+| `css/fonts.css` | `@font-face` for the three typefaces, under the names `tokens.css` uses, from `fonts/`. Optional. |
+| `fonts/` | The fonts as variable WOFF2, Latin and Latin Extended, each family with its licence (`OFL.txt`, SIL Open Font License 1.1). |
 | `reference/index.html` | The living reference. Open it from this directory. |
 
 ```sh
@@ -18,7 +20,8 @@ pnpm --filter @yukibana/design build   # tokens → css/tokens.css, css/base/*.c
 pnpm --filter @yukibana/design test    # both generated files are up to date, every colour pair passes WCAG, the compiler's tables
 ```
 
-A page loads `tokens.css` first, then `base.css`, and puts `class="yk-root"` on its `<html>`:
+A page loads `tokens.css` first, then `fonts.css` if it takes the fonts from here, then `base.css`, and puts
+`class="yk-root"` on its `<html>`:
 
 ```html
 <html lang="en" class="yk-root">
@@ -34,7 +37,12 @@ A page follows the system's light or dark scheme, unless its root element says `
 
 **Browsers.** Every colour is a `light-dark()` pair, which needs Chrome and Edge 123, Firefox 120 or Safari 17.5 (all
 from 2024). There is no fallback: an older browser drops every colour and shows the page unstyled, black on white.
-It loads the fonts itself: Bricolage Grotesque, Atkinson Hyperlegible Next and JetBrains Mono.
+**Fonts.** `css/fonts.css` loads Bricolage Grotesque, Atkinson Hyperlegible Next (upright and italic) and JetBrains
+Mono from `fonts/`, under exactly the names `--yk-font-family-*` uses, with `font-display: swap`. They are variable
+WOFF2 files, about 225 KB for all eight, Latin and Latin Extended only; a browser fetches a subset only when the page
+shows one of its characters, so a page in English fetches three files, about 115 KB. They are fontsource's 5.3.0 builds,
+copied in, so nothing is installed for them; each family's licence (SIL Open Font License 1.1) is beside it. A page
+that loads the same families another way leaves `fonts.css` out.
 
 ## What was decided, and why
 

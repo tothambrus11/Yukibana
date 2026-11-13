@@ -6,7 +6,8 @@
  *
  * Every class starts with `yk-` so an app can adopt them one at a time next to its own styles. The rules each block
  * follows were chosen in the design rounds of November 2026; the comments say why where the why is not obvious. Fonts are
- * named, not loaded: the page loads Bricolage Grotesque, Atkinson Hyperlegible Next and JetBrains Mono itself.
+ * named, not loaded: css/fonts.css loads Bricolage Grotesque, Atkinson Hyperlegible Next and JetBrains Mono from the
+ * package, or the page loads them another way.
  */
 
 /* Base, in two parts.

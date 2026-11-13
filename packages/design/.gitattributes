@@ -2,3 +2,5 @@
 # this, a Windows checkout (core.autocrlf) gets CRLF and the package's up-to-date test fails on an unchanged file. The
 # parts of base.css are kept LF too, so that a part and the generated file show the same text.
 css/**/*.css text eol=lf
+# The vendored fonts are binary, whatever a heuristic thinks.
+fonts/**/*.woff2 binary
