@@ -65,15 +65,16 @@
     background: var(--yk-accent);
     color: var(--yk-on-accent);
 }
-.yk-btn--primary:hover {
+/* Hover only where a click would do something: a disabled button stays as it is. */
+.yk-btn--primary:hover:not(:disabled) {
     background: var(--yk-accent-strong);
 }
 .yk-btn--secondary {
     background: var(--yk-surface);
     border-color: var(--yk-line-strong);
 }
-.yk-btn--secondary:hover,
-.yk-btn--ghost:hover {
+.yk-btn--secondary:hover:not(:disabled),
+.yk-btn--ghost:hover:not(:disabled) {
     background: var(--yk-sunken);
 }
 .yk-btn--ghost {
@@ -82,6 +83,11 @@
 .yk-btn--danger {
     background: var(--yk-danger);
     color: var(--yk-on-accent);
+}
+/* No token of its own: the red moves a step towards ink, darker in the light theme and lighter in the dark, as the
+   primary's hover does, so its label only gains contrast. Mixed in OKLab, where mixing in a grey does not turn the hue. */
+.yk-btn--danger:hover:not(:disabled) {
+    background: color-mix(in oklab, var(--yk-danger) 85%, var(--yk-ink));
 }
 .yk-btn:disabled {
     opacity: 0.45;
