@@ -433,9 +433,15 @@
     opacity: 0;
     transition: opacity var(--yk-motion-fast);
 }
+/* Shown on hover, while the keyboard is in the block, and always on a touch screen, which has no hover to reveal it. */
 .yk-code--terminal:hover > .yk-icon-btn,
-.yk-code--terminal > .yk-icon-btn:focus-visible {
+.yk-code--terminal:focus-within > .yk-icon-btn {
     opacity: 1;
+}
+@media (hover: none) {
+    .yk-code--terminal > .yk-icon-btn {
+        opacity: 1;
+    }
 }
 
 /* Messages: one family. Success is the dark pill and fades after --yk-motion-toast; an error is the same pill in red and
