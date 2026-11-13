@@ -43,6 +43,13 @@
 .yk-btn--danger:hover:not(:disabled) {
     background: color-mix(in oklab, var(--yk-danger) 85%, var(--yk-ink));
 }
+/* A toggle that is on (Wrap lines, Show hidden tests): pressed, as a chosen segment of .yk-segmented is, a sunken fill
+   and an ink outline. Off, it is whichever button it is. */
+.yk-btn[aria-pressed='true'] {
+    background: var(--yk-sunken);
+    border-color: var(--yk-ink);
+    color: var(--yk-ink);
+}
 .yk-btn:disabled {
     opacity: 0.45;
     cursor: not-allowed;

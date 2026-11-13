@@ -3,11 +3,12 @@
  *  Consumers import one file, often into a cascade layer (`@import '…/base.css' layer(components)`), so the parts are
  *  concatenated into it rather than `@import`ed from it: a single file needs no bundler to follow nested imports. */
 
-/** The parts, in cascade order: later parts may build on earlier ones, and the
+/** The parts, in cascade order: later parts may build on earlier ones (the segmented control on the button), and the
  *  build refuses a file in css/base/ that is not listed here, so a new part cannot be forgotten. */
 export const BASE_PARTS = [
     'core',
     'buttons',
+    'segmented',
     'chips',
     'fields',
     'check',

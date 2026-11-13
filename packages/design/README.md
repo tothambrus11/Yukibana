@@ -72,6 +72,11 @@ and the avatar.
 dividers, the current tab filled with the editor's colour on a slightly darker bar, a full 2px line, green in the group
 you are typing in and grey in the others. Code blocks in the docs use the same tab bar, without dragging.
 
+**Choices.** One of a few, side by side: the segmented control (`.yk-segmented`), one outlined row whose chosen segment
+is pressed, a sunken fill outlined in ink on all four sides, never green (it is a state, not an action). It takes
+native radio buttons in labels (the arrow keys move the choice) or buttons with `aria-pressed`. A single toggle is a
+`.yk-btn` with `aria-pressed`, drawn the same way when on.
+
 **Tables.** Every row is a link. A checkbox on the left selects it for the bulk bar, which keeps a gap above the list.
 Checkboxes are drawn, not native: a native one follows the page's colour scheme and came out dark grey in a light panel.
 

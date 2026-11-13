@@ -1,0 +1,80 @@
+/* Segmented control: one choice of a few, side by side in one outlined row (the theme in the cloud's account menu,
+ * Light's view switch). Two kinds of markup, the same look:
+ *   - radio buttons: <label><input type="radio" name="…">Light</label> for each choice, in a <fieldset> with a <legend>
+ *     or an element with role="radiogroup" and a label. The radios are native, so the arrow keys move between them and a
+ *     screen reader hears one choice of several; they are hidden from sight, and the label is drawn.
+ *   - buttons: <button type="button" aria-pressed="true|false"> for each, in an element with role="group" and a label.
+ * The chosen segment is a pressed toggle: a sunken fill and an ink outline on all four sides. */
+.yk-segmented {
+    display: inline-flex;
+    vertical-align: middle;
+    max-width: 100%;
+}
+.yk-segmented > :is(label, button) {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin: 0;
+    padding: 6px 12px;
+    border: 1px solid var(--yk-line-strong);
+    border-radius: 0;
+    background: var(--yk-surface);
+    color: var(--yk-soft);
+    font: var(--yk-font-weight-semibold) var(--yk-font-size-sm) / 1.2 var(--yk-font-family-body);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color var(--yk-motion-fast) var(--yk-motion-ease);
+}
+/* One line between two segments, drawn once, by the later segment's left border. Overlapping the borders with a negative
+   margin instead lets the later segment paint over the earlier one's, which comes out thinner, or vanishes, wherever the
+   row sits on a fraction of a pixel (Light, 2026). */
+.yk-segmented > :not(:last-child) {
+    border-right-width: 0;
+}
+.yk-segmented > :first-child {
+    border-start-start-radius: var(--yk-radius-sm);
+    border-end-start-radius: var(--yk-radius-sm);
+}
+.yk-segmented > :last-child {
+    border-start-end-radius: var(--yk-radius-sm);
+    border-end-end-radius: var(--yk-radius-sm);
+}
+.yk-segmented > :is(label:not(:has(input:disabled)), button:not(:disabled)):hover {
+    background: var(--yk-sunken);
+}
+.yk-segmented > :is(label:has(input:checked), button[aria-pressed='true']) {
+    border-color: var(--yk-ink);
+    background: var(--yk-sunken);
+    color: var(--yk-ink);
+}
+/* The chosen segment's right side is its neighbour's divider, so the neighbour draws it in ink. */
+.yk-segmented > :is(label:has(input:checked), button[aria-pressed='true']) + * {
+    border-left-color: var(--yk-ink);
+}
+.yk-segmented > :is(label:has(input:disabled), button:disabled) {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+/* Hidden from sight, still there for the keyboard and screen readers. */
+.yk-segmented > label > input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+/* The ring is drawn outside the segment, so the focused one is lifted above the neighbour that would cover it. A radio's
+   ring goes on its label, since the radio itself is hidden. */
+.yk-segmented > :is(label:has(input:focus-visible), button:focus-visible) {
+    z-index: 1;
+}
+.yk-segmented > label:has(input:focus-visible) {
+    outline: var(--yk-focus-width) solid var(--yk-ink);
+    outline-offset: var(--yk-focus-offset);
+}
