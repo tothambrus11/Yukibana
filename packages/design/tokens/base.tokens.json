@@ -2,7 +2,7 @@
   "$description": "Yukibana's design tokens, in the W3C Design Tokens format (2025.10). This file holds every token and the light theme's colours; dark.tokens.json overrides the colours for the dark theme and nothing else. scripts/build.ts compiles both into css/tokens.css.",
   "color": {
     "$type": "color",
-    "$description": "Greys are cool blue-grey (hue 260, chroma 0.009 per step). Green (hue 162) is the one accent: primary buttons, links, current-tab lines and nothing else, so success states carry an icon and never rely on green alone.",
+    "$description": "Greys are cool blue-grey (hue 260, chroma 0.009 per step). Green (hue 162 here, 150 in the dark theme) is the one accent: primary buttons, links, current-tab lines and nothing else, so success states carry an icon and never rely on green alone.",
     "bg": { "$value": { "colorSpace": "oklch", "components": [0.976, 0.0045, 260] }, "$description": "The page behind everything." },
     "surface": { "$value": { "colorSpace": "oklch", "components": [1, 0, 0] }, "$description": "Cards, tables, fields, the header bar." },
     "sunken": {
@@ -94,7 +94,7 @@
     "sm": { "$value": { "value": 6, "unit": "px" }, "$description": "Buttons, icon buttons, tabs inside a bar." },
     "md": { "$value": { "value": 8, "unit": "px" }, "$description": "Fields and code blocks. Fields are never fully round." },
     "lg": { "$value": { "value": 12, "unit": "px" }, "$description": "Cards, dialogs, callouts." },
-    "xl": { "$value": { "value": 16, "unit": "px" }, "$description": "The floating landing header." },
+    "xl": { "$value": { "value": 16, "unit": "px" }, "$description": "The lifted header of the landing page and the docs." },
     "pill": { "$value": { "value": 999, "unit": "px" }, "$description": "Chips and the message pill. Not buttons: those are radius-sm." }
   },
   "space": {
@@ -130,7 +130,7 @@
     "header-max": {
       "$type": "dimension",
       "$value": { "value": 1000, "unit": "px" },
-      "$description": "The landing page's floating header bar. Below header-float it becomes the full-width bar, as the docs always use."
+      "$description": "The widest the lifted header gets, on the landing page and in the docs. Below header-float it becomes the full-width bar."
     },
     "header-float": { "$type": "dimension", "$value": { "value": 760, "unit": "px" } }
   }
