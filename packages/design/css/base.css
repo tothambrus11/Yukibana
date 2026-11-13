@@ -451,7 +451,9 @@
 }
 
 /* Messages: one family. Success is the dark pill and fades after --yk-motion-toast; an error is the same pill in red and
-   stays until it is retried or dismissed. One line, bottom centre. */
+   stays until it is retried or dismissed. One line, bottom centre. The text goes in a <span>: on a narrow screen it is
+   the part that gives way, ending in an ellipsis, so the icon and the buttons always stay. The pill is at most the
+   viewport less 16px each side, padding included. */
 .yk-toast {
     position: fixed;
     left: 50%;
@@ -460,6 +462,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
+    box-sizing: border-box;
     width: max-content;
     max-width: calc(100vw - 32px);
     padding: 8px 14px 8px 16px;
@@ -470,6 +473,14 @@
     font-weight: var(--yk-font-weight-bold);
     white-space: nowrap;
     box-shadow: 0 12px 30px -16px oklch(0% 0 0 / 0.6);
+}
+.yk-toast > :is(svg, button) {
+    flex: none;
+}
+.yk-toast > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .yk-toast--error {
     background: var(--yk-danger);
