@@ -526,11 +526,13 @@
     width: 20px;
     height: 20px;
     border-radius: 50%;
+    color: var(--yk-ink);
     border: 2.5px solid var(--yk-line);
-    border-top-color: var(--yk-ink);
+    border-top-color: currentColor;
     animation: yk-turn 0.8s linear infinite;
 }
 .yk-btn .yk-spinner {
+    color: inherit;
     width: 13px;
     height: 13px;
     border-width: 2px;
@@ -796,9 +798,17 @@
     font-weight: var(--yk-font-weight-bold);
 }
 
+/* No movement: the skeleton is a still fill, and the spinner stands still as three quarters of a ring with no track,
+   which still reads as "working"; a whole ring would look finished. */
 @media (prefers-reduced-motion: reduce) {
-    .yk-skeleton,
-    .yk-spinner {
-        animation-duration: 0s;
+    .yk-skeleton {
+        animation: none;
+        background: var(--yk-sunken);
+    }
+    .yk-spinner,
+    .yk-btn .yk-spinner {
+        animation: none;
+        border-color: currentColor;
+        border-left-color: transparent;
     }
 }
