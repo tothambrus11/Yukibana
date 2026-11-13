@@ -10,9 +10,9 @@
     --yk-line: light-dark(oklch(90% 0.009 260), oklch(29% 0.018 260));
     --yk-line-strong: light-dark(oklch(63% 0.0135 260), oklch(54% 0.0216 260));
     --yk-lattice: light-dark(oklch(50% 0.03 260 / 0.28), oklch(80% 0.03 260 / 0.16));
-    --yk-accent: light-dark(oklch(50% 0.115 162), oklch(74% 0.0863 162));
-    --yk-accent-strong: light-dark(oklch(44% 0.115 162), oklch(84% 0.0633 162));
-    --yk-accent-bg: light-dark(oklch(95% 0.03 162), oklch(28% 0.055 162));
+    --yk-accent: light-dark(oklch(50% 0.115 162), oklch(74% 0.105 150));
+    --yk-accent-strong: light-dark(oklch(44% 0.115 162), oklch(84% 0.0788 150));
+    --yk-accent-bg: light-dark(oklch(95% 0.03 162), oklch(28% 0.055 150));
     --yk-on-accent: light-dark(oklch(99% 0 0), oklch(17% 0.018 260));
     --yk-ok: light-dark(oklch(46% 0.1 165), oklch(80% 0.11 165));
     --yk-danger: light-dark(oklch(52% 0.17 25), oklch(74% 0.13 25));
@@ -56,6 +56,7 @@
     --yk-font-size-2xl: 32px;
     --yk-font-size-hero: 52px;
     --yk-font-weight-regular: 400;
+    --yk-font-weight-semibold: 600;
     --yk-font-weight-bold: 700;
     --yk-font-weight-heading: 750;
     --yk-radius-sm: 6px;

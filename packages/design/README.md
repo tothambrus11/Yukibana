@@ -29,12 +29,12 @@ is cheap; what stays put between refreshes is where controls are.
 **Type.** Bricolage Grotesque for headings (rounded, welcoming), Atkinson Hyperlegible Next for text (made for
 legibility), JetBrains Mono with ligatures off (students must see the characters they type, `!=` not `≠`).
 
-**Colour.** Cool blue-grey greys. One accent, Light's green, for primary buttons, links and the current tab's line.
+**Colour.** Cool blue-grey greys. One accent, Light's green in the light theme and a livelier emerald in the dark one, for primary buttons, links and the current tab's line.
 Because the accent is green, success never relies on colour: a graded chip has a check, an open one a circle. Notes
 are blue and warnings amber, never green. Every text pair passes 4.5:1 and every control border 3:1 in both themes;
 `tests/tokens.test.ts` lists the pairs.
 
-**Shape.** Small flat pill buttons, tinted chips, fields with an 8px radius (never fully round: long text looks
+**Shape.** Small flat buttons with a 6px corner and a semibold label (pills lost to them in context), tinted chips, fields with an 8px radius (never fully round: long text looks
 cramped in a pill). No 3D, glow or offset shadows.
 
 **Signature.** The triangles lattice on the plain page colour, only in side rails, gutters, the landing hero and an

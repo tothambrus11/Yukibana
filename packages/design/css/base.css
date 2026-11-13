@@ -44,14 +44,15 @@
     flex: none;
 }
 
-/* Buttons: small flat pills. One primary (green) per view; no 3D, no glow, no offset shadows. */
+/* Buttons: small and flat, with a 6px corner (chosen over pills in context, 2026-11-13). One primary (green) per view;
+   no 3D, no glow, no offset shadows. */
 .yk-btn {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font: var(--yk-font-weight-bold) var(--yk-font-size-sm) / 1.2 var(--yk-font-family-body);
-    padding: 6px 13px;
-    border-radius: var(--yk-radius-pill);
+    font: var(--yk-font-weight-semibold) var(--yk-font-size-sm) / 1.2 var(--yk-font-family-body);
+    padding: 6px 12px;
+    border-radius: var(--yk-radius-sm);
     border: 1px solid transparent;
     background: transparent;
     color: var(--yk-ink);

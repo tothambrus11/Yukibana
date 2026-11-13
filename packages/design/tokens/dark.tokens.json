@@ -11,9 +11,12 @@
     "line": { "$value": { "colorSpace": "oklch", "components": [0.29, 0.018, 260] } },
     "line-strong": { "$value": { "colorSpace": "oklch", "components": [0.54, 0.0216, 260] } },
     "lattice": { "$value": { "colorSpace": "oklch", "components": [0.8, 0.03, 260], "alpha": 0.16 } },
-    "accent": { "$value": { "colorSpace": "oklch", "components": [0.74, 0.0863, 162] } },
-    "accent-strong": { "$value": { "colorSpace": "oklch", "components": [0.84, 0.0633, 162] } },
-    "accent-bg": { "$value": { "colorSpace": "oklch", "components": [0.28, 0.055, 162] } },
+    "accent": {
+      "$value": { "colorSpace": "oklch", "components": [0.74, 0.105, 150] },
+      "$description": "Emerald in the dark theme (hue 150): Light green (162) went grey-mint on dark surfaces; Ambrus, 2026-11-13."
+    },
+    "accent-strong": { "$value": { "colorSpace": "oklch", "components": [0.84, 0.0788, 150] } },
+    "accent-bg": { "$value": { "colorSpace": "oklch", "components": [0.28, 0.055, 150] } },
     "on-accent": { "$value": { "colorSpace": "oklch", "components": [0.17, 0.018, 260] } },
     "ok": { "$value": { "colorSpace": "oklch", "components": [0.8, 0.11, 165] } },
     "danger": { "$value": { "colorSpace": "oklch", "components": [0.74, 0.13, 25] } },

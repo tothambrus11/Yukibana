@@ -84,17 +84,18 @@
     "weight": {
       "$type": "fontWeight",
       "regular": { "$value": 400 },
+      "semibold": { "$value": 600, "$description": "Button labels." },
       "bold": { "$value": 700 },
       "heading": { "$value": 750 }
     }
   },
   "radius": {
     "$type": "dimension",
-    "sm": { "$value": { "value": 6, "unit": "px" }, "$description": "Icon buttons, tabs inside a bar." },
+    "sm": { "$value": { "value": 6, "unit": "px" }, "$description": "Buttons, icon buttons, tabs inside a bar." },
     "md": { "$value": { "value": 8, "unit": "px" }, "$description": "Fields and code blocks. Fields are never fully round." },
     "lg": { "$value": { "value": 12, "unit": "px" }, "$description": "Cards, dialogs, callouts." },
     "xl": { "$value": { "value": 16, "unit": "px" }, "$description": "The floating landing header." },
-    "pill": { "$value": { "value": 999, "unit": "px" }, "$description": "Buttons, chips, the message pill." }
+    "pill": { "$value": { "value": 999, "unit": "px" }, "$description": "Chips and the message pill. Not buttons: those are radius-sm." }
   },
   "space": {
     "$type": "dimension",
