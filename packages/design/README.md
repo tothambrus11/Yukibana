@@ -17,7 +17,22 @@ pnpm --filter @yukibana/design build   # tokens → css/tokens.css
 pnpm --filter @yukibana/design test    # the CSS is up to date, every colour pair passes WCAG, the compiler's tables
 ```
 
+A page loads `tokens.css` first, then `base.css`, and puts `class="yk-root"` on its `<html>`:
+
+```html
+<html lang="en" class="yk-root">
+```
+
+`.yk-root` turns on the page itself: the background and text colour, the body font and size, the heading and code
+fonts (ligatures off), and the accent colour of links in running text (links without a class). It is opt-in because
+those rules change elements the app did not mark. Everything else works without it: the `yk-` classes, the ink focus
+ring and the stroke of `svg.yk-icon`. The focus ring and the icon stroke apply anywhere, inside `:where()`, so they add
+no specificity and any rule of the app's own wins over them.
+
 A page follows the system's light or dark scheme, unless its root element says `data-theme="light"` or `"dark"`.
+
+**Browsers.** Every colour is a `light-dark()` pair, which needs Chrome and Edge 123, Firefox 120 or Safari 17.5 (all
+from 2024). There is no fallback: an older browser drops every colour and shows the page unstyled, black on white.
 It loads the fonts itself: Bricolage Grotesque, Atkinson Hyperlegible Next and JetBrains Mono.
 
 ## What was decided, and why

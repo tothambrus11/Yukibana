@@ -5,7 +5,32 @@
  * named, not loaded: the page loads Bricolage Grotesque, Atkinson Hyperlegible Next and JetBrains Mono itself.
  */
 
-/* Base */
+/* Base, in two parts.
+ *
+ * Anywhere: the focus ring and the stroke of .yk-icon. They sit inside :where(), so their specificity is zero: a
+ * component used outside .yk-root still gets them, and any rule of the app's own still wins over them.
+ *
+ * The page, only under .yk-root, which an app puts on <html>: the page's background and text colour, the body font,
+ * the heading and code fonts, and the colour of links in running text. These change elements the app did not mark, so
+ * the app opts in. */
+
+/* The ink ring: black in the light theme, white in the dark, with a gap so it never merges with a border. Green stays
+   for actions, and a green ring on a green button would vanish. */
+:where(:focus-visible) {
+    outline: var(--yk-focus-width) solid var(--yk-ink);
+    outline-offset: var(--yk-focus-offset);
+}
+:where(svg.yk-icon) {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: var(--yk-icon-stroke);
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    flex: none;
+}
+
 .yk-root,
 .yk-root body {
     background: var(--yk-bg);
@@ -26,22 +51,6 @@
 .yk-root :where(a:not([class])) {
     color: var(--yk-accent-strong);
     text-underline-offset: 2px;
-}
-/* The ink ring: black in the light theme, white in the dark, with a gap so it never merges with a border. Green stays
-   for actions, and a green ring on a green button would vanish. */
-.yk-root :focus-visible {
-    outline: var(--yk-focus-width) solid var(--yk-ink);
-    outline-offset: var(--yk-focus-offset);
-}
-.yk-root svg.yk-icon {
-    width: 16px;
-    height: 16px;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: var(--yk-icon-stroke);
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    flex: none;
 }
 
 /* Buttons: small and flat, with a 6px corner (chosen over pills in context, 2026-11-13). One primary (green) per view;
