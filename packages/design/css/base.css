@@ -160,7 +160,8 @@
 }
 
 /* Fields: outlined, label on top, never fully round (long text looks cramped in a pill). On a wide settings page the
-   label may sit beside the field; it moves back on top on a phone. */
+   label may sit beside the field; it moves back on top on a phone. Focus is the ink ring, as everywhere: a green border
+   was too small a change to see (1.6:1 from the unfocused border in the light theme). */
 .yk-field {
     display: grid;
     gap: 4px;
@@ -181,11 +182,6 @@
     border-radius: var(--yk-radius-md);
     padding: 7px 11px;
     min-width: 0;
-}
-.yk-input:focus-visible {
-    outline: none;
-    border-color: var(--yk-accent);
-    box-shadow: 0 0 0 3px color-mix(in oklch, var(--yk-accent) 22%, transparent);
 }
 .yk-field[data-invalid] .yk-input {
     border-color: var(--yk-danger);
