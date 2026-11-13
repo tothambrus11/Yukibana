@@ -534,11 +534,11 @@
 }
 
 /* The header: brand on the left, the sections in the middle, search, the GitHub mark and Sign in on the right, one row of
-   three columns so the sections stay centred whatever the ends hold. In the docs and the cloud it is full width and
-   square, with blur and a hairline, and its sections are plain links: some lead to other sites, so none is drawn as the
-   selected one. On the landing page (--float) it is the same bar lifted off the edge, rounded, at most
-   --yk-layout-header-max wide, its sections in a grey tray. Below 760px there is no room around it, so it becomes the
-   full-width bar and keeps only the brand, the GitHub mark and Sign in. */
+   three columns so the sections stay centred whatever the ends hold. In the cloud it is full width and square, with
+   blur and a hairline. On the landing page and in the docs (--float) it is the same bar lifted off the edge, rounded,
+   at most --yk-layout-header-max wide, of grained frosted glass, its sections in a grey tray. Its sections are plain
+   links: some lead to other sites, so none is drawn as the selected one. Below 760px there is no room around it, so it
+   becomes the full-width bar and keeps only the brand, the GitHub mark and Sign in. */
 .yk-header {
     position: sticky;
     top: 0;
@@ -630,6 +630,20 @@
     font: 11px/1.5 var(--yk-font-family-mono);
     font-variant-ligatures: none;
 }
+/* The lifted bar is frosted glass with a fine grain (Grain frost, picked from ten materials on 2026-11-13): the page
+   shows through blurred, and the grain keeps a large flat bar from looking like a plastic sheet. The grain is an inline
+   SVG so nothing is fetched; without backdrop-filter the bar is solid, because unblurred text behind it would be read. */
+.yk-header--float {
+    background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.07'/%3E%3C/svg%3E"),
+        color-mix(in oklch, var(--yk-surface) 72%, transparent);
+    backdrop-filter: blur(18px) saturate(1.5);
+}
+@supports not (backdrop-filter: blur(1px)) {
+    .yk-header {
+        background: var(--yk-surface);
+    }
+}
 @media (min-width: 760px) {
     .yk-header--float {
         top: 12px;
@@ -640,7 +654,7 @@
         border-radius: var(--yk-radius-xl);
         box-shadow:
             inset 0 1px 0 color-mix(in oklch, var(--yk-surface) 60%, transparent),
-            0 10px 30px -18px oklch(20% 0.03 260 / 0.45);
+            0 10px 30px -18px light-dark(color-mix(in oklch, var(--yk-ink) 45%, transparent), color-mix(in oklch, var(--yk-bg) 90%, transparent));
     }
     .yk-header--float nav {
         gap: 2px;
