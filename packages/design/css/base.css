@@ -412,8 +412,11 @@
 .yk-code .tok-prompt {
     user-select: none;
 }
+/* Above the code whatever the markup order: highlighters give each line position: relative, and a button placed
+   before the <pre> was painted over, so hovering its icon hovered a line of code instead (docs, 2026-11-13). */
 .yk-code--terminal > .yk-icon-btn {
     position: absolute;
+    z-index: 1;
     top: 6px;
     right: 6px;
     opacity: 0;
